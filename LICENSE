@@ -1,6 +1,10 @@
 MIT License
 
-Copyright (c) 2026 ChipSutra Engineering (sriharshaduppalli)
+Copyright (c) 2026 Sri Harsha Duppalli — ChipSutra™
+
+ChipSutra™ is a trademark of Sri Harsha Duppalli. The name "ChipSutra", the
+ChipSutra logo, and the marketing site https://chipsutra-verify.emergent.host
+are the property of the copyright holder.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -9,8 +13,18 @@ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 copies of the Software, and to permit persons to whom the Software is
 furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. The above copyright notice, this permission notice, and this attribution
+   requirement shall be included in all copies or substantial portions of the
+   Software.
+
+2. Redistributions and derivative works must retain a visible "Powered by
+   ChipSutra" attribution in the UI (footer, about page, or splash screen) with
+   a link back to the upstream repository at
+   https://github.com/sriharshaduppalli/ChipSutra — unless a separate
+   commercial license is negotiated with the copyright holder.
+
+3. The trademark "ChipSutra" may not be used to endorse or promote products
+   derived from this Software without prior written permission.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,

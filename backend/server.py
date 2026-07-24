@@ -39,9 +39,9 @@ APP_NAME = os.environ.get("APP_NAME", "chipsutra")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@chipsutra.ai")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@ChipSutra2026")
 
-# Free-tier quota: N generations per user per day (0 = unlimited)
-FREE_DAILY_QUOTA = int(os.environ.get("FREE_DAILY_QUOTA", "10"))
-# Set REQUIRE_EMAIL_VERIFICATION=true to block generation for unverified emails
+# Free-tier quota: N generations per user per day (0 = unlimited — DEFAULT OPEN ACCESS)
+FREE_DAILY_QUOTA = int(os.environ.get("FREE_DAILY_QUOTA", "0"))
+# Set REQUIRE_EMAIL_VERIFICATION=true to block generation for unverified emails (default off = open access)
 REQUIRE_EMAIL_VERIFICATION = os.environ.get("REQUIRE_EMAIL_VERIFICATION", "false").lower() == "true"
 
 STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"  # legacy, unused

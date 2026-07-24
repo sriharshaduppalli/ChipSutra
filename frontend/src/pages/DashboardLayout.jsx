@@ -47,9 +47,15 @@ export default function DashboardLayout() {
           <a href="/docs" target="_blank" rel="noreferrer" className="w-full flex items-center gap-2 text-xs font-mono text-slate-400 hover:text-emerald-400 mb-2" data-testid="sidebar-docs">
             <BookOpen size={14} /> Docs
           </a>
-          <button onClick={doLogout} className="w-full flex items-center gap-2 text-xs font-mono text-slate-400 hover:text-red-400" data-testid="sidebar-logout">
+          <button onClick={doLogout} className="w-full flex items-center gap-2 text-xs font-mono text-slate-400 hover:text-red-400 mb-3" data-testid="sidebar-logout">
             <LogOut size={14} /> Sign out
           </button>
+          <div className="pt-3 border-t border-[#1E293B]">
+            <a href="https://github.com/sriharshaduppalli/ChipSutra" target="_blank" rel="noreferrer" className="font-mono text-[10px] text-slate-500 hover:text-emerald-400 block" data-testid="sidebar-attribution">
+              Powered by ChipSutra™ →
+            </a>
+            <div className="font-mono text-[9px] text-slate-600 mt-1">© 2026 Sri Harsha Duppalli</div>
+          </div>
         </div>
       </aside>
       <main className="flex-1 min-w-0">

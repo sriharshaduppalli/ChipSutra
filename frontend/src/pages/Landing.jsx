@@ -349,7 +349,7 @@ export default function Landing() {
       <footer className="border-t border-[#1E293B] py-8">
         <div className="max-w-7xl mx-auto px-6 flex flex-wrap items-center justify-between gap-4 font-mono text-xs text-slate-500">
           <ChipSutraMark />
-          <div>© 2026 ChipSutra · Made in India · verification@chipsutra.ai</div>
+          <div>© 2026 <a href="https://github.com/sriharshaduppalli/ChipSutra" target="_blank" rel="noreferrer" className="text-emerald-400 hover:underline">ChipSutra™</a> by Sri Harsha Duppalli · Made in India · verification@chipsutra.ai</div>
         </div>
       </footer>
     </div>
