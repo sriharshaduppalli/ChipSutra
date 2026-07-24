@@ -24,8 +24,8 @@ const MODULES = [
 ];
 
 const MODELS = [
-  { provider: "anthropic", model: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5" },
-  { provider: "openai", model: "gpt-5.2", label: "GPT-5.2" },
+  { provider: "anthropic", model: "claude-sonnet-4-5-20250929", label: "Auto (Claude 4.5)" },
+  { provider: "openai", model: "gpt-5.2", label: "GPT-5.2 (advanced)" },
 ];
 
 const langMap = { v: "verilog", sv: "systemverilog", vhd: "vhdl", vhdl: "vhdl", md: "markdown", txt: "plaintext", log: "plaintext", rpt: "plaintext" };
@@ -247,7 +247,10 @@ export default function ProjectDetail() {
 
             <div className="mt-4 space-y-3">
               <div>
-                <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2">Model</div>
+                <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2 flex items-center gap-2">
+                  Engine
+                  <span className="pin-badge text-[9px] border-emerald-500/40 text-emerald-400">AUTO</span>
+                </div>
                 <div className="grid grid-cols-2 gap-2">
                   {MODELS.map((m, i) => (
                     <button key={m.model} onClick={() => setModelIdx(i)} className={`p-2 border text-xs font-mono ${modelIdx === i ? 'border-emerald-500/60 text-emerald-400 bg-emerald-500/5' : 'border-[#1E293B] text-slate-300'}`} data-testid={`model-${m.provider}`}>
@@ -255,6 +258,7 @@ export default function ProjectDetail() {
                     </button>
                   ))}
                 </div>
+                <div className="font-mono text-[10px] text-slate-500 mt-1">Model is picked automatically. Override only if you need to.</div>
               </div>
               <div>
                 <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2">Prompt (optional)</div>

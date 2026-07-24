@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:6
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./backend/.env
+    environment:
+      # Override MONGO_URL to point at the compose service
+      MONGO_URL: mongodb://mongo:27017
+      STORAGE_MODE: local
+      STORAGE_LOCAL_PATH: /app/storage
+    volumes:
+      - chipsutra_storage:/app/storage
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_BACKEND_URL: http://localhost:8001
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  mongo_data:
+  chipsutra_storage:

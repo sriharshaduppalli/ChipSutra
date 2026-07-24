@@ -58,9 +58,52 @@ const usecases = [
 const languages = ["Verilog", "SystemVerilog", "VHDL", "UVM", "SVA", "Chisel-friendly"];
 
 const tiers = [
-  { name: "Free", price: "$0", period: "/mo", features: ["Up to 3 projects", "Claude Sonnet 4.5", "Community support"], cta: "Join waitlist", highlight: false },
-  { name: "Pro", price: "$49", period: "/mo", features: ["Unlimited projects", "Claude + GPT-5.2 switcher", "Coverage + Waveform tools", "Priority support"], cta: "Get early access", highlight: true },
-  { name: "Enterprise", price: "Custom", period: "", features: ["On-prem deploy option", "SSO / Team collab", "Fine-tuned domain LLM", "Dedicated engineer"], cta: "Contact sales", highlight: false },
+  {
+    name: "Free",
+    price: "$0",
+    period: "/mo",
+    features: [
+      "Up to 3 projects",
+      "All 10 AI modules",
+      "1 workspace · 3 seats",
+      "10 generations / day",
+      "Community support",
+    ],
+    cta: "Start free",
+    highlight: false,
+  },
+  {
+    name: "Pro",
+    price: "$49",
+    period: "/engineer/mo",
+    features: [
+      "Unlimited projects",
+      "Unlimited generations",
+      "Verilator compile+run+VCD",
+      "Formal verification",
+      "Coverage + waveform tools",
+      "Up to 10 seats per workspace",
+      "Priority email support",
+    ],
+    cta: "Start Pro trial",
+    highlight: true,
+  },
+  {
+    name: "Enterprise",
+    price: "Custom",
+    period: "",
+    features: [
+      "Everything in Pro",
+      "On-prem / VPC deployment",
+      "SSO (SAML / OIDC)",
+      "Fine-tuned domain LLM",
+      "Custom chiplet templates",
+      "Dedicated verification engineer",
+      "99.9% SLA",
+    ],
+    cta: "Contact sales",
+    highlight: false,
+  },
 ];
 
 const Feature = ({ icon: Icon, title, desc, tag, idx }) => (
@@ -216,7 +259,14 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto px-6">
           <div className="pin-badge mb-4 inline-block">04 · PRICING</div>
           <h2 className="font-display text-4xl font-bold tracking-tight mb-4">Simple tiers. Made for engineers.</h2>
-          <p className="font-mono text-sm text-slate-400 mb-12 max-w-lg">Start free, scale with your team, deploy on-prem when you need it.</p>
+          <p className="font-mono text-sm text-slate-400 mb-8 max-w-lg">Pay for outcomes, not for models. ChipSutra picks the right frontier LLM automatically — Claude Sonnet 4.5, GPT-5.2, or a fine-tuned domain model — and only bills you for what you ship.</p>
+          <div className="mb-12 flex items-center gap-3">
+            <div className="pin-badge border-emerald-500/40 text-emerald-400 flex items-center gap-2">
+              <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></div>
+              Model routing · fully automatic
+            </div>
+            <div className="font-mono text-[10px] text-slate-500">Claude Sonnet 4.5 + GPT-5.2 · zero configuration</div>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {tiers.map((t) => (
               <div key={t.name} className={`card-surface p-8 relative ${t.highlight ? 'border-emerald-500/60' : ''}`} data-testid={`tier-${t.name.toLowerCase()}`}>
