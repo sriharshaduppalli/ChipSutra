@@ -1,19 +1,16 @@
 """
 ChipSutra LLM provider abstraction.
 
-Supports two modes:
-1. Emergent Universal Key (default in Emergent-hosted environment):
-   set EMERGENT_LLM_KEY, and the `emergentintegrations` library.
-2. Standalone / open-source:
-   set ANTHROPIC_API_KEY (for Claude) and/or OPENAI_API_KEY (for GPT).
-
-Public API:
-    async for delta in stream_chat(provider, model, system, user_text):
-        # delta is a text chunk string
+Supports THREE modes (auto-detected, in priority order):
+1. Emergent Universal Key (Emergent-hosted): EMERGENT_LLM_KEY + emergentintegrations
+2. Standalone SDKs (paid, best quality): ANTHROPIC_API_KEY and/or OPENAI_API_KEY
+3. LOCAL OLLAMA (zero-cost, zero-key, DEFAULT for self-host): OLLAMA_URL
 """
 import os
 import logging
+import json as _json
 from typing import AsyncIterator, Optional
+import httpx
 
 logger = logging.getLogger("chipsutra.llm")
 
@@ -21,6 +18,8 @@ logger = logging.getLogger("chipsutra.llm")
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "").rstrip("/")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:1.5b")
 
 _emergent_ok = False
 if EMERGENT_LLM_KEY:
@@ -28,7 +27,7 @@ if EMERGENT_LLM_KEY:
         from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone  # type: ignore
         _emergent_ok = True
     except Exception as e:
-        logger.info(f"emergentintegrations not available ({e}); will use standalone SDKs")
+        logger.info(f"emergentintegrations not available ({e}); will try other providers")
 
 _anthropic_client = None
 if ANTHROPIC_API_KEY:
@@ -52,12 +51,16 @@ def available_providers() -> dict:
         "emergent": _emergent_ok,
         "anthropic": _anthropic_client is not None,
         "openai": _openai_client is not None,
+        "ollama": bool(OLLAMA_URL),
+        "ollama_model": OLLAMA_MODEL if OLLAMA_URL else None,
     }
 
 
 async def stream_chat(provider: str, model: str, system: str, user_text: str, session_id: Optional[str] = None) -> AsyncIterator[str]:
-    """Yield text deltas from the chosen LLM provider."""
-    # Prefer Emergent if available and configured (single key for all providers)
+    """Yield text deltas from the chosen LLM provider.
+    Provider precedence: emergent → anthropic (if provider=='anthropic') → openai (if provider=='openai') → ollama (fallback).
+    """
+    # Prefer Emergent if configured (covers all providers under one key)
     if _emergent_ok:
         chat = LlmChat(
             api_key=EMERGENT_LLM_KEY,
@@ -71,30 +74,20 @@ async def stream_chat(provider: str, model: str, system: str, user_text: str, se
                 break
         return
 
-    # Standalone paths
-    if provider == "anthropic":
-        if not _anthropic_client:
-            raise RuntimeError("Anthropic provider not configured. Set ANTHROPIC_API_KEY.")
+    # Standalone SDKs
+    if provider == "anthropic" and _anthropic_client:
         async with _anthropic_client.messages.stream(
-            model=model,
-            max_tokens=4096,
-            system=system,
+            model=model, max_tokens=4096, system=system,
             messages=[{"role": "user", "content": user_text}],
         ) as stream:
             async for chunk in stream.text_stream:
                 yield chunk
         return
 
-    if provider == "openai":
-        if not _openai_client:
-            raise RuntimeError("OpenAI provider not configured. Set OPENAI_API_KEY.")
+    if provider == "openai" and _openai_client:
         stream = await _openai_client.chat.completions.create(
-            model=model,
-            stream=True,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_text},
-            ],
+            model=model, stream=True,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user_text}],
         )
         async for chunk in stream:
             try:
@@ -105,4 +98,36 @@ async def stream_chat(provider: str, model: str, system: str, user_text: str, se
                 continue
         return
 
-    raise RuntimeError(f"Unknown provider: {provider}")
+    # OLLAMA FALLBACK — zero-key, zero-cost, runs locally
+    if OLLAMA_URL:
+        payload = {
+            "model": OLLAMA_MODEL,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_text},
+            ],
+            "stream": True,
+        }
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
+            async with client.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.strip():
+                        continue
+                    try:
+                        obj = _json.loads(line)
+                    except Exception:
+                        continue
+                    if obj.get("done"):
+                        break
+                    msg = obj.get("message", {})
+                    content = msg.get("content", "")
+                    if content:
+                        yield content
+        return
+
+    raise RuntimeError(
+        f"No LLM provider configured for '{provider}'. Set OLLAMA_URL for zero-key local mode, "
+        "or ANTHROPIC_API_KEY / OPENAI_API_KEY / EMERGENT_LLM_KEY."
+    )
+

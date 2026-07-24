@@ -1,33 +1,80 @@
 version: "3.9"
 
+# ==============================================================
+# ChipSutra — zero-configuration EDA copilot for verification.
+# Just run: docker compose up --build
+# ==============================================================
+
 services:
+  # MongoDB — user data, projects, generations
   mongo:
     image: mongo:6
     restart: unless-stopped
-    ports:
-      - "27017:27017"
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
 
+  # Ollama — local LLM server (zero API key required)
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    # Uncomment the next 8 lines to use GPU acceleration if you have NVIDIA GPUs
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # One-shot: pull the default code model on first startup, then exit.
+  # Users can change OLLAMA_MODEL in backend/.env.
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "OLLAMA_HOST=http://ollama:11434 ollama pull ${OLLAMA_MODEL:-qwen2.5-coder:1.5b} &&
+       echo '[chipsutra] model pulled successfully'"
+    restart: "no"
+
+  # ChipSutra backend — FastAPI + Verilator + Yosys + SBY
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
-      - mongo
+      mongo:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
     ports:
       - "8001:8001"
     env_file:
       - ./backend/.env
     environment:
-      # Override MONGO_URL to point at the compose service
       MONGO_URL: mongodb://mongo:27017
       STORAGE_MODE: local
       STORAGE_LOCAL_PATH: /app/storage
+      OLLAMA_URL: http://ollama:11434
     volumes:
       - chipsutra_storage:/app/storage
 
+  # React SPA served via nginx
   frontend:
     build:
       context: ./frontend
@@ -42,4 +89,5 @@ services:
 
 volumes:
   mongo_data:
+  ollama_data:
   chipsutra_storage:

@@ -40,21 +40,32 @@ An open-source EDA copilot for the semiconductor industry — testbenches, asser
 | Storage | Local disk (default) or Emergent Object Storage |
 | Auth | JWT + optional Google OAuth 2.0 |
 
-## Quick start
+## Quick start (**zero API keys required**)
 
 ```bash
 git clone https://github.com/sriharshaduppalli/ChipSutra.git
 cd ChipSutra
-
-# --- One-command Docker start ---
 cp backend/.env.example backend/.env
-# Edit backend/.env → set JWT_SECRET and ANTHROPIC_API_KEY
+# Optional: edit backend/.env to change JWT_SECRET / ADMIN_PASSWORD
 docker compose up --build
 ```
 
-Open http://localhost:3000 — sign up with any email, upload RTL, click **Generate**.
+That's it. Docker Compose spins up:
+- **MongoDB** — data store
+- **Ollama** — local LLM server (auto-pulls `qwen2.5-coder:1.5b`, ~1 GB, on first run)
+- **ChipSutra backend** — FastAPI + Verilator + Yosys + SymbiYosys pre-installed
+- **ChipSutra frontend** — React SPA served via nginx
 
-For non-Docker setup, environment variables, LLM provider matrix, Google OAuth setup, and troubleshooting: see **[SELF_HOST.md](./SELF_HOST.md)**.
+Open **http://localhost:3000** → sign up → upload RTL → click **Generate**. **No API key. No token cost. Testbench generated locally.**
+
+### Want better quality?
+Set one of these in `backend/.env` (all optional):
+- `ANTHROPIC_API_KEY=sk-ant-...` → uses Claude Sonnet 4.5 (best code quality)
+- `OPENAI_API_KEY=sk-...` → uses GPT-5.2
+- Change `OLLAMA_MODEL=qwen2.5-coder:7b` (~4.5 GB) for better local quality
+- `EMERGENT_LLM_KEY=sk-emergent-...` → Emergent Universal Key (Emergent-hosted only)
+
+The backend auto-detects which providers are configured and routes accordingly.
 
 ## Tracking your community 📈
 
