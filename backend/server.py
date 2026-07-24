@@ -39,6 +39,11 @@ APP_NAME = os.environ.get("APP_NAME", "chipsutra")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@chipsutra.ai")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@ChipSutra2026")
 
+# Free-tier quota: N generations per user per day (0 = unlimited)
+FREE_DAILY_QUOTA = int(os.environ.get("FREE_DAILY_QUOTA", "10"))
+# Set REQUIRE_EMAIL_VERIFICATION=true to block generation for unverified emails
+REQUIRE_EMAIL_VERIFICATION = os.environ.get("REQUIRE_EMAIL_VERIFICATION", "false").lower() == "true"
+
 STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"  # legacy, unused
 
 # =========================
@@ -276,7 +281,43 @@ async def login(inp: LoginIn):
 
 @api.get("/auth/me")
 async def me(user=Depends(get_current_user)):
+    # Attach usage info
+    today = datetime.now(timezone.utc).date().isoformat()
+    u = await db.users.find_one({"id": user["id"]}, {"_id": 0, "daily_generations": 1, "daily_reset": 1})
+    used_today = (u.get("daily_generations", 0) if u.get("daily_reset") == today else 0)
+    user["usage"] = {
+        "generations_today": used_today,
+        "free_daily_quota": FREE_DAILY_QUOTA,
+        "unlimited": user.get("tier") == "pro" or user.get("role") == "admin",
+    }
     return user
+
+@api.post("/auth/send-verify")
+async def send_verify(user=Depends(get_current_user)):
+    """Generate an email verification token. If SMTP is configured, would send email;
+    for now the token is logged for manual delivery / opt-in email providers."""
+    if user.get("email_verified"):
+        return {"ok": True, "already_verified": True}
+    token = str(uuid.uuid4()) + "-" + str(uuid.uuid4())
+    await db.users.update_one({"id": user["id"]}, {"$set": {
+        "email_verify_token": token,
+        "email_verify_sent_at": datetime.now(timezone.utc).isoformat(),
+    }})
+    verify_link = f"/api/auth/verify?token={token}"
+    logger.info(f"[email-verify] user={user['email']} link={verify_link}")
+    # TODO: integrate SMTP / Resend / SendGrid here
+    return {"ok": True, "verify_link_hint": verify_link, "note": "In self-host mode this link is logged. Wire an email provider (Resend/SMTP) to auto-send."}
+
+@api.get("/auth/verify")
+async def verify_email(token: str = Query(...)):
+    u = await db.users.find_one({"email_verify_token": token}, {"_id": 0})
+    if not u:
+        raise HTTPException(400, "Invalid or expired verification token")
+    await db.users.update_one({"id": u["id"]}, {
+        "$set": {"email_verified": True, "email_verified_at": datetime.now(timezone.utc).isoformat()},
+        "$unset": {"email_verify_token": ""}
+    })
+    return {"ok": True, "email": u["email"], "message": "Email verified. You can now generate."}
 
 @api.post("/auth/logout")
 async def logout(user=Depends(get_current_user)):
@@ -551,6 +592,23 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
     proj = await require_project(inp.project_id, user["id"], "editor")
     if inp.module not in MODULE_PROMPTS:
         raise HTTPException(400, "Unknown module")
+
+    # ---- Quota + email verification enforcement (skip for admins & Pro tier) ----
+    tier = user.get("tier", "free")
+    if user.get("role") != "admin" and tier == "free":
+        if REQUIRE_EMAIL_VERIFICATION and not user.get("email_verified", False) and user.get("auth_provider") != "google":
+            raise HTTPException(403, "Please verify your email before generating. Check /api/auth/send-verify to resend the link.")
+        if FREE_DAILY_QUOTA > 0:
+            today = datetime.now(timezone.utc).date().isoformat()
+            u = await db.users.find_one({"id": user["id"]}, {"_id": 0, "daily_generations": 1, "daily_reset": 1})
+            if u.get("daily_reset") != today:
+                await db.users.update_one({"id": user["id"]}, {"$set": {"daily_generations": 0, "daily_reset": today}})
+                used = 0
+            else:
+                used = u.get("daily_generations", 0)
+            if used >= FREE_DAILY_QUOTA:
+                raise HTTPException(429, f"Daily quota reached ({FREE_DAILY_QUOTA} generations/day on Free tier). Upgrade to Pro for unlimited.")
+            await db.users.update_one({"id": user["id"]}, {"$inc": {"daily_generations": 1}})
 
     # Gather file contexts
     file_context = ""
