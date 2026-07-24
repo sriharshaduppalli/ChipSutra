@@ -1,0 +1,124 @@
+{
+  "theme": "dark",
+  "typography": {
+    "headings": {
+      "font_family": "Chivo, Cabinet Grotesk, or Söhne equivalent",
+      "weights": ["light", "medium", "bold"],
+      "description": "Used for marketing hero and large impact text. Crisp, serious, enterprise feel. Avoid Inter."
+    },
+    "body": {
+      "font_family": "JetBrains Mono, IBM Plex Mono, or Berkeley Mono equivalent",
+      "description": "For technical density, data tables, code editor previews, and UI labels. Enhances the 'engineer tool' aesthetic."
+    },
+    "accents": {
+      "font_family": "Space Mono",
+      "description": "For overlines, badges, status indicators, and chiplet pin labels."
+    },
+    "instructions": "Import these fonts via Google Fonts (e.g. Chivo and JetBrains Mono) or standard web imports. Use tight tracking for headings (tracking-tight) and standard or loose tracking for mono body."
+  },
+  "colors": {
+    "background": {
+      "base": "#0B0E14",
+      "surface": "#121721",
+      "surface_elevated": "#1A212D"
+    },
+    "text": {
+      "primary": "#F8FAFC",
+      "secondary": "#94A3B8",
+      "muted": "#475569",
+      "neon_green": "#10B981",
+      "neon_blue": "#0EA5E9"
+    },
+    "accent": {
+      "primary": "#10B981",
+      "primary_hover": "#059669",
+      "secondary": "#0EA5E9",
+      "amber": "#F59E0B"
+    },
+    "semantic": {
+      "success": "#10B981",
+      "warning": "#F59E0B",
+      "error": "#EF4444",
+      "info": "#3B82F6"
+    },
+    "border": {
+      "default": "#1E293B",
+      "focus": "#10B981",
+      "subtle": "#1e293b80"
+    },
+    "description": "Silicon slate and dark navy base. Avoid pure black. Oscilloscope green (#10B981) as the primary neon accent, with Ion-blue (#0EA5E9) for secondary data and Phosphor amber (#F59E0B) for warnings/highlights. Completely avoid AI-slop purple/violet gradients."
+  },
+  "visual_enhancers": {
+    "motifs": [
+      "Grid dot patterns: Use radial-gradient masks over CSS dot grids to represent chip substrate.",
+      "PCB traces: 1px glowing lines (using box-shadow or neon borders) across section dividers or active card edges.",
+      "Silicon die texture: Noise/grain overlays with low opacity (5-10%) on elevated dark cards."
+    ],
+    "surfaces": [
+      "Technical Dashboard: Use border-collapse style grids for the dashboard. Expose the skeleton, 1px subtle borders on right/bottom of grid items.",
+      "Cards: Flat backgrounds, 1px subtle border (#1E293B), no drop shadows by default. Use a 1px bright border (e.g., border-t-emerald-500) to indicate active/selected state.",
+      "Never use pure transparent backgrounds for headers. Use backdrop-blur-md with bg-[#0B0E14]/80 to maintain readabilty of navigation."
+    ]
+  },
+  "layouts": {
+    "landing": {
+      "type": "Hero-heavy, immersive technical marketing",
+      "structure": [
+        "Hero: Deep dark background, large expressive typography (Chivo), overlaid on a dark silicon wafer visual with grid pattern. Includes Waitlist CTA.",
+        "Features (Bento Grid): 6 modules (Testbench gen, Assertion gen, etc.) in an asymmetrical bento grid. Each card has a subtle top border accent.",
+        "Use Cases: Tabbed layout for Block, IP, Subsystem, SoC, Chiplet. Monospace labels and technical line-art styling.",
+        "Languages: Supported HDL languages presented as hardware pin/badge components.",
+        "Pricing: High contrast cards. Pro/Enterprise highlighted with a glowing oscilloscope green border."
+      ]
+    },
+    "dashboard": {
+      "type": "Data-dense, engineer-focused verification workspace",
+      "structure": [
+        "Sidebar (Left Nav): Compact, minimal width. Uses Lucide or Phosphor icons. Active state highlighted with a neon left border.",
+        "Main Workspace: Dense layout (gap-4). High density grid for coverage heatmaps, AI generation modules, and waveform viewers.",
+        "Code Editor: Monaco editor embedded in a panel with terminal-like styling (sharp corners, 1px solid borders, no shadows).",
+        "AI Panel: Module picker + Model switcher. Streaming output area styled like a CLI terminal with mono font."
+      ]
+    }
+  },
+  "motion": {
+    "micro_interactions": "Hover states on buttons (slight color shift and border glow), active links get a 1px border highlight. AI generating state should use a shimmering text or blinking cursor effect.",
+    "page_transitions": "Subtle fade (Framer Motion) - keep it snappy for engineers.",
+    "data_viz": "Waveforms should render cleanly, avoiding excessive bounce. Professional, hardware-level precision."
+  },
+  "component_rules": {
+    "buttons": "Sharp corners or very slight rounding (rounded-sm). Technical feel. Primary button uses solid oscilloscope green with dark text, or hollow with neon green border.",
+    "cards": "Sharp edges (rounded-none or rounded-sm). 1px border of #1E293B. Flat surfaces, no large drop shadows.",
+    "forms": "Inputs should have #121721 background, #1E293B border, and focus-ring of #10B981. Mono fonts for input text."
+  },
+  "images": {
+    "hero_background": {
+      "url": "https://images.pexels.com/photos/28215391/pexels-photo-28215391.jpeg",
+      "description": "Vibrant detailed close-up of a patterned silicon wafer with green/blue hues. Use as hero background with heavy dark overlay (bg-black/80) and grid pattern."
+    },
+    "features_texture": {
+      "url": "https://images.unsplash.com/photo-1645395758741-c23bb12d9d6b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzl8MHwxfHNlYXJjaHw0fHxjaXJjdWl0JTIwYm9hcmQlMjBnbG93aW5nJTIwdHJhY2VzfGVufDB8fHx8MTc4NDkxMjQ5MHww&ixlib=rb-4.1.0&q=85",
+      "description": "Close up of a computer circuit board. Great for feature card backgrounds with high opacity mask (bg-black/90) to show subtle circuit traces."
+    },
+    "tech_accent": {
+      "url": "https://images.pexels.com/photos/37005283/pexels-photo-37005283.jpeg",
+      "description": "Detailed view of circuit board showing electronic traces. Use for decorative sections or waitlist background."
+    }
+  },
+  "libraries": {
+    "icons": "lucide-react (standard) or @phosphor-icons/react for more technical weight.",
+    "editor": "@monaco-editor/react for HDL code previews.",
+    "animation": "framer-motion for bento grid staggering and terminal text reveals."
+  },
+  "universal_guidelines_for_main_agent": [
+    "Prioritize a serious enterprise deep-tech aesthetic. Avoid rounded bubbly UI, avoid generic purple gradients. Stick to the 'oscilloscope green / ion-blue' neon on slate dark mode.",
+    "Use standard Tailwind classes. For custom grid patterns, use inline styles with radial-gradients or linear-gradients.",
+    "Ensure all text against dark backgrounds meets APCA contrast standards. Never use pure #000000 for backgrounds, use #0B0E14.",
+    "Data-testid attributes MUST be added to all interactive elements.",
+    "Do NOT center align the app container. Keep a left-aligned or CSS Grid layout for technical precision.",
+    "For the dashboard, use Shadcn UI components extensively (tabs, sidebars, select, sliders) but override their border-radius to `rounded-none` or `rounded-sm` for a sharper, engineering look.",
+    "Do NOT apply global transitions like `transition: all`. Use specific transitions.",
+    "Never use AI emoji placeholders (🤖🧠💭). Use proper SVG icons.",
+    "Use `sonner` for toast notifications."
+  ]
+}
