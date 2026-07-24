@@ -1,112 +1,343 @@
-# ChipSutra™ — AI-Powered VLSI Design Verification
+<div align="center">
 
-> © 2026 **Sri Harsha Duppalli** · [ChipSutra.ai](https://chipsutra-verify.emergent.host) · Open source under MIT (with attribution)
+# ChipSutra™
 
-[![License: MIT](https://img.shields.io/badge/License-MIT%20+%20attribution-emerald)](./LICENSE)
+### AI-Powered VLSI Design Verification — Open Source
+
+**Generate UVM testbenches, SVA assertions, coverage plans, and debug hints for your Verilog/SystemVerilog/VHDL designs — automatically, in seconds, with zero API keys.**
+
+[**🚀 Try live**](https://chipsutra-verify.emergent.host) · [**📥 Self-host**](#-quick-start-30-seconds) · [**📚 Docs**](./SELF_HOST.md) · [**🐛 Issues**](https://github.com/sriharshaduppalli/ChipSutra/issues)
+
+[![License: MIT+attribution](https://img.shields.io/badge/License-MIT%20+%20attribution-emerald)](./LICENSE)
 [![Made in India](https://img.shields.io/badge/Made%20in-India-orange)](https://github.com/sriharshaduppalli/ChipSutra)
-[![Verilator](https://img.shields.io/badge/Verilator-5.x-green)](https://www.veripool.org/verilator/)
-[![Claude](https://img.shields.io/badge/LLM-Claude%20Sonnet%204.5-purple)](https://www.anthropic.com)
+[![Zero API Keys](https://img.shields.io/badge/API%20keys-not%20required-brightgreen)](#-quick-start-30-seconds)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose%20ready-blue)](./docker-compose.yml)
 
-An open-source EDA copilot for the semiconductor industry — testbenches, assertions, coverage closure, waveforms, and formal verification, powered by Claude Sonnet 4.5 and GPT-5.2. **Free for community use. No quotas. No email walls.**
+</div>
 
-**Two ways to run:**
-- **Hosted** — try it live at https://chipsutra-verify.emergent.host (no install)
-- **Self-host** — clone, set 2 env vars, run. See [SELF_HOST.md](./SELF_HOST.md).
+---
 
-## What ships (v0.6 · fully open)
+## ⚡ What ChipSutra does
 
-- **10 AI modules**: UVM Testbench, SVA Assertions, Checkers, Covergroups, Spec↔RTL, Testplan, Coverage-Hole Tests, Debug Analysis, Formal Hints
-- **Real Verilator**: `--lint-only` and full `compile + run + VCD capture`
-- **Real SymbiYosys** formal (Yosys + Z3 SMT)
-- **In-browser VCD viewer** — WaveDrom-style timing diagrams
-- **Coverage parser** — heatmap + ranked holes + auto-close tests
-- **Workspaces/orgs** — owner/admin/member, activity log, seat limits
-- **In-app notifications** — bell icon, unread badge
-- **Team collab** — invite by email, threaded comments
-- **UCIe/BoW/Chiplet templates**
-- **GitHub Actions integration** — workflow template + webhook stub
-- **Auth**: JWT email/password + optional Google OAuth (standalone or Emergent-managed)
-- **No default quotas** — `FREE_DAILY_QUOTA=0` means unlimited out of the box
+Upload your RTL. Click **Generate**. Get production-quality verification artifacts in seconds.
 
-## Stack
-
-| Layer | Tech |
+| Input you provide | Output ChipSutra generates |
 |---|---|
-| Frontend | React 19, Tailwind, Shadcn UI, Monaco, Framer Motion, Sonner |
-| Backend | FastAPI, MongoDB (motor), Pydantic v2 |
-| LLMs | Anthropic Claude Sonnet 4.5 + OpenAI GPT-5.2 (auto-routed) |
-| Sim | Verilator 5 (subprocess, SSE-streamed) |
-| Formal | SymbiYosys + Yosys + Z3 |
-| Storage | Local disk (default) or Emergent Object Storage |
-| Auth | JWT + optional Google OAuth 2.0 |
+| `counter.sv` | Complete **UVM testbench** with driver, monitor, scoreboard, sequences |
+| A block spec (PDF/MD) | Synthesizable **RTL** in Verilog / SystemVerilog / VHDL |
+| Existing RTL | **SVA assertions**, **covergroups**, **checkers**, **testplan** |
+| Coverage report | Ranked **coverage holes** + auto-generated closure tests |
+| Simulation log | **Debug analysis** with ranked root-cause hypotheses |
+| RTL + testbench | Actual **Verilator compile + run + VCD** you can inspect |
 
-## Quick start (**zero API keys required**)
+**Supports**: Verilog · SystemVerilog · VHDL · UVM · SVA. **Design scopes**: Block · IP · Subsystem · SoC · Chiplet · Multi-chiplet.
+
+---
+
+## 🚀 Quick start (30 seconds)
+
+**Prerequisites**: Docker Desktop or Docker Engine + 4 GB RAM.
 
 ```bash
 git clone https://github.com/sriharshaduppalli/ChipSutra.git
 cd ChipSutra
 cp backend/.env.example backend/.env
-# Optional: edit backend/.env to change JWT_SECRET / ADMIN_PASSWORD
 docker compose up --build
 ```
 
-That's it. Docker Compose spins up:
-- **MongoDB** — data store
-- **Ollama** — local LLM server (auto-pulls `qwen2.5-coder:1.5b`, ~1 GB, on first run)
-- **ChipSutra backend** — FastAPI + Verilator + Yosys + SymbiYosys pre-installed
-- **ChipSutra frontend** — React SPA served via nginx
+Then open **http://localhost:3000**. Sign up with any email → upload RTL → click **Generate**.
 
-Open **http://localhost:3000** → sign up → upload RTL → click **Generate**. **No API key. No token cost. Testbench generated locally.**
+**That's it.** No API keys. No credit card. No sign-up on external services. Everything — including the LLM — runs locally.
 
-### Want better quality?
-Set one of these in `backend/.env` (all optional):
-- `ANTHROPIC_API_KEY=sk-ant-...` → uses Claude Sonnet 4.5 (best code quality)
-- `OPENAI_API_KEY=sk-...` → uses GPT-5.2
-- Change `OLLAMA_MODEL=qwen2.5-coder:7b` (~4.5 GB) for better local quality
-- `EMERGENT_LLM_KEY=sk-emergent-...` → Emergent Universal Key (Emergent-hosted only)
+### First-run behavior
+1. Docker pulls MongoDB, Ollama, and base images (~2 min)
+2. Ollama auto-downloads the code model `qwen2.5-coder:1.5b` (~1 GB, one-time)
+3. Backend, frontend, and Verilator toolchain come online
+4. You're generating testbenches locally in under 5 minutes total
 
-The backend auto-detects which providers are configured and routes accordingly.
+---
 
-## Tracking your community 📈
+## 🎯 Live Example
 
-GitHub gives you built-in analytics — no code needed:
+**Input** — a tiny 8-bit counter (`counter.sv`, 3 lines):
+```systemverilog
+module counter(input clk, input rst, output reg [7:0] q);
+  always @(posedge clk or posedge rst) if (rst) q<=0; else q<=q+1;
+endmodule
+```
 
-1. Go to **https://github.com/sriharshaduppalli/ChipSutra/graphs/traffic**
-2. See:
-   - **Clones** per day (last 14 days) — who's downloading your code
-   - **Visitors** (unique IPs) — landing page views
-   - **Referring sites** — where your traffic is coming from
-   - **Popular content** — most-viewed files/paths
-3. **Stars** and **Forks** are also public counters at the top of the repo.
+**Output in ~7 seconds** — full UVM testbench with driver, monitor, scoreboard, reference model, and mismatch check:
+```systemverilog
+// UVM Testbench for 8-bit counter (auto-generated by ChipSutra)
+class counter_txn extends uvm_sequence_item;
+  rand bit rst; bit [7:0] q;
+  `uvm_object_utils_begin(counter_txn)
+    `uvm_field_int(rst, UVM_ALL_FLAGS)
+    `uvm_field_int(q,   UVM_ALL_FLAGS)
+  `uvm_object_utils_end
+endclass
 
-For deeper analytics (post-clone activation, retention, geography), consider:
-- **Plausible / Umami** — privacy-friendly web analytics on your hosted deployment
-- **PostHog** — product analytics for the SaaS side
-- **Repo insights via API**: `curl https://api.github.com/repos/sriharshaduppalli/ChipSutra/traffic/clones -H "Authorization: token <PAT>"` (needs push access on the repo)
+interface counter_if(input logic clk); logic rst; logic [7:0] q; endinterface
 
-## Licensing & Attribution
+class counter_driver extends uvm_driver#(counter_txn) …
+class counter_monitor extends uvm_monitor …
+class counter_sb extends uvm_scoreboard …
+  virtual function void write(counter_txn t);
+    if(t.rst) exp_q=0; else exp_q++;
+    if(t.q!=exp_q) `uvm_error("SB",$sformatf("Mismatch exp=%0d got=%0d",exp_q,t.q))
+  endfunction
+```
 
-- **License**: MIT with attribution clause — see [LICENSE](./LICENSE)
-- **Trademark**: "ChipSutra™" is a trademark of Sri Harsha Duppalli. Redistributions must keep the "Powered by ChipSutra" attribution + link.
-- **Commercial re-branding** requires a separate commercial license — reach out at verification@chipsutra.ai.
+Then click **Simulate → Compile + Run** and get a real VCD trace back, viewable in the built-in waveform viewer. That's the complete flow.
 
-## Ownership
+---
 
-This project — the code, the ChipSutra brand, the domain, and the hosted deployment — is owned by **Sri Harsha Duppalli** (GitHub: [@sriharshaduppalli](https://github.com/sriharshaduppalli)). Anyone can clone, run, and contribute; commercial forks need a chat first.
+## ✨ Features
 
-## Roadmap
+<table>
+<tr><td width="50%">
 
-- [ ] Redis-backed rate limiting (multi-pod safe)
-- [ ] Full CI webhook AI review worker
-- [ ] Yosys ≥ 0.35 Docker image
-- [ ] Regression dashboard (pass/fail sparklines)
+### 🤖 10 AI Generation Modules
+- UVM Testbench
+- SVA Assertions
+- Checkers & Reference Models
+- Covergroups
+- Spec → RTL
+- RTL → Spec
+- Testplan / Coverage Plan
+- Coverage-Hole Tests
+- Debug Analysis
+- Formal Hints (SVA properties)
+
+</td><td width="50%">
+
+### 🔬 Real Verification Toolchain
+- **Verilator** lint + compile + run + VCD capture
+- **SymbiYosys** formal verification (Yosys + Z3 SMT)
+- In-browser **VCD waveform viewer** (WaveDrom-style)
+- **Coverage** heatmap + hole ranking
+- **Monaco** code editor with SV syntax highlighting
+
+</td></tr>
+<tr><td>
+
+### 👥 Team Collaboration
+- Workspaces / Orgs with roles (owner/admin/member)
+- Invite by email, editor/viewer permissions
+- Threaded comments on every generation
+- Activity log per workspace
+- In-app notifications (bell icon + unread count)
+
+</td><td>
+
+### 🧩 Chiplet-Era Templates
+- UCIe Basic + FLIT layer
+- BoW die-to-die interconnect
+- Chiplet Power Sequencing
+- Chiplet Root-of-Trust
+- AXI4 IP
+- Copy-prompt-to-clipboard → use in any project
+
+</td></tr>
+<tr><td>
+
+### 🔌 Zero-Config LLM
+- **Ollama** (bundled, zero-key, default)
+- Optional Anthropic Claude Sonnet 4.5
+- Optional OpenAI GPT-5.2
+- Auto-detects & prefers highest quality available
+- Model routing is transparent to users
+
+</td><td>
+
+### 🚢 CI/CD Integration
+- Downloadable GitHub Actions workflow
+- Webhook stub for AI review on PRs
+- Verilator lint on changed files
+- Optional ChipSutra AI review trigger
+- CI events log in dashboard
+
+</td></tr>
+</table>
+
+---
+
+## 🏗️ How it works
+
+```
+      ┌─────────────────────────┐
+      │   React SPA (port 3000) │  Monaco · WaveDrom · Framer Motion
+      └───────────┬─────────────┘
+                  │ /api/*
+      ┌───────────▼─────────────┐        ┌──────────────────────────┐
+      │  FastAPI (port 8001)    │───────►│  Ollama (local, bundled) │
+      │  SSE streams · JWT      │        │  qwen2.5-coder:1.5b      │
+      └───┬───────┬────────┬────┘        └──────────────────────────┘
+          │       │        │              (fallback: Claude / GPT / Emergent)
+          │       │        ├───► Verilator (--cc --exe --build --trace --timing)
+          │       │        └───► SymbiYosys + Yosys + Z3 SMT
+          │       │
+          │       └───► MongoDB (users, projects, generations, workspaces)
+          │
+          └───► Local disk storage (./storage) or Emergent Object Storage
+```
+
+**Every LLM call, every simulation, every waveform stays on your machine.** No data leaves your infrastructure unless you explicitly configure an external LLM provider.
+
+---
+
+## 🎨 Screenshots
+
+_Add screenshots to `docs/screenshots/` — placeholders below._
+
+<table>
+<tr>
+<td><img alt="Landing" src="docs/screenshots/landing.png" width="100%" onerror="this.style.display='none'"/><sub>Landing page — silicon-slate + oscilloscope-green</sub></td>
+<td><img alt="Generate" src="docs/screenshots/generate.png" width="100%" onerror="this.style.display='none'"/><sub>AI module picker → Monaco streaming output</sub></td>
+</tr>
+<tr>
+<td><img alt="Waveform" src="docs/screenshots/waveform.png" width="100%" onerror="this.style.display='none'"/><sub>In-browser VCD viewer</sub></td>
+<td><img alt="Coverage" src="docs/screenshots/coverage.png" width="100%" onerror="this.style.display='none'"/><sub>Coverage heatmap + hole ranking</sub></td>
+</tr>
+</table>
+
+---
+
+## ⚙️ Configuration options
+
+All optional — the defaults just work out of the box.
+
+### LLM providers (`backend/.env`)
+
+| Variable | What it does | Default |
+|---|---|---|
+| `OLLAMA_URL` | Local Ollama server | `http://ollama:11434` (auto-set in docker) |
+| `OLLAMA_MODEL` | Which model to load | `qwen2.5-coder:1.5b` (~1 GB) |
+| `ANTHROPIC_API_KEY` | Use Claude Sonnet 4.5 (paid, best quality) | *(unset)* |
+| `OPENAI_API_KEY` | Use GPT-5.2 (paid) | *(unset)* |
+| `EMERGENT_LLM_KEY` | Emergent Universal Key | *(unset)* |
+
+**Want higher quality with more RAM?** Change `OLLAMA_MODEL` to:
+- `qwen2.5-coder:3b` — better quality, ~2 GB RAM
+- `qwen2.5-coder:7b` — near-Claude quality, ~4.5 GB RAM
+- `qwen2.5-coder:32b` — SOTA local quality, ~20 GB RAM (needs beefy workstation)
+
+### Google Sign-in (optional)
+Leave blank to hide the Google button. To enable, create OAuth credentials at [Google Cloud Console](https://console.cloud.google.com/apis/credentials) and set:
+```
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=http://localhost:8001/api/auth/google/callback
+FRONTEND_URL=http://localhost:3000
+```
+
+### Storage (optional)
+- `STORAGE_MODE=local` (default) — uses `./storage` on disk
+- `STORAGE_MODE=emergent` — uses Emergent Object Storage (requires `EMERGENT_LLM_KEY`)
+
+Full self-host + production deploy guide: **[SELF_HOST.md](./SELF_HOST.md)**
+
+---
+
+## 📈 Community & tracking
+
+**GitHub gives you built-in analytics** for this repo:
+- **Clones**: https://github.com/sriharshaduppalli/ChipSutra/graphs/traffic → clones + visitors + referrers
+- **Stars & Forks**: counted on the repo homepage
+- **API access**: `curl -H "Authorization: token <PAT>" https://api.github.com/repos/sriharshaduppalli/ChipSutra/traffic/clones` (needs push access + `repo` scope)
+
+For deeper insight, hook up:
+- **Plausible** or **Umami** for privacy-friendly web analytics on your hosted deployment
+- **PostHog** for product analytics on the SaaS side
+
+### Optional anonymous telemetry
+Set `TELEMETRY_ENABLED=true` in `backend/.env` and every backend startup will send a **one-line anonymous ping** (version + random UUID, no user data) so you can count active installations. Opt-out is the default.
+
+---
+
+## ❓ FAQ
+
+**Q: Do I need an API key to use it?**
+No. Ollama runs locally and is bundled in Docker Compose. Zero keys required.
+
+**Q: What if I want better quality output?**
+Set `ANTHROPIC_API_KEY=sk-ant-...` in `backend/.env` — ChipSutra will automatically prefer Claude Sonnet 4.5 over local Ollama for higher-quality testbenches.
+
+**Q: How much RAM does it need?**
+- Minimum (Ollama 1.5b model): **4 GB RAM**
+- Recommended (7b model): **8-16 GB RAM**
+- SOTA (32b model or Claude via API): **any**
+
+**Q: Can I run it on a MacBook / laptop?**
+Yes. Ollama supports Apple Silicon acceleration. Docker Compose works on macOS, Linux, and Windows.
+
+**Q: Is my RTL uploaded anywhere?**
+Only to your local Docker container. Nothing leaves your machine unless you configure an external LLM provider.
+
+**Q: Can I use this commercially?**
+Yes — MIT license with attribution. You must keep "Powered by ChipSutra" visible in derivative UIs. For commercial rebranding, contact `verification@chipsutra.ai`.
+
+**Q: What about actual simulation (not just generation)?**
+Verilator is fully integrated. Select mode `Compile + Run` in the Simulate modal — it compiles your RTL+TB, executes, captures a VCD, and stores it back as a project file viewable in the built-in waveform viewer.
+
+**Q: Formal verification?**
+SymbiYosys is wired in but Debian's default Yosys 0.23 is version-mismatched with the latest SBY. Build Yosys ≥ 0.35 from source for full formal proofs — see [SELF_HOST.md](./SELF_HOST.md#troubleshooting).
+
+---
+
+## 🛣️ Roadmap
+
+- [x] Zero-key local LLM (Ollama)
+- [x] Real Verilator compile+run+VCD
+- [x] SymbiYosys formal integration
+- [x] Team workspaces + roles + activity log
+- [x] In-app notifications
+- [x] GitHub Actions template
+- [ ] Pre-built Docker Hub / GHCR images (skip build step)
 - [ ] CXL / HBM / D2D template gallery
-- [ ] SMTP integration for verify emails (Resend/SendGrid drop-in)
+- [ ] Regression dashboard (pass/fail sparklines per project)
+- [ ] Full CI webhook AI review worker
+- [ ] Yosys ≥ 0.35 in the default Docker image
+- [ ] Redis-backed rate limiter (multi-pod)
 
-## Contact
+Have an idea? Open an issue: https://github.com/sriharshaduppalli/ChipSutra/issues
 
-- Website: https://chipsutra-verify.emergent.host
-- Issues: https://github.com/sriharshaduppalli/ChipSutra/issues
-- Email: verification@chipsutra.ai
+---
 
-Made with ❤️ in India — for verification engineers, by verification engineers.
+## 🤝 Contributing
+
+Contributions are welcome. Please:
+1. Fork the repo
+2. Create a feature branch (`git checkout -b feat/my-feature`)
+3. Run the tests: `cd backend && pytest`
+4. Submit a PR against `main`
+
+For substantial changes, open an issue first to discuss.
+
+---
+
+## 📜 License & Ownership
+
+- **Software license**: MIT with attribution — see [LICENSE](./LICENSE)
+- **Trademark**: "ChipSutra™" is a trademark of Sri Harsha Duppalli
+- **Attribution requirement**: Derivative UIs must keep "Powered by ChipSutra" + link to this repo
+- **Ownership**: This project — code, brand, domain, hosted deployment — belongs to Sri Harsha Duppalli ([@sriharshaduppalli](https://github.com/sriharshaduppalli))
+- **Commercial re-branding**: reach out at `verification@chipsutra.ai`
+
+---
+
+## 📞 Contact
+
+- 🌐 Website: **https://chipsutra-verify.emergent.host**
+- 🐛 Issues: https://github.com/sriharshaduppalli/ChipSutra/issues
+- 📧 Email: `verification@chipsutra.ai`
+
+---
+
+<div align="center">
+
+**Made with ❤️ in India — for verification engineers, by verification engineers.**
+
+⭐ Star this repo if ChipSutra saves you an afternoon of writing UVM boilerplate!
+
+</div>

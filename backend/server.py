@@ -220,6 +220,41 @@ async def startup():
         })
         logger.info(f"Admin user seeded: {ADMIN_EMAIL}")
     init_storage()  # storage_provider abstraction — auto Emergent or local
+    # Optional anonymous telemetry (opt-in, privacy-safe)
+    if os.environ.get("TELEMETRY_ENABLED", "false").lower() == "true":
+        import asyncio as _asyncio
+        _asyncio.create_task(_send_telemetry_ping())
+
+async def _send_telemetry_ping():
+    """Anonymous one-time startup ping. Sends only a random UUID + version. No user data."""
+    try:
+        import httpx
+        install_id = os.environ.get("CHIPSUTRA_INSTALL_ID")
+        if not install_id:
+            install_id = str(uuid.uuid4())
+            logger.info(f"[telemetry] first-run install_id={install_id} (set CHIPSUTRA_INSTALL_ID to persist)")
+        payload = {"install_id": install_id, "version": "0.8.0", "ts": datetime.now(timezone.utc).isoformat()}
+        endpoint = os.environ.get("TELEMETRY_ENDPOINT", "https://chipsutra-verify.emergent.host/api/telemetry/hello")
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            await c.post(endpoint, json=payload)
+        logger.info("[telemetry] anonymous startup ping sent")
+    except Exception as e:
+        logger.debug(f"[telemetry] ping skipped: {e}")
+
+@api.post("/telemetry/hello")
+async def telemetry_hello(request: Request):
+    """Receive anonymous install ping from self-hosted installations."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False}
+    await db.telemetry.insert_one({
+        "install_id": body.get("install_id"),
+        "version": body.get("version"),
+        "user_agent": request.headers.get("user-agent", "")[:200],
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"ok": True}
 
 @app.on_event("shutdown")
 async def shutdown():
