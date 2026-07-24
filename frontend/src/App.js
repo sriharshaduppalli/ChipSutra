@@ -25,8 +25,8 @@ function Protected({ children }) {
 
 function AppRouter() {
   const location = useLocation();
-  // Synchronously handle Google OAuth callback (hash contains session_id) BEFORE rendering protected routes
-  if (location.hash?.includes("session_id=")) {
+  // Synchronously handle OAuth callback (hash contains session_id or gtoken) BEFORE rendering protected routes
+  if (location.hash?.includes("session_id=") || location.hash?.includes("gtoken=")) {
     return <AuthCallback />;
   }
   return (

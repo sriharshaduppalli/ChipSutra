@@ -17,12 +17,15 @@ import bcrypt
 import jwt
 import requests
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, UploadFile, File, Form, Query, Request
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, RedirectResponse
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone
+# ChipSutra provider abstractions (auto-fall-back Emergent → standalone)
+from llm_provider import stream_chat as llm_stream_chat, available_providers as llm_available_providers
+from storage_provider import init_storage as storage_init, put_object as put_object_impl, get_object as get_object_impl, storage_mode
+from google_auth import google_mode, resolve_emergent_session, build_google_auth_url, exchange_code as google_exchange_code
 
 # =========================
 # Config
@@ -36,7 +39,7 @@ APP_NAME = os.environ.get("APP_NAME", "chipsutra")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@chipsutra.ai")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@ChipSutra2026")
 
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"  # legacy, unused
 
 # =========================
 # Logging
@@ -65,48 +68,16 @@ app.add_middleware(
 )
 
 # =========================
-# Object Storage
+# Object Storage (delegates to storage_provider abstraction)
 # =========================
-_storage_key: Optional[str] = None
-
-def init_storage() -> Optional[str]:
-    global _storage_key
-    if _storage_key:
-        return _storage_key
-    if not EMERGENT_LLM_KEY:
-        return None
-    try:
-        resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
-        resp.raise_for_status()
-        _storage_key = resp.json()["storage_key"]
-        logger.info("Object storage initialized")
-        return _storage_key
-    except Exception as e:
-        logger.error(f"Storage init failed: {e}")
-        return None
+def init_storage():
+    return storage_init()
 
 def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    if not key:
-        raise HTTPException(500, "Storage not available")
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data, timeout=120,
-    )
-    resp.raise_for_status()
-    return resp.json()
+    return put_object_impl(path, data, content_type)
 
 def get_object(path: str) -> tuple[bytes, str]:
-    key = init_storage()
-    if not key:
-        raise HTTPException(500, "Storage not available")
-    resp = requests.get(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key}, timeout=60,
-    )
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+    return get_object_impl(path)
 
 # =========================
 # Auth helpers
@@ -243,7 +214,7 @@ async def startup():
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info(f"Admin user seeded: {ADMIN_EMAIL}")
-    init_storage()
+    init_storage()  # storage_provider abstraction — auto Emergent or local
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -259,12 +230,15 @@ async def root():
 @api.get("/health")
 async def health():
     import shutil as _sh
+    providers = llm_available_providers()
     return {
         "status": "healthy",
-        "storage": _storage_key is not None,
+        "storage": storage_mode(),
         "verilator": bool(_sh.which("verilator")),
         "yosys": bool(_sh.which("yosys")),
         "sby": bool(_sh.which("sby")),
+        "llm_providers": providers,
+        "google_auth": google_mode(),
     }
 
 # =========================
@@ -618,17 +592,15 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
         yield f"data: {json.dumps({'type': 'meta', 'generation_id': gen_id})}\n\n"
         accumulated = []
         try:
-            chat = LlmChat(
-                api_key=EMERGENT_LLM_KEY,
+            async for delta in llm_stream_chat(
+                provider=inp.model_provider,
+                model=inp.model_name,
+                system=system_msg,
+                user_text=user_text,
                 session_id=session_id,
-                system_message=system_msg,
-            ).with_model(inp.model_provider, inp.model_name)
-            async for ev in chat.stream_message(UserMessage(text=user_text)):
-                if isinstance(ev, TextDelta):
-                    accumulated.append(ev.content)
-                    yield f"data: {json.dumps({'type': 'delta', 'content': ev.content})}\n\n"
-                elif isinstance(ev, StreamDone):
-                    break
+            ):
+                accumulated.append(delta)
+                yield f"data: {json.dumps({'type': 'delta', 'content': delta})}\n\n"
             full = "".join(accumulated)
             await db.generations.update_one({"id": gen_id}, {"$set": {"output": full, "status": "done", "completed_at": datetime.now(timezone.utc).isoformat()}})
             yield f"data: {json.dumps({'type': 'done', 'generation_id': gen_id})}\n\n"
@@ -1160,48 +1132,71 @@ async def get_template(tid: str):
     raise HTTPException(404, "Template not found")
 
 # =========================
-# Google OAuth session (Emergent-managed)
+# Google OAuth (Emergent-managed OR standalone)
 # =========================
-EMERGENT_AUTH_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
-
 class GoogleSessionIn(BaseModel):
     session_id: str
 
 @api.post("/auth/google/session")
 async def google_session(inp: GoogleSessionIn, request: Request):
+    """Emergent-managed Google auth: exchange session_id from hash callback for JWT."""
+    if google_mode() != "emergent":
+        raise HTTPException(400, "Emergent Google Auth is not enabled on this deployment. Use /auth/google/url instead.")
     # Rate limit: 20 attempts per IP per 5 minutes (honor X-Forwarded-For behind ingress)
     xff = request.headers.get("x-forwarded-for", "")
     client_ip = xff.split(",")[0].strip() if xff else (request.client.host if request.client else "unknown")
     _rate_limit(f"gauth:{client_ip}", max_calls=20, window_s=300)
     try:
-        resp = requests.get(EMERGENT_AUTH_URL, headers={"X-Session-ID": inp.session_id}, timeout=15)
-        if resp.status_code != 200:
-            raise HTTPException(401, "Invalid Google session")
-        payload = resp.json()
+        userinfo = resolve_emergent_session(inp.session_id)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"Google auth failed: {e}")
-    email = payload.get("email", "").lower()
-    name = payload.get("name") or email.split("@")[0]
-    picture = payload.get("picture")
+        raise HTTPException(401, f"Google auth failed: {e}")
+    return await _issue_google_user_token(userinfo)
+
+@api.get("/auth/google/url")
+async def google_auth_url(request: Request):
+    """Standalone Google OAuth: returns the URL the frontend should redirect to."""
+    if google_mode() != "standalone":
+        raise HTTPException(400, "Standalone Google OAuth is not configured. Set GOOGLE_CLIENT_ID/SECRET/REDIRECT_URI.")
+    return {"url": build_google_auth_url()}
+
+@api.get("/auth/google/callback")
+async def google_auth_callback(code: str = Query(...), state: Optional[str] = Query(None), request: Request = None):
+    """Standalone Google OAuth: Google redirects here with ?code=... — we exchange, issue JWT, redirect to app."""
+    if google_mode() != "standalone":
+        raise HTTPException(400, "Standalone Google OAuth is not configured.")
+    xff = request.headers.get("x-forwarded-for", "") if request else ""
+    client_ip = xff.split(",")[0].strip() if xff else "unknown"
+    _rate_limit(f"gauth:{client_ip}", max_calls=20, window_s=300)
+    try:
+        userinfo = google_exchange_code(code)
+    except Exception as e:
+        raise HTTPException(401, f"Google exchange failed: {e}")
+    result = await _issue_google_user_token(userinfo)
+    # Redirect back to frontend with token in hash
+    frontend_root = os.environ.get("FRONTEND_URL", "").rstrip("/")
+    if frontend_root:
+        return RedirectResponse(url=f"{frontend_root}/#gtoken={result['access_token']}")
+    # Fallback: return JSON if FRONTEND_URL is not set
+    return result
+
+async def _issue_google_user_token(userinfo: dict) -> dict:
+    email = (userinfo.get("email") or "").lower()
+    name = userinfo.get("name") or email.split("@")[0]
+    picture = userinfo.get("picture")
     if not email:
         raise HTTPException(400, "Google returned no email")
     user = await db.users.find_one({"email": email})
     if not user:
         user_id = str(uuid.uuid4())
         await db.users.insert_one({
-            "id": user_id,
-            "email": email,
-            "name": name,
-            "role": "user",
-            "picture": picture,
-            "auth_provider": "google",
+            "id": user_id, "email": email, "name": name, "role": "user",
+            "picture": picture, "auth_provider": "google",
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
     else:
         user_id = user["id"]
-        # keep picture fresh
         if picture and user.get("picture") != picture:
             await db.users.update_one({"id": user_id}, {"$set": {"picture": picture, "name": name}})
     token = create_access_token(user_id, email)
