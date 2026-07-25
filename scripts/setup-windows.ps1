@@ -1,4 +1,4 @@
-# ChipSutra Windows setup — env, Docker (winget), optional compose start
+# ChipSutra Windows setup - env, Docker (winget), optional compose start
 param(
     [switch]$InstallDependencies,
     [switch]$Start,
@@ -19,7 +19,6 @@ function Test-Cmd($name) {
     return [bool](Get-Command $name -ErrorAction SilentlyContinue)
 }
 
-# True only if docker CLI exists AND the daemon responds (not winget's last exit code).
 function Test-DockerEngine {
     Refresh-SessionPath
     if (-not (Test-Cmd docker)) { return $false }
@@ -64,9 +63,9 @@ function Ensure-Docker {
         return $true
     }
     Write-Host ''
-    Write-Host 'Docker Desktop installed. Required before -Start:'
-    Write-Host '  1. RESTART Windows (or log out/in) — recommended'
-    Write-Host '  2. Start Docker Desktop → wait for Engine running'
+    Write-Host 'Docker Desktop installed. Before -Start:'
+    Write-Host '  1. RESTART Windows (recommended)'
+    Write-Host '  2. Start Docker Desktop and wait for Engine running'
     Write-Host '  3. New PowerShell window, then:'
     Write-Host "     cd $Root"
     Write-Host '     .\setup.ps1 -Start'
@@ -84,7 +83,7 @@ if (-not (Ensure-Docker)) {
 Write-Host 'Docker engine OK.'
 
 if ($Start) {
-    Write-Host 'Starting ChipSutra (first run downloads images + VLSI model; may take 15+ minutes)...'
+    Write-Host 'Starting ChipSutra. First run may take 15+ minutes while images and the VLSI model download.'
     docker compose up --build
 } else {
     Write-Host 'Next: .\setup.ps1 -Start'
