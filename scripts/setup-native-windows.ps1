@@ -46,7 +46,8 @@ $envFile = Join-Path $Root 'backend\.env'
 $envText = Get-Content $envFile -Raw
 if ($envText -match 'MONGO_URL="mongodb://localhost' -or $envText -match 'MONGO_URL=mongodb://localhost') {
     Write-Host ''
-    Write-Host 'IMPORTANT: Set MongoDB Atlas in backend\.env'
+    Write-Host 'IMPORTANT: Complete Step 1 - MongoDB Atlas in backend\.env'
+    Write-Host '  Guide: https://github.com/sriharshaduppalli/ChipSutra/blob/main/docs/MONGODB_ATLAS_SETUP.md'
     Write-Host '  MONGO_URL="mongodb+srv://USER:PASS@cluster....mongodb.net/chipsutra_db?retryWrites=true&w=majority"'
     Write-Host '  Free cluster: https://www.mongodb.com/cloud/atlas/register'
     Write-Host ''

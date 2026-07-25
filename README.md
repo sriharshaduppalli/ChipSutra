@@ -73,6 +73,8 @@ Then open **http://localhost:3000**. Sign up with any email → upload RTL → c
 
 Open-source deploy checklist: **[docs/OPEN_SOURCE.md](./docs/OPEN_SOURCE.md)**
 
+**No Docker / no local Mongo?** Start here: **[Step 1 — MongoDB Atlas](./docs/MONGODB_ATLAS_SETUP.md)** then `.\setup-native.ps1`
+
 ### First-run behavior
 1. Docker pulls MongoDB, Ollama, and base images (~2 min)
 2. Ollama pulls `qwen2.5-coder:3b`, then builds **`chipsutra-vlsi:3b`** (~2 GB base, one-time)

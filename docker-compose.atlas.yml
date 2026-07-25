@@ -1,7 +1,7 @@
 # ChipSutra without local MongoDB (skip `docker pull mongo:6`)
 # Use free MongoDB Atlas: https://www.mongodb.com/cloud/atlas/register
 #
-# 1. Create a free M0 cluster
+# 1. Create a free M0 cluster — full steps: docs/MONGODB_ATLAS_SETUP.md
 # 2. Database Access -> user + password
 # 3. Network Access -> Add IP -> Allow access from anywhere (0.0.0.0/0) for dev
 # 4. Connect -> Drivers -> copy connection string

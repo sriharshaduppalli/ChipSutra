@@ -15,7 +15,8 @@ ChipSutra Community Edition is **MIT licensed** (with UI attribution). Anyone ca
 
 ## Production self-host checklist
 
-1. **Clone** and `cp backend/.env.example backend/.env`
+0. **Database:** [Step 1 — MongoDB Atlas](./MONGODB_ATLAS_SETUP.md) if you are not using Docker’s `mongo:6` container  
+1. **Clone** and `cp backend/.env.example backend/.env` (or `.\scripts\bootstrap.ps1`)
 2. Set **`JWT_SECRET`** to 64 hex chars (`python -c "import secrets; print(secrets.token_hex(32))"`)
 3. Change **`ADMIN_PASSWORD`** from the example
 4. **RAM**: 6 GB+ recommended (Ollama `chipsutra-vlsi:3b` + MongoDB)
