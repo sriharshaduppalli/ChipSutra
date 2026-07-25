@@ -41,9 +41,26 @@ Upload your RTL. Click **Generate**. Get production-quality verification artifac
 ```bash
 git clone https://github.com/sriharshaduppalli/ChipSutra.git
 cd ChipSutra
-./scripts/bootstrap.sh          # creates backend/.env from example (Windows: .\scripts\bootstrap.ps1)
 docker compose up --build
 ```
+
+**Windows (PowerShell)** — use the `.ps1` script (not `.sh`):
+
+```powershell
+git clone https://github.com/sriharshaduppalli/ChipSutra.git
+cd ChipSutra
+.\scripts\bootstrap.ps1
+docker compose up --build
+```
+
+**Linux / macOS / Git Bash:**
+
+```bash
+./scripts/bootstrap.sh
+docker compose up --build
+```
+
+`bootstrap` creates `backend/.env` from the example if it is missing. Or manually: `copy backend\.env.example backend\.env` (Windows) / `cp backend/.env.example backend/.env` (Unix).
 
 Then open **http://localhost:3000**. Sign up with any email → upload RTL → click **Generate**.
 
