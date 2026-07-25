@@ -1,9 +1,5 @@
-version: "3.9"
-
-# ==============================================================
 # ChipSutra — zero-configuration EDA copilot for verification.
-# Just run: docker compose up --build
-# ==============================================================
+# Run: docker compose up --build
 
 services:
   # MongoDB — user data, projects, generations
