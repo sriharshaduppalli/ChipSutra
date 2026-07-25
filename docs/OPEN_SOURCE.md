@@ -29,6 +29,8 @@ ChipSutra Community Edition is **MIT licensed** (with UI attribution). Anyone ca
 ./scripts/validate-community.sh
 ```
 
+See also **[docs/AUTOMATED_SETUP.md](./docs/AUTOMATED_SETUP.md)** (what Git installs vs one-time OS tools).
+
 ## Editions
 
 - **Community (OSS)**: This repository — Verilator, Ollama, MIT license.

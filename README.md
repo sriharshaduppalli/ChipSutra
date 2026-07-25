@@ -34,33 +34,38 @@ Upload your RTL. Click **Generate**. Get production-quality verification artifac
 
 ---
 
-## 🚀 Quick start (30 seconds)
+## 🚀 Quick start
 
-**Prerequisites**: Docker Desktop or Docker Engine + **6 GB RAM** (8 GB recommended).
+**Prerequisites**: **6 GB RAM** (8 GB recommended). The repo **installs/configures what it can** via scripts; Docker Desktop is installed via `winget` on Windows (one-time, ~500MB). Details: **[docs/AUTOMATED_SETUP.md](./docs/AUTOMATED_SETUP.md)**.
 
-```bash
-git clone https://github.com/sriharshaduppalli/ChipSutra.git
-cd ChipSutra
-docker compose up --build
-```
-
-**Windows (PowerShell)** — use the `.ps1` script (not `.sh`):
+### Windows (recommended — one repo command)
 
 ```powershell
 git clone https://github.com/sriharshaduppalli/ChipSutra.git
 cd ChipSutra
+.\setup.ps1 -InstallDependencies
+# After restart + Docker Desktop running:
+.\setup.ps1 -Start
+```
+
+Or from `scripts/`: `.\scripts\setup-windows.ps1 -InstallDependencies` then `-Start`.
+
+### Linux / macOS
+
+```bash
+git clone https://github.com/sriharshaduppalli/ChipSutra.git
+cd ChipSutra
+chmod +x scripts/setup.sh scripts/bootstrap.sh
+./scripts/setup.sh --install-deps   # prints install hints if Docker missing
+./scripts/setup.sh --start
+```
+
+### Already have Docker?
+
+```powershell
 .\scripts\bootstrap.ps1
 docker compose up --build
 ```
-
-**Linux / macOS / Git Bash:**
-
-```bash
-./scripts/bootstrap.sh
-docker compose up --build
-```
-
-`bootstrap` creates `backend/.env` from the example if it is missing. Or manually: `copy backend\.env.example backend\.env` (Windows) / `cp backend/.env.example backend/.env` (Unix).
 
 Then open **http://localhost:3000**. Sign up with any email → upload RTL → click **Generate**.
 
