@@ -15,6 +15,8 @@ ChipSutra Community Edition is **MIT licensed** (with UI attribution). Anyone ca
 
 ## Production self-host checklist
 
+**Public portal (chipsutra.org):** see **[docs/CHIPSUTRA_ORG_LAUNCH.md](./CHIPSUTRA_ORG_LAUNCH.md)** — DNS, TLS, Atlas, LLM capacity, go-live smoke tests.
+
 0. **Database:** [Step 1 — MongoDB Atlas](./MONGODB_ATLAS_SETUP.md) if you are not using Docker’s `mongo:6` container  
 1. **Clone** and `cp backend/.env.example backend/.env` (or `.\scripts\bootstrap.ps1`)
 2. Set **`JWT_SECRET`** to 64 hex chars (`python -c "import secrets; print(secrets.token_hex(32))"`)

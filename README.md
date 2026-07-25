@@ -71,7 +71,7 @@ Then open **http://localhost:3000**. Sign up with any email → upload RTL → c
 
 **That's it.** Zero API keys required. No credit card. The default LLM is **`chipsutra-vlsi:3b`** (built locally from open Qwen weights via Ollama). See [ChipSutra-VLSI-LLM](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM).
 
-Open-source deploy checklist: **[docs/OPEN_SOURCE.md](./docs/OPEN_SOURCE.md)**
+Open-source deploy checklist: **[docs/OPEN_SOURCE.md](./docs/OPEN_SOURCE.md)** · **Official portal (chipsutra.org):** **[docs/CHIPSUTRA_ORG_LAUNCH.md](./docs/CHIPSUTRA_ORG_LAUNCH.md)**
 
 **No Docker / no local Mongo?** Start here: **[Step 1 — MongoDB Atlas](./docs/MONGODB_ATLAS_SETUP.md)** then `.\setup-native.ps1`
 
