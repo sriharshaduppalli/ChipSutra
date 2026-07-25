@@ -119,6 +119,7 @@ Run the Python backend **inside Linux** with apt Verilator; keep Ollama on Windo
 | Symptom | Fix |
 |---------|-----|
 | Still `mock` / `verilator: false` | API not running in Docker/WSL; native Windows uvicorn still active |
+| Backend crash on startup (Mongo) | Use **Atlas** `mongodb+srv://...` in `backend/.env` (not `localhost` in Docker). Remove stray quotes or rebuild after server env fix. Run `docker compose ... run --rm backend python3 -c "import os; print(os.environ.get('MONGO_URL','')[:40])"` — should start with `mongodb+srv` |
 | Port 8001 in use | Stop other backend; one listener only |
 | Ollama errors from Docker backend | Use `docker-compose.backend-verilator.yml`; check `host.docker.internal` |
 | Lint errors on CAN RTL | Normal — read Verilator log lines; fix RTL or set **top module** |

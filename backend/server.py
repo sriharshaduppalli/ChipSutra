@@ -30,8 +30,16 @@ from google_auth import google_mode, resolve_emergent_session, build_google_auth
 # =========================
 # Config
 # =========================
-MONGO_URL = os.environ["MONGO_URL"]
-DB_NAME = os.environ["DB_NAME"]
+def _env(key: str, default: Optional[str] = None) -> str:
+    """Read env var; strip whitespace, UTF-8 BOM, and surrounding quotes (Docker env_file keeps quotes)."""
+    raw = os.environ.get(key, default)
+    if raw is None:
+        raise KeyError(key)
+    return raw.strip().strip('"').strip("'").lstrip("\ufeff")
+
+
+MONGO_URL = _env("MONGO_URL")
+DB_NAME = _env("DB_NAME")
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 JWT_ALGORITHM = "HS256"
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
@@ -198,6 +206,18 @@ MODULE_PROMPTS = {
 # =========================
 @app.on_event("startup")
 async def startup():
+    try:
+        await client.admin.command("ping")
+    except Exception as e:
+        hint = ""
+        if "localhost" in MONGO_URL or "127.0.0.1" in MONGO_URL:
+            hint = (
+                " In Docker, localhost is the container — use MongoDB Atlas "
+                "(mongodb+srv://...) in backend/.env, not mongodb://localhost:27017."
+            )
+        logger.error("MongoDB connection failed: %s.%s", e, hint)
+        raise RuntimeError(f"MongoDB connection failed: {e}.{hint}") from e
+
     await db.users.create_index("email", unique=True)
     await db.projects.create_index("user_id")
     await db.files.create_index("project_id")
