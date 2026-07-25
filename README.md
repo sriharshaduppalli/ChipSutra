@@ -82,6 +82,8 @@ Open-source deploy checklist: **[docs/OPEN_SOURCE.md](./docs/OPEN_SOURCE.md)**
 | **Docker Compose** (`setup.ps1 -Start`) | Full stack on Linux/macOS; Windows when Docker pulls work | Real lint / compile / VCD |
 | **Native Windows** (`setup-native.ps1`) | AI + UI when Docker Hub pulls fail | Mock sim only — use Docker or WSL2 for real sim |
 
+Real Verilator on Windows (hybrid backend): **[docs/VERILATOR_WINDOWS.md](./docs/VERILATOR_WINDOWS.md)** (`docker-compose.backend-verilator.yml`).
+
 Frontend: **Yarn** is primary (`yarn install` / `yarn start`); **npm** works with `frontend/.npmrc` (see `package.json` overrides).
 
 ### First-run behavior

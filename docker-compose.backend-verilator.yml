@@ -1,0 +1,36 @@
+# Hybrid Windows/Linux: Verilator backend in Docker only.
+#
+# Use when:
+#   - Frontend + Ollama run natively on the host (or Atlas for Mongo)
+#   - Native Python backend has no Verilator (mock sim)
+#
+# Prerequisites:
+#   - backend/.env with MONGO_URL (Atlas or other reachable URI), JWT_SECRET, etc.
+#   - Ollama running on the host with chipsutra-vlsi:3b
+#   - Stop any native uvicorn on port 8001 before starting this service
+#
+# Start:
+#   docker compose -f docker-compose.backend-verilator.yml up --build
+#
+# Health: http://localhost:8001/api/health  -> "verilator": true
+# Keep frontend on host: REACT_APP_BACKEND_URL=http://localhost:8001
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./backend/.env
+    environment:
+      STORAGE_MODE: local
+      STORAGE_LOCAL_PATH: /app/storage
+      OLLAMA_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-chipsutra-vlsi:3b}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./backend/storage:/app/storage
