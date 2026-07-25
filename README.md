@@ -285,7 +285,8 @@ Set `TELEMETRY_ENABLED=true` in `backend/.env` and every backend startup will se
 
 | Symptom | Fix |
 |---------|-----|
-| `env_file backend/.env not found` | Run `./scripts/bootstrap.sh` or `cp backend/.env.example backend/.env` |
+| `docker` not recognized | `.\setup.ps1 -InstallDependencies`, restart PC, [AUTOMATED_SETUP.md](./AUTOMATED_SETUP.md) |
+| **Server: Docker Desktop is unable to start** | [DOCKER_WINDOWS_TROUBLESHOOTING.md](./DOCKER_WINDOWS_TROUBLESHOOTING.md) (WSL2, virtualization, reset) |
 | Generate fails: model not found | Wait for `ollama-create` to finish on first boot; check `curl http://localhost:11434/api/tags` for `chipsutra-vlsi:3b` |
 | UI shows “ChipSutra-VLSI — starting…” | Ollama still pulling weights (~2 GB first time); wait 5–15 min on slow networks |
 | Slow first token | Normal — model loads into RAM once; later runs are faster |
