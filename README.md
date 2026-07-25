@@ -6,7 +6,7 @@
 
 **Generate UVM testbenches, SVA assertions, coverage plans, and debug hints for your Verilog/SystemVerilog/VHDL designs — automatically, in seconds, with zero API keys.**
 
-[**🚀 Try live**](https://chipsutra-verify.emergent.host) · [**📥 Self-host**](#-quick-start-30-seconds) · [**📚 Docs**](./SELF_HOST.md) · [**🐛 Issues**](https://github.com/sriharshaduppalli/ChipSutra/issues)
+[**🚀 Try live**](https://chipsutra-verify.emergent.host) · [**📥 Self-host**](#-quick-start-30-seconds) · [**📚 Docs**](./SELF_HOST.md) · [**🗺️ Roadmap**](./ROADMAP.md) · [**✅ Supported features**](./docs/SUPPORTED_FEATURES.md) · [**🤖 Local LLM**](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM)
 
 [![License: MIT+attribution](https://img.shields.io/badge/License-MIT%20+%20attribution-emerald)](./LICENSE)
 [![Made in India](https://img.shields.io/badge/Made%20in-India-orange)](https://github.com/sriharshaduppalli/ChipSutra)
@@ -36,24 +36,27 @@ Upload your RTL. Click **Generate**. Get production-quality verification artifac
 
 ## 🚀 Quick start (30 seconds)
 
-**Prerequisites**: Docker Desktop or Docker Engine + 4 GB RAM.
+**Prerequisites**: Docker Desktop or Docker Engine + **6 GB RAM** (8 GB recommended).
 
 ```bash
 git clone https://github.com/sriharshaduppalli/ChipSutra.git
 cd ChipSutra
 cp backend/.env.example backend/.env
+# Edit JWT_SECRET and ADMIN_PASSWORD in backend/.env before any public deploy
 docker compose up --build
 ```
 
 Then open **http://localhost:3000**. Sign up with any email → upload RTL → click **Generate**.
 
-**That's it.** No API keys. No credit card. No sign-up on external services. Everything — including the LLM — runs locally.
+**That's it.** Zero API keys required. No credit card. The default LLM is **`chipsutra-vlsi:3b`** (built locally from open Qwen weights via Ollama). See [ChipSutra-VLSI-LLM](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM).
+
+Open-source deploy checklist: **[docs/OPEN_SOURCE.md](./docs/OPEN_SOURCE.md)**
 
 ### First-run behavior
 1. Docker pulls MongoDB, Ollama, and base images (~2 min)
-2. Ollama auto-downloads the code model `qwen2.5-coder:1.5b` (~1 GB, one-time)
-3. Backend, frontend, and Verilator toolchain come online
-4. You're generating testbenches locally in under 5 minutes total
+2. Ollama pulls `qwen2.5-coder:3b`, then builds **`chipsutra-vlsi:3b`** (~2 GB base, one-time)
+3. Backend (public PyPI deps only), frontend, and Verilator toolchain come online
+4. First generation may take ~30–90s while the model loads into RAM
 
 ---
 
@@ -142,7 +145,7 @@ Then click **Simulate → Compile + Run** and get a real VCD trace back, viewabl
 <tr><td>
 
 ### 🔌 Zero-Config LLM
-- **Ollama** (bundled, zero-key, default)
+- **ChipSutra-VLSI** on **Ollama** (bundled, zero-key, default — [model repo](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM))
 - Optional Anthropic Claude Sonnet 4.5
 - Optional OpenAI GPT-5.2
 - Auto-detects & prefers highest quality available
@@ -170,8 +173,8 @@ Then click **Simulate → Compile + Run** and get a real VCD trace back, viewabl
       └───────────┬─────────────┘
                   │ /api/*
       ┌───────────▼─────────────┐        ┌──────────────────────────┐
-      │  FastAPI (port 8001)    │───────►│  Ollama (local, bundled) │
-      │  SSE streams · JWT      │        │  qwen2.5-coder:1.5b      │
+      │  FastAPI (port 8001)    │───────►│  Ollama — chipsutra-vlsi:3b │
+      │  SSE streams · JWT      │        │  (from Qwen2.5-Coder, local) │
       └───┬───────┬────────┬────┘        └──────────────────────────┘
           │       │        │              (fallback: Claude / GPT / Emergent)
           │       │        ├───► Verilator (--cc --exe --build --trace --timing)
@@ -212,15 +215,17 @@ All optional — the defaults just work out of the box.
 | Variable | What it does | Default |
 |---|---|---|
 | `OLLAMA_URL` | Local Ollama server | `http://ollama:11434` (auto-set in docker) |
-| `OLLAMA_MODEL` | Which model to load | `qwen2.5-coder:1.5b` (~1 GB) |
+| `OLLAMA_MODEL` | ChipSutra-VLSI tag | `chipsutra-vlsi:3b` |
+| `OLLAMA_BASE_MODEL` | Base weights for `ollama create` | `qwen2.5-coder:3b` |
 | `ANTHROPIC_API_KEY` | Use Claude Sonnet 4.5 (paid, best quality) | *(unset)* |
 | `OPENAI_API_KEY` | Use GPT-5.2 (paid) | *(unset)* |
 | `EMERGENT_LLM_KEY` | Emergent Universal Key | *(unset)* |
 
-**Want higher quality with more RAM?** Change `OLLAMA_MODEL` to:
-- `qwen2.5-coder:3b` — better quality, ~2 GB RAM
-- `qwen2.5-coder:7b` — near-Claude quality, ~4.5 GB RAM
-- `qwen2.5-coder:32b` — SOTA local quality, ~20 GB RAM (needs beefy workstation)
+**Want higher quality with more RAM?** Use tags from [ChipSutra-VLSI-LLM](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM):
+- `chipsutra-vlsi:1.5b` — ~4 GB RAM
+- `chipsutra-vlsi:3b` — default, ~6 GB RAM
+- `chipsutra-vlsi:7b` — ~10 GB RAM
+- Raw Qwen: `qwen2.5-coder:7b` if you skip the custom Modelfile
 
 ### Google Sign-in (optional)
 Leave blank to hide the Google button. To enable, create OAuth credentials at [Google Cloud Console](https://console.cloud.google.com/apis/credentials) and set:
@@ -287,7 +292,12 @@ SymbiYosys is wired in but Debian's default Yosys 0.23 is version-mismatched wit
 
 ## 🛣️ Roadmap
 
-- [x] Zero-key local LLM (Ollama)
+See **[ROADMAP.md](./ROADMAP.md)** for Community vs Enterprise plans.
+
+Highlights:
+
+- [x] Zero-key local LLM (ChipSutra-VLSI + Ollama)
+- [x] Public PyPI Docker build (`requirements-oss.txt`)
 - [x] Real Verilator compile+run+VCD
 - [x] SymbiYosys formal integration
 - [x] Team workspaces + roles + activity log
@@ -309,10 +319,10 @@ Have an idea? Open an issue: https://github.com/sriharshaduppalli/ChipSutra/issu
 Contributions are welcome. Please:
 1. Fork the repo
 2. Create a feature branch (`git checkout -b feat/my-feature`)
-3. Run the tests: `cd backend && pytest`
+3. Run **`./scripts/validate-community.sh`** (or `scripts/validate-community.ps1` on Windows)
 4. Submit a PR against `main`
 
-For substantial changes, open an issue first to discuss.
+See **[docs/CONTRIBUTOR_GUIDE.md](./docs/CONTRIBUTOR_GUIDE.md)** and **[docs/SUPPORTED_FEATURES.md](./docs/SUPPORTED_FEATURES.md)**.
 
 ---
 

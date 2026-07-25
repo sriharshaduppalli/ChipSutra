@@ -38,17 +38,36 @@ services:
     #           count: all
     #           capabilities: [gpu]
 
-  # One-shot: pull the default code model on first startup, then exit.
-  # Users can change OLLAMA_MODEL in backend/.env.
+  # One-shot: pull open-weight base for ChipSutra-VLSI (see models/chipsutra-vlsi/).
   ollama-pull:
     image: ollama/ollama:latest
     depends_on:
       ollama:
         condition: service_healthy
+    volumes:
+      - ollama_data:/root/.ollama
     entrypoint: ["/bin/sh", "-c"]
     command: >
-      "OLLAMA_HOST=http://ollama:11434 ollama pull ${OLLAMA_MODEL:-qwen2.5-coder:1.5b} &&
-       echo '[chipsutra] model pulled successfully'"
+      "OLLAMA_HOST=http://ollama:11434 ollama pull ${OLLAMA_BASE_MODEL:-qwen2.5-coder:3b} &&
+       echo '[chipsutra] base model pulled successfully'"
+    restart: "no"
+
+  # One-shot: build local chipsutra-vlsi tag (zero API keys). Canonical modelfiles: ChipSutra-VLSI-LLM repo.
+  ollama-create:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./models/chipsutra-vlsi:/modelfiles:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "OLLAMA_HOST=http://ollama:11434 ollama show chipsutra-vlsi:3b >/dev/null 2>&1 ||
+       ollama create chipsutra-vlsi:3b -f /modelfiles/Modelfile.3b;
+       echo '[chipsutra] OLLAMA model chipsutra-vlsi:3b ready'"
     restart: "no"
 
   # ChipSutra backend — FastAPI + Verilator + Yosys + SBY
@@ -60,7 +79,7 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-      ollama-pull:
+      ollama-create:
         condition: service_completed_successfully
     ports:
       - "8001:8001"
@@ -71,6 +90,7 @@ services:
       STORAGE_MODE: local
       STORAGE_LOCAL_PATH: /app/storage
       OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-chipsutra-vlsi:3b}
     volumes:
       - chipsutra_storage:/app/storage
 

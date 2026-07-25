@@ -1,4 +1,7 @@
-aiohappyeyeballs==2.7.1
+# NOTE: Community Docker / self-host uses requirements-oss.txt (public PyPI).
+# Emergent-hosted builds use requirements-emergent.txt (adds private wheels).
+# This file is a full lockfile snapshot; prefer requirements-oss.txt for new installs.
+
 aiohttp==3.14.2
 aiosignal==1.4.0
 annotated-doc==0.0.4

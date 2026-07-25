@@ -19,6 +19,7 @@ sudo apt-get install -y verilator yosys z3 python3-click build-essential git
 # SymbiYosys
 git clone --depth 1 https://github.com/YosysHQ/sby.git /tmp/sby
 cd /tmp/sby && sudo make install
+pip install -r backend/requirements-oss.txt
 ```
 
 On macOS (Homebrew):

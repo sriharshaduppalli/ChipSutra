@@ -19,7 +19,7 @@ EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OLLAMA_URL = os.environ.get("OLLAMA_URL", "").rstrip("/")
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:1.5b")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "chipsutra-vlsi:3b")
 
 _emergent_ok = False
 if EMERGENT_LLM_KEY:

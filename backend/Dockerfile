@@ -15,9 +15,9 @@ RUN git clone --depth 1 https://github.com/YosysHQ/sby.git /tmp/sby && \
 FROM system AS app
 WORKDIR /app
 
-# Python deps
-COPY requirements.txt /app/
-RUN pip3 install --break-system-packages --no-cache-dir -r /app/requirements.txt
+# Python deps — Community Edition (public PyPI; no Emergent account required)
+COPY requirements-oss.txt /app/
+RUN pip3 install --break-system-packages --no-cache-dir -r /app/requirements-oss.txt
 
 # App code
 COPY . /app/
