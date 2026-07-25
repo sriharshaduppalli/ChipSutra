@@ -32,6 +32,26 @@ function makeDevServerV5Compatible(devServerConfig) {
     "Cross-Origin-Resource-Policy": "same-origin",
   };
 
+  const client = compatibleConfig.client ?? {};
+  const overlay = client.overlay ?? true;
+  compatibleConfig.client = {
+    ...client,
+    overlay:
+      overlay === false
+        ? false
+        : {
+            ...(overlay === true ? {} : overlay),
+            runtimeErrors: (error) => {
+              const message = error?.message || String(error);
+              if (message.includes("ResizeObserver loop")) return false;
+              if (typeof overlay === "object" && overlay.runtimeErrors) {
+                return overlay.runtimeErrors(error);
+              }
+              return true;
+            },
+          },
+  };
+
   if (onBeforeSetupMiddleware || setupMiddlewares) {
     compatibleConfig.setupMiddlewares = (middlewares, devServer) => {
       if (onBeforeSetupMiddleware) {

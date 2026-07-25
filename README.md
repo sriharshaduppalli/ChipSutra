@@ -75,6 +75,15 @@ Open-source deploy checklist: **[docs/OPEN_SOURCE.md](./docs/OPEN_SOURCE.md)**
 
 **No Docker / no local Mongo?** Start here: **[Step 1 — MongoDB Atlas](./docs/MONGODB_ATLAS_SETUP.md)** then `.\setup-native.ps1`
 
+### Which setup path?
+
+| Path | Best for | Verilator sim |
+|------|----------|----------------|
+| **Docker Compose** (`setup.ps1 -Start`) | Full stack on Linux/macOS; Windows when Docker pulls work | Real lint / compile / VCD |
+| **Native Windows** (`setup-native.ps1`) | AI + UI when Docker Hub pulls fail | Mock sim only — use Docker or WSL2 for real sim |
+
+Frontend: **Yarn** is primary (`yarn install` / `yarn start`); **npm** works with `frontend/.npmrc` (see `package.json` overrides).
+
 ### First-run behavior
 1. Docker pulls MongoDB, Ollama, and base images (~2 min)
 2. Ollama pulls `qwen2.5-coder:3b`, then builds **`chipsutra-vlsi:3b`** (~2 GB base, one-time)

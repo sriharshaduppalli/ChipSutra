@@ -1,8 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { API, getToken } from "@/lib/api";
-import { Play, Loader2, X, Terminal, Waves } from "lucide-react";
+import { Play, Loader2, X, Terminal, Waves, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
+
+function rtlFileIds(project) {
+  return (project.files || [])
+    .filter((f) => ["v", "sv"].includes((f.ext || "").toLowerCase()))
+    .map((f) => f.id);
+}
 
 export default function SimulationPanel({ project, selectedFileIds, onClose, onVcdCreated }) {
   const [running, setRunning] = useState(false);
@@ -13,15 +19,33 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
   const [mode, setMode] = useState("lint");
   const [simTime, setSimTime] = useState(1000);
   const [vcdFileId, setVcdFileId] = useState(null);
+  const [verilatorAvailable, setVerilatorAvailable] = useState(null);
+  const [includeAllRtl, setIncludeAllRtl] = useState(false);
 
-  const rtlIds = selectedFileIds.filter(fid => {
-    const f = (project.files || []).find(x => x.id === fid);
-    return f && ["v", "sv"].includes(f.ext);
+  useEffect(() => {
+    fetch(`${API}/health`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h) => setVerilatorAvailable(h?.verilator === true))
+      .catch(() => setVerilatorAvailable(null));
+  }, []);
+
+  const selectedRtlIds = selectedFileIds.filter((fid) => {
+    const f = (project.files || []).find((x) => x.id === fid);
+    return f && ["v", "sv"].includes((f.ext || "").toLowerCase());
   });
-  const tbFile = (project.files || []).find(f => selectedFileIds.includes(f.id) && f.kind === "tb");
+
+  const allRtlIds = useMemo(() => rtlFileIds(project), [project]);
+  const rtlIds = includeAllRtl ? allRtlIds : selectedRtlIds;
+
+  const tbFile = (project.files || []).find(
+    (f) => selectedFileIds.includes(f.id) && f.kind === "tb",
+  );
 
   const run = async () => {
-    if (rtlIds.length === 0) { toast.error("Select at least one .v/.sv file"); return; }
+    if (rtlIds.length === 0) {
+      toast.error("Select at least one .v/.sv file in the Files list (left), or use Select all RTL.");
+      return;
+    }
     setLogs([]); setStatus(null); setEngine(null); setVcdFileId(null); setRunning(true);
     try {
       const res = await fetch(`${API}/simulate/stream`, {
@@ -36,7 +60,11 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
           sim_time_ns: simTime,
         }),
       });
-      if (!res.ok || !res.body) throw new Error();
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      if (!res.body) throw new Error("No response stream");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -57,7 +85,9 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
           } catch {}
         }
       }
-    } catch { toast.error("Simulation failed"); }
+    } catch (e) {
+      toast.error(e.message || "Simulation failed");
+    }
     setRunning(false);
   };
 
@@ -74,6 +104,39 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-100" data-testid="sim-close"><X size={16} /></button>
         </div>
+        {verilatorAvailable === false && (
+          <div className="mx-4 mt-3 p-3 border border-amber-500/40 bg-amber-500/5 font-mono text-[11px] text-amber-200 flex gap-2 items-start">
+            <AlertTriangle size={14} className="flex-shrink-0 mt-0.5 text-amber-400" />
+            <div>
+              <div className="text-amber-400 font-medium">Verilator not found on this backend</div>
+              <div className="text-slate-400 mt-1">
+                Native Windows setup runs <span className="text-amber-300">mock</span> sim only (demo logs, no real compile).
+                For real Lint / Compile+Run use the Docker backend (includes Verilator) or WSL2:{" "}
+                <span className="text-slate-300">sudo apt install verilator</span>.
+              </div>
+            </div>
+          </div>
+        )}
+        {rtlIds.length === 0 && allRtlIds.length > 0 && (
+          <div className="mx-4 mt-3 p-3 border border-emerald-500/40 bg-emerald-500/5 font-mono text-[11px] text-slate-300">
+            No RTL files selected. In the project page, click your <span className="text-emerald-400">.v / .sv</span> files in the
+            left <span className="text-emerald-400">Files</span> panel (green highlight), or{" "}
+            <button
+              type="button"
+              className="text-emerald-400 underline"
+              onClick={() => setIncludeAllRtl(true)}
+            >
+              use all {allRtlIds.length} RTL file(s) in this project
+            </button>
+            .
+          </div>
+        )}
+        {allRtlIds.length === 0 && (
+          <div className="mx-4 mt-3 p-3 border border-red-500/40 bg-red-500/5 font-mono text-[11px] text-slate-300">
+            Upload at least one <span className="text-red-400">.v</span> or <span className="text-red-400">.sv</span> RTL file.
+            Generated testbench text in the output pane must be downloaded and re-uploaded as a file before sim.
+          </div>
+        )}
         <div className="p-4 border-b border-[#1E293B] flex flex-wrap items-center gap-3">
           <div className="flex border border-[#1E293B]">
             <button onClick={() => setMode("lint")} className={`px-3 py-1.5 text-xs font-mono ${mode === "lint" ? 'bg-emerald-500/10 text-emerald-400' : 'text-slate-400'}`} data-testid="sim-mode-lint">Lint</button>
@@ -91,7 +154,14 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
             {running ? <><Loader2 size={12} className="animate-spin" /> Running...</> : <><Play size={12} /> Run</>}
           </button>
         </div>
-        <div className="p-2 border-b border-[#1E293B] font-mono text-[10px] text-slate-500">Selected: <span className="text-emerald-400">{rtlIds.length}</span> RTL · TB: <span className="text-emerald-400">{tbFile?.original_filename || "auto-detect"}</span>{mode === "run" && <span> · Runs verilator --cc --build + captures VCD if TB has $dumpvars.</span>}</div>
+        <div className="p-2 border-b border-[#1E293B] font-mono text-[10px] text-slate-500">
+          Selected: <span className="text-emerald-400">{rtlIds.length}</span> RTL
+          {includeAllRtl && selectedRtlIds.length === 0 && (
+            <span className="text-amber-400"> (all project RTL)</span>
+          )}
+          · TB: <span className="text-emerald-400">{tbFile?.original_filename || "auto-detect"}</span>
+          {mode === "run" && <span> · Runs verilator --cc --build + captures VCD if TB has $dumpvars.</span>}
+        </div>
         <div className="flex-1 overflow-auto bg-[#0B0E14] p-4 font-mono text-[11px] scanline">
           {logs.length === 0 && !running && (
             <div className="text-slate-500">
