@@ -23,9 +23,8 @@ const MODULES = [
   { id: "formal_hints", label: "Formal Hints", desc: "SVA properties for SymbiYosys formal proofs" },
 ];
 
-const MODELS = [
-  { provider: "anthropic", model: "claude-sonnet-4-5-20250929", label: "Auto (Claude 4.5)" },
-  { provider: "openai", model: "gpt-5.2", label: "GPT-5.2 (advanced)" },
+const DEFAULT_MODELS = [
+  { provider: "ollama", model: "chipsutra-vlsi:3b", label: "ChipSutra-VLSI (local)" },
 ];
 
 const langMap = { v: "verilog", sv: "systemverilog", vhd: "vhdl", vhdl: "vhdl", md: "markdown", txt: "plaintext", log: "plaintext", rpt: "plaintext" };
@@ -36,6 +35,7 @@ export default function ProjectDetail() {
   const [project, setProject] = useState(null);
   const [selectedFileIds, setSelectedFileIds] = useState([]);
   const [module, setModule] = useState("testbench");
+  const [models, setModels] = useState(DEFAULT_MODELS);
   const [modelIdx, setModelIdx] = useState(0);
   const [prompt, setPrompt] = useState("");
   const [output, setOutput] = useState("");
@@ -53,6 +53,38 @@ export default function ProjectDetail() {
     setProject(data);
   };
   useEffect(() => { load(); }, [pid]);
+
+  useEffect(() => {
+    fetch(`${API}/health`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h) => {
+        if (!h?.llm_providers) return;
+        const p = h.llm_providers;
+        const o = h.ollama || {};
+        const list = [];
+        if (p.ollama) {
+          const tag = p.ollama_model || "chipsutra-vlsi:3b";
+          list.push({
+            provider: "ollama",
+            model: tag,
+            label: o.ready === false
+              ? `ChipSutra-VLSI (${tag}) — starting…`
+              : `ChipSutra-VLSI (${tag})`,
+          });
+        }
+        if (p.anthropic) {
+          list.push({ provider: "anthropic", model: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5 (API key)" });
+        }
+        if (p.openai) {
+          list.push({ provider: "openai", model: "gpt-5.2", label: "GPT-5.2 (API key)" });
+        }
+        if (list.length) {
+          setModels(list);
+          setModelIdx(0);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
@@ -103,7 +135,7 @@ export default function ProjectDetail() {
     setOutput("");
     setCurrentGenId(null);
     setStreaming(true);
-    const m = MODELS[modelIdx];
+    const m = models[modelIdx] || DEFAULT_MODELS[0];
     try {
       const res = await fetch(`${API}/generate/stream`, {
         method: "POST",
@@ -252,13 +284,13 @@ export default function ProjectDetail() {
                   <span className="pin-badge text-[9px] border-emerald-500/40 text-emerald-400">AUTO</span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
-                  {MODELS.map((m, i) => (
-                    <button key={m.model} onClick={() => setModelIdx(i)} className={`p-2 border text-xs font-mono ${modelIdx === i ? 'border-emerald-500/60 text-emerald-400 bg-emerald-500/5' : 'border-[#1E293B] text-slate-300'}`} data-testid={`model-${m.provider}`}>
+                  {models.map((m, i) => (
+                    <button key={`${m.provider}-${m.model}`} onClick={() => setModelIdx(i)} className={`p-2 border text-xs font-mono ${modelIdx === i ? 'border-emerald-500/60 text-emerald-400 bg-emerald-500/5' : 'border-[#1E293B] text-slate-300'}`} data-testid={`model-${m.provider}`}>
                       {m.label}
                     </button>
                   ))}
                 </div>
-                <div className="font-mono text-[10px] text-slate-500 mt-1">Model is picked automatically. Override only if you need to.</div>
+                <div className="font-mono text-[10px] text-slate-500 mt-1">Default: ChipSutra-VLSI via Ollama (no API cost). Cloud models appear only if keys are configured.</div>
               </div>
               <div>
                 <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2">Prompt (optional)</div>

@@ -41,8 +41,7 @@ Upload your RTL. Click **Generate**. Get production-quality verification artifac
 ```bash
 git clone https://github.com/sriharshaduppalli/ChipSutra.git
 cd ChipSutra
-cp backend/.env.example backend/.env
-# Edit JWT_SECRET and ADMIN_PASSWORD in backend/.env before any public deploy
+./scripts/bootstrap.sh          # creates backend/.env from example (Windows: .\scripts\bootstrap.ps1)
 docker compose up --build
 ```
 
@@ -260,7 +259,20 @@ Set `TELEMETRY_ENABLED=true` in `backend/.env` and every backend startup will se
 
 ---
 
-## ❓ FAQ
+## 🔧 Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `env_file backend/.env not found` | Run `./scripts/bootstrap.sh` or `cp backend/.env.example backend/.env` |
+| Generate fails: model not found | Wait for `ollama-create` to finish on first boot; check `curl http://localhost:11434/api/tags` for `chipsutra-vlsi:3b` |
+| UI shows “ChipSutra-VLSI — starting…” | Ollama still pulling weights (~2 GB first time); wait 5–15 min on slow networks |
+| Slow first token | Normal — model loads into RAM once; later runs are faster |
+| Verilator UVM errors | UVM is LLM-style TB; use block-level SV or a vendor simulator for full UVM |
+| Formal (SBY) warnings | Upgrade Yosys ≥ 0.35 — see [SELF_HOST.md](./SELF_HOST.md) |
+
+Health check: `curl http://localhost:8001/api/health` → `llm_providers.ollama` and `ollama.ready`.
+
+---
 
 **Q: Do I need an API key to use it?**
 No. Ollama runs locally and is bundled in Docker Compose. Zero keys required.
@@ -269,9 +281,13 @@ No. Ollama runs locally and is bundled in Docker Compose. Zero keys required.
 Set `ANTHROPIC_API_KEY=sk-ant-...` in `backend/.env` — ChipSutra will automatically prefer Claude Sonnet 4.5 over local Ollama for higher-quality testbenches.
 
 **Q: How much RAM does it need?**
-- Minimum (Ollama 1.5b model): **4 GB RAM**
-- Recommended (7b model): **8-16 GB RAM**
-- SOTA (32b model or Claude via API): **any**
+- Default **`chipsutra-vlsi:3b`**: **6 GB** system RAM (8 GB comfortable)
+- `chipsutra-vlsi:1.5b`: ~4 GB
+- `chipsutra-vlsi:7b`: ~10 GB
+- Optional Claude/GPT via API: same ChipSutra stack; inference runs in the cloud
+
+**Q: Is ChipSutra-VLSI as good as Claude/GPT?**
+It is tuned for **VLSI/UVM/SVA** and costs **$0 per token** on your hardware. Cloud models are still stronger on huge SoCs and subtle specs — use them optionally via API keys. See [ChipSutra-VLSI-LLM](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM).
 
 **Q: Can I run it on a MacBook / laptop?**
 Yes. Ollama supports Apple Silicon acceleration. Docker Compose works on macOS, Linux, and Windows.

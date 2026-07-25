@@ -151,6 +151,8 @@ def test_available_providers_reports_ollama_false_when_url_unset():
 # 3. stream_chat falls through to Ollama HTTP streaming (monkey-patched httpx)
 # =====================================================================
 class _FakeStreamResponse:
+    status_code = 200
+
     def __init__(self, lines):
         self._lines = lines
 

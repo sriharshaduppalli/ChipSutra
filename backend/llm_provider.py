@@ -56,6 +56,25 @@ def available_providers() -> dict:
     }
 
 
+def ollama_status() -> dict:
+    """Sync probe for /api/health — is the configured model present?"""
+    out = {"configured": bool(OLLAMA_URL), "model": OLLAMA_MODEL, "ready": False}
+    if not OLLAMA_URL:
+        return out
+    try:
+        import requests as _req
+        r = _req.get(f"{OLLAMA_URL}/api/tags", timeout=4)
+        r.raise_for_status()
+        names = [m.get("name", "") for m in r.json().get("models", [])]
+        want = OLLAMA_MODEL
+        out["ready"] = any(n == want or n.split(":")[0] == want.split(":")[0] for n in names)
+        if not out["ready"] and names:
+            out["installed"] = names[:8]
+    except Exception as e:
+        out["error"] = str(e)[:240]
+    return out
+
+
 async def stream_chat(provider: str, model: str, system: str, user_text: str, session_id: Optional[str] = None) -> AsyncIterator[str]:
     """Yield text deltas from the chosen LLM provider.
     Provider precedence: emergent → anthropic (if provider=='anthropic') → openai (if provider=='openai') → ollama (fallback).
@@ -98,7 +117,7 @@ async def stream_chat(provider: str, model: str, system: str, user_text: str, se
                 continue
         return
 
-    # OLLAMA FALLBACK — zero-key, zero-cost, runs locally
+    # OLLAMA — zero-key local ChipSutra-VLSI (default for Community Edition)
     if OLLAMA_URL:
         payload = {
             "model": OLLAMA_MODEL,
@@ -110,7 +129,14 @@ async def stream_chat(provider: str, model: str, system: str, user_text: str, se
         }
         async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
             async with client.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as resp:
-                resp.raise_for_status()
+                if resp.status_code >= 400:
+                    body = (await resp.aread()).decode("utf-8", errors="ignore")[:500]
+                    hint = (
+                        f"Ollama returned {resp.status_code} for model '{OLLAMA_MODEL}'. "
+                        "Run: docker compose up (builds chipsutra-vlsi automatically) or "
+                        "'ollama create chipsutra-vlsi:3b -f modelfiles/Modelfile.3b' from ChipSutra-VLSI-LLM."
+                    )
+                    raise RuntimeError(f"{hint} Detail: {body or resp.reason_phrase}")
                 async for line in resp.aiter_lines():
                     if not line.strip():
                         continue

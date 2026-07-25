@@ -23,7 +23,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel, EmailStr, Field
 
 # ChipSutra provider abstractions (auto-fall-back Emergent → standalone)
-from llm_provider import stream_chat as llm_stream_chat, available_providers as llm_available_providers
+from llm_provider import stream_chat as llm_stream_chat, available_providers as llm_available_providers, ollama_status as llm_ollama_status
 from storage_provider import init_storage as storage_init, put_object as put_object_impl, get_object as get_object_impl, storage_mode
 from google_auth import google_mode, resolve_emergent_session, build_google_auth_url, exchange_code as google_exchange_code
 
@@ -278,6 +278,7 @@ async def health():
         "yosys": bool(_sh.which("yosys")),
         "sby": bool(_sh.which("sby")),
         "llm_providers": providers,
+        "ollama": llm_ollama_status(),
         "google_auth": google_mode(),
     }
 
