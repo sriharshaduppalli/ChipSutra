@@ -1,3 +1,6 @@
+param(
+    [switch]$Quiet
+)
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $EnvPath = Join-Path $Root 'backend\.env'
@@ -10,8 +13,10 @@ if (-not (Test-Path $Example)) {
 if (-not (Test-Path $EnvPath)) {
   Copy-Item $Example $EnvPath
   Write-Host '[chipsutra] Created backend\.env - set JWT_SECRET and ADMIN_PASSWORD before a public deploy.'
-} else {
+} elseif (-not $Quiet) {
   Write-Host '[chipsutra] backend\.env already exists.'
 }
 
-Write-Host 'Next: docker compose up --build'
+if (-not $Quiet) {
+  Write-Host 'Next: docker compose up --build'
+}
