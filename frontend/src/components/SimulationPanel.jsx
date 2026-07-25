@@ -37,6 +37,12 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
   const allRtlIds = useMemo(() => rtlFileIds(project), [project]);
   const rtlIds = includeAllRtl ? allRtlIds : selectedRtlIds;
 
+  useEffect(() => {
+    if (selectedRtlIds.length === 0 && allRtlIds.length > 0) {
+      setIncludeAllRtl(true);
+    }
+  }, [project.id, selectedRtlIds.length, allRtlIds.length]);
+
   const tbFile = (project.files || []).find(
     (f) => selectedFileIds.includes(f.id) && f.kind === "tb",
   );
@@ -117,7 +123,7 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
             </div>
           </div>
         )}
-        {rtlIds.length === 0 && allRtlIds.length > 0 && (
+        {rtlIds.length === 0 && allRtlIds.length > 0 && !includeAllRtl && (
           <div className="mx-4 mt-3 p-3 border border-emerald-500/40 bg-emerald-500/5 font-mono text-[11px] text-slate-300">
             No RTL files selected. In the project page, click your <span className="text-emerald-400">.v / .sv</span> files in the
             left <span className="text-emerald-400">Files</span> panel (green highlight), or{" "}
