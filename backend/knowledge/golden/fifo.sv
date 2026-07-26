@@ -29,6 +29,9 @@ module fifo #(
   localparam logic [CNTW-1:0]  CNT_FULL = CNTW'(DEPTH);
   localparam logic [ADDRW-1:0] PTR_ZERO = '0;
   localparam logic [ADDRW-1:0] PTR_LAST = ADDRW'(DEPTH - 1);
+  // Sized increments: a bare `1` is 32-bit and widens the adder (WIDTHEXPAND).
+  localparam logic [ADDRW-1:0] PTR_ONE  = ADDRW'(1);
+  localparam logic [CNTW-1:0]  CNT_ONE  = CNTW'(1);
 
   logic [WIDTH-1:0] mem   [DEPTH];
   logic [ADDRW-1:0] wr_ptr;
@@ -55,14 +58,14 @@ module fifo #(
     end else begin
       if (do_write) begin
         mem[wr_ptr] <= wr_data;
-        wr_ptr      <= (wr_ptr == PTR_LAST) ? PTR_ZERO : ADDRW'(wr_ptr + 1);
+        wr_ptr      <= (wr_ptr == PTR_LAST) ? PTR_ZERO : (wr_ptr + PTR_ONE);
       end
       if (do_read) begin
-        rd_ptr <= (rd_ptr == PTR_LAST) ? PTR_ZERO : ADDRW'(rd_ptr + 1);
+        rd_ptr <= (rd_ptr == PTR_LAST) ? PTR_ZERO : (rd_ptr + PTR_ONE);
       end
       case ({do_write, do_read})
-        2'b10:   count_q <= CNTW'(count_q + 1);
-        2'b01:   count_q <= CNTW'(count_q - 1);
+        2'b10:   count_q <= count_q + CNT_ONE;
+        2'b01:   count_q <= count_q - CNT_ONE;
         default: count_q <= count_q;
       endcase
     end
