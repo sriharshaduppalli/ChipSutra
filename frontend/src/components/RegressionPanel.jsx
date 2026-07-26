@@ -12,6 +12,8 @@ export default function RegressionPanel({ project, selectedFileIds, onClose }) {
   const [summary, setSummary] = useState(null);
   const [trends, setTrends] = useState(null);
   const [covTrends, setCovTrends] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [detail, setDetail] = useState(null);
 
   const rtlIds = useMemo(() => {
     const selected = selectedFileIds.filter((fid) => {
@@ -46,6 +48,26 @@ export default function RegressionPanel({ project, selectedFileIds, onClose }) {
 
   useEffect(() => { loadTrends(); }, [loadTrends]);
 
+  const loadHistory = useCallback(async () => {
+    try {
+      const { data } = await api.get(`/projects/${project.id}/regressions`);
+      setHistory(Array.isArray(data) ? data : []);
+    } catch {
+      /* history is optional */
+    }
+  }, [project.id]);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  // Past runs carry the same per-case cells the SSE stream emits, so drilldown works on them too.
+  const openHistoryRun = (id) => {
+    const doc = history.find((h) => h.id === id);
+    if (!doc) return;
+    setDetail(null);
+    setResults(doc.results || []);
+    setSummary(doc.results ? { passed: doc.passed || 0, failed: doc.failed || 0 } : null);
+  };
+
   const run = async () => {
     if (!rtlIds.length) return toast.error("No RTL files available");
     const parsedSeeds = seeds.split(",").map((s) => parseInt(s.trim(), 10)).filter(Number.isFinite);
@@ -59,7 +81,7 @@ export default function RegressionPanel({ project, selectedFileIds, onClose }) {
       coverage: !!coverage,
     }));
     if (cases.length * (parsedSeeds.length || 1) > 20) return toast.error("Matrix exceeds 20 runs");
-    setRunning(true); setResults([]); setSummary(null);
+    setRunning(true); setResults([]); setSummary(null); setDetail(null);
     try {
       const res = await fetch(`${API}/regress/stream`, {
         method: "POST",
@@ -98,6 +120,7 @@ export default function RegressionPanel({ project, selectedFileIds, onClose }) {
         }
       }
       loadTrends();
+      loadHistory();
     } catch (e) {
       toast.error(e.message || "Regression failed");
     }
@@ -137,12 +160,35 @@ export default function RegressionPanel({ project, selectedFileIds, onClose }) {
           </div>
         )}
         {summary && <div className="px-4 py-2 font-mono text-xs border-b border-[#1E293B] text-emerald-400">passed={summary.passed} · failed={summary.failed}</div>}
+        {history.length > 0 && (
+          <div className="px-4 py-2 border-b border-[#1E293B] flex items-center gap-2">
+            <span className="font-mono text-[10px] text-slate-400">PAST RUNS</span>
+            <select
+              onChange={(e) => openHistoryRun(e.target.value)}
+              defaultValue=""
+              className="flex-1 bg-[#0B0E14] border border-[#1E293B] px-2 py-1 text-[10px] font-mono"
+              data-testid="regression-history"
+            >
+              <option value="">load a previous matrix…</option>
+              {history.map((h) => (
+                <option key={h.id} value={h.id}>
+                  {(h.created_at ? new Date(h.created_at).toLocaleString() : h.id.slice(0, 8))} · pass={h.passed ?? 0} fail={h.failed ?? 0}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="flex-1 overflow-auto p-4">
           <table className="w-full font-mono text-xs">
             <thead><tr className="text-slate-500 text-left"><th>Test</th><th>Seed</th><th>Status</th><th>Coverage</th><th>Simulation</th></tr></thead>
             <tbody>
               {results.map((r) => (
-                <tr key={`${r.index}-${r.seed}`} className="border-t border-[#1E293B]">
+                <tr
+                  key={`${r.index}-${r.seed}`}
+                  onClick={() => setDetail(r)}
+                  className={`border-t border-[#1E293B] cursor-pointer hover:bg-[#1A212D] ${detail && detail.index === r.index && detail.seed === r.seed ? "bg-[#1A212D]" : ""}`}
+                  data-testid={`regression-cell-${r.index}-${r.seed ?? "none"}`}
+                >
                   <td className="py-2">{r.name}</td><td>{r.seed ?? "—"}</td>
                   <td className={r.status === "done" ? "text-emerald-400" : r.status === "error" ? "text-red-400" : "text-amber-400"}>{r.status}</td>
                   <td className="text-slate-500">{r.coverage_overall != null ? `${r.coverage_overall}%` : "—"}</td>
@@ -152,6 +198,29 @@ export default function RegressionPanel({ project, selectedFileIds, onClose }) {
             </tbody>
           </table>
           {!results.length && <div className="text-slate-500 font-mono text-xs">Testbench files are detected by kind/name. Configure seeds/workers and run.</div>}
+          {results.length > 0 && !detail && <div className="mt-3 text-slate-500 font-mono text-[10px]">Click a cell to see its log tail and simulation details.</div>}
+          {detail && (
+            <div className="mt-4 border border-[#1E293B]" data-testid="regression-detail">
+              <div className="px-3 py-2 border-b border-[#1E293B] flex items-center justify-between">
+                <div className="font-mono text-[11px]">
+                  <span className={detail.status === "done" ? "text-emerald-400" : detail.status === "error" ? "text-red-400" : "text-amber-400"}>[{detail.status}]</span>
+                  {" "}{detail.name} · seed={detail.seed ?? "—"}
+                </div>
+                <button onClick={() => setDetail(null)} className="text-slate-400 hover:text-slate-100" data-testid="regression-detail-close"><X size={12} /></button>
+              </div>
+              <div className="px-3 py-2 font-mono text-[10px] text-slate-400 flex flex-wrap gap-4">
+                <span>simulation={detail.simulation_id || "—"}</span>
+                {detail.coverage_run_id && <span>coverage_run={detail.coverage_run_id.slice(0, 8)}</span>}
+                {detail.coverage_overall != null && <span className="text-emerald-400">coverage={detail.coverage_overall}%</span>}
+              </div>
+              <div className="bg-[#0B0E14] p-3 font-mono text-[10px] max-h-48 overflow-auto">
+                {(detail.log_tail || []).map((line, i) => (
+                  <div key={i} className={/error|fatal/i.test(line) ? "text-red-400" : "text-slate-300"}>{line}</div>
+                ))}
+                {!(detail.log_tail || []).length && <div className="text-slate-500">No log tail recorded for this cell.</div>}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

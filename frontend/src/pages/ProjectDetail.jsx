@@ -4,7 +4,7 @@ import { api, API, getToken } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import Editor from "@monaco-editor/react";
-import { Upload, FileText, Cpu, Zap, Download, Loader2, X, ArrowLeft, Play, Users, Shield, GitBranch, Grid3X3, FlaskConical } from "lucide-react";
+import { Upload, FileText, Cpu, Zap, Download, Loader2, X, ArrowLeft, Play, Users, Shield, GitBranch, Grid3X3, FlaskConical, Timer } from "lucide-react";
 import ShareModal from "@/components/ShareModal";
 import SimulationPanel from "@/components/SimulationPanel";
 import CommentsPanel from "@/components/CommentsPanel";
@@ -13,6 +13,8 @@ import CdcPanel from "@/components/CdcPanel";
 import SynthPanel from "@/components/SynthPanel";
 import RegressionPanel from "@/components/RegressionPanel";
 import CocotbPanel from "@/components/CocotbPanel";
+import StaPanel from "@/components/StaPanel";
+import GoldenDutImport from "@/components/GoldenDutImport";
 
 const MODULES = [
   { id: "testbench", label: "UVM Testbench", desc: "Scalable, reusable testbench with driver/monitor/scoreboard/sequences" },
@@ -43,6 +45,7 @@ export default function ProjectDetail() {
   const [modelIdx, setModelIdx] = useState(0);
   const [prompt, setPrompt] = useState("");
   const [toolLog, setToolLog] = useState("");
+  const [attachingLog, setAttachingLog] = useState(false);
   const [output, setOutput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -54,12 +57,29 @@ export default function ProjectDetail() {
   const [showSynth, setShowSynth] = useState(false);
   const [showRegression, setShowRegression] = useState(false);
   const [showCocotb, setShowCocotb] = useState(false);
+  const [showSta, setShowSta] = useState(false);
   const [currentGenId, setCurrentGenId] = useState(null);
   const outputRef = useRef(null);
 
   const load = useCallback(async () => {
     const { data } = await api.get(`/projects/${pid}`);
     setProject(data);
+  }, [pid]);
+
+  const attachLatestToolLog = useCallback(async () => {
+    setAttachingLog(true);
+    try {
+      const { data } = await api.get(`/projects/${pid}/latest-tool-log`);
+      if (!data.tool_log) {
+        toast.info("No simulation log yet — run a simulation first");
+      } else {
+        setToolLog(data.tool_log);
+        toast.success(`Attached log from ${data.status || "last run"}${data.truncated ? " (tail)" : ""}`);
+      }
+    } catch {
+      toast.error("Could not load the last simulation log");
+    }
+    setAttachingLog(false);
   }, [pid]);
   useEffect(() => { load(); }, [load]);
 
@@ -227,6 +247,7 @@ export default function ProjectDetail() {
           <button onClick={() => setShowFormal(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-formal"><Shield size={12} /> Formal</button>
           <button onClick={() => setShowCdc(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-cdc"><GitBranch size={12} /> CDC</button>
           <button onClick={() => setShowSynth(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-synth"><Cpu size={12} /> Synth</button>
+          <button onClick={() => setShowSta(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-sta"><Timer size={12} /> STA</button>
           <button onClick={() => setShowRegression(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-regression"><Grid3X3 size={12} /> Regression</button>
           <button onClick={() => setShowCocotb(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-cocotb"><FlaskConical size={12} /> cocotb</button>
           <button onClick={() => setShowSim(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-simulate"><Play size={12} /> Simulate</button>
@@ -240,7 +261,7 @@ export default function ProjectDetail() {
           <div className="card-surface p-4">
             <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-3">Files ({project.files?.length || 0})</div>
             <label className="block">
-              <input type="file" multiple accept=".v,.sv,.vhd,.vhdl,.pdf,.md,.docx,.txt,.vcd,.csv,.log,.rpt,.json" onChange={handleUpload} className="hidden" data-testid="file-input" />
+              <input type="file" multiple accept=".v,.sv,.vhd,.vhdl,.pdf,.md,.docx,.txt,.vcd,.fst,.csv,.log,.rpt,.json,.lib,.sdc,.xml" onChange={handleUpload} className="hidden" data-testid="file-input" />
               <div className="border border-dashed border-[#1E293B] hover:border-emerald-500/50 p-4 text-center cursor-pointer transition-colors">
                 <Upload size={16} className="mx-auto mb-2 text-slate-400" />
                 <div className="font-mono text-xs text-slate-400">{uploading ? "Uploading..." : "Upload RTL / spec / VCD"}</div>
@@ -261,6 +282,7 @@ export default function ProjectDetail() {
               ))}
               {(project.files?.length || 0) === 0 && <div className="font-mono text-[10px] text-slate-500 text-center py-4">No files yet</div>}
             </div>
+            <GoldenDutImport projectId={pid} onImported={load} />
           </div>
 
           <div className="card-surface p-4">
@@ -313,7 +335,17 @@ export default function ProjectDetail() {
                 <textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g., focus on backpressure and AXI4 protocol violations" className="w-full bg-[#0B0E14] border border-[#1E293B] px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 resize-none" data-testid="prompt-input" />
               </div>
               <div>
-                <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2">Lint / sim log (optional fix loop)</div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="font-mono text-xs uppercase tracking-widest text-slate-400">Lint / sim log (optional fix loop)</div>
+                  <button
+                    onClick={attachLatestToolLog}
+                    disabled={attachingLog}
+                    className="font-mono text-[10px] uppercase tracking-widest text-emerald-400 hover:text-emerald-300 disabled:text-slate-600"
+                    data-testid="attach-tool-log-btn"
+                  >
+                    {attachingLog ? "Loading..." : "Attach last run"}
+                  </button>
+                </div>
                 <textarea
                   rows={3}
                   value={toolLog}
@@ -384,6 +416,7 @@ export default function ProjectDetail() {
       {showSynth && <SynthPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowSynth(false)} onArtifacts={load} />}
       {showRegression && <RegressionPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowRegression(false)} />}
       {showCocotb && <CocotbPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowCocotb(false)} onUpdate={load} />}
+      {showSta && <StaPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowSta(false)} />}
 
       {/* File preview modal */}
       {previewFile && (
