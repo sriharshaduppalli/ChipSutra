@@ -32,7 +32,7 @@ ecdsa==0.19.2
 rsa==4.9.1
 pyasn1==0.6.4
 anthropic==0.120.0
-openai==1.99.9
+openai==2.48.0
 PyYAML==6.0.3
 typing_extensions==4.16.0
 annotated-types==0.7.0

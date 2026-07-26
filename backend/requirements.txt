@@ -73,7 +73,7 @@ mypy==2.3.0
 mypy_extensions==1.1.0
 numpy==2.4.6
 oauthlib==3.3.1
-openai==1.99.9
+openai==2.48.0
 packaging==26.2
 pandas==3.0.3
 passlib==1.7.4
