@@ -12,7 +12,7 @@ Thank you for helping build open verification tooling from India for the world.
 ## Before you code
 
 1. Read [SUPPORTED_FEATURES.md](./SUPPORTED_FEATURES.md) and [ROADMAP.md](../ROADMAP.md)
-2. For LLM behavior changes, edit **[ChipSutra-VLSI-LLM](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM)** and sync `models/chipsutra-vlsi/` in this repo
+2. For LLM behavior changes, edit **[ChipSutra-VLSI-LLM](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM)**, bump `VERSION`, then run **`./scripts/sync-vlsi-llm.sh`** (see [docs/LLM_SYNC.md](./LLM_SYNC.md))
 3. For large features, open an issue first
 
 ## Development setup

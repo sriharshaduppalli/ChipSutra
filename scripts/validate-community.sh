@@ -25,5 +25,7 @@ echo "[5/5] production templates..."
 test -f ../docker-compose.prod.yml
 test -f ../backend/.env.production.example
 test -f ../deploy/Caddyfile
+test -f ../models/chipsutra-vlsi/ollama-bootstrap.sh
+test -f ../models/chipsutra-vlsi/VERSION
 
 echo "OK — community validation passed."

@@ -25,7 +25,9 @@ Write-Host "[5/5] production templates..."
 @(
   "docker-compose.prod.yml",
   "backend/.env.production.example",
-  "deploy/Caddyfile"
+  "deploy/Caddyfile",
+  "models/chipsutra-vlsi/ollama-bootstrap.sh",
+  "models/chipsutra-vlsi/VERSION"
 ) | ForEach-Object { if (-not (Test-Path $_)) { throw "missing $_" } }
 
 Write-Host "OK - community validation passed."

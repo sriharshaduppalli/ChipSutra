@@ -17,7 +17,7 @@ Prioritized for an India-first open-source EDA verification startup.
 | Gap | Direction |
 |-----|-----------|
 | LLM-only generation | Parse RTL (Slang/Verilator frontend) → pass port list into prompts |
-| Generic system prompts | Keep improving `ChipSutra-VLSI-LLM` Modelfile + optional LoRA ([FINE_TUNING.md](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM/blob/master/docs/FINE_TUNING.md)) |
+| Generic system prompts | ChipSutra-VLSI-LLM v1.1 protocol appendix + RAG roadmap — [LLM_ACCURACY.md](./LLM_ACCURACY.md) |
 | No golden regression suite | Curated DUTs (Ibex, counters, FIFO) + expected SVA/TB snippets |
 | Spec→RTL oversold | Mark 🧪 in UI; require spec checklist before generate |
 

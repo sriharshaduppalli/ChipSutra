@@ -23,34 +23,17 @@ services:
       timeout: 5s
       retries: 6
 
-  ollama-pull:
+  ollama-bootstrap:
     image: ollama/ollama:latest
     depends_on:
       ollama:
         condition: service_healthy
-    volumes:
-      - ollama_data:/root/.ollama
-    entrypoint: ["/bin/sh", "-c"]
-    command: >
-      "OLLAMA_HOST=http://ollama:11434 ollama pull ${OLLAMA_BASE_MODEL:-qwen2.5-coder:3b} &&
-       echo '[chipsutra] base model pulled successfully'"
-    restart: "no"
-
-  ollama-create:
-    image: ollama/ollama:latest
-    depends_on:
-      ollama:
-        condition: service_healthy
-      ollama-pull:
-        condition: service_completed_successfully
     volumes:
       - ollama_data:/root/.ollama
       - ./models/chipsutra-vlsi:/modelfiles:ro
-    entrypoint: ["/bin/sh", "-c"]
-    command: >
-      "OLLAMA_HOST=http://ollama:11434 ollama show chipsutra-vlsi:3b >/dev/null 2>&1 ||
-       ollama create chipsutra-vlsi:3b -f /modelfiles/Modelfile.3b;
-       echo '[chipsutra] OLLAMA model chipsutra-vlsi:3b ready'"
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-chipsutra-vlsi:3b}
+    entrypoint: ["/bin/sh", "/modelfiles/ollama-bootstrap.sh"]
     restart: "no"
 
   backend:
@@ -59,7 +42,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
-      ollama-create:
+      ollama-bootstrap:
         condition: service_completed_successfully
     ports:
       - "8001:8001"

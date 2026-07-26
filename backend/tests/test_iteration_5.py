@@ -5,8 +5,8 @@ Scope (backend only):
 2. llm_provider.available_providers() correctly reports 'ollama' true/false based on OLLAMA_URL.
 3. llm_provider.stream_chat falls through to Ollama HTTP streaming (httpx) when
    no Emergent/Anthropic/OpenAI is configured — monkey-patched.
-4. docker-compose.yml has mongo + ollama + ollama-pull services; backend depends on
-   ollama-pull (service_completed_successfully) and gets OLLAMA_URL=http://ollama:11434.
+4. docker-compose.yml has mongo + ollama + ollama-bootstrap services; backend depends on
+   ollama-bootstrap (service_completed_successfully) and gets OLLAMA_URL=http://ollama:11434.
 5. backend/.env.example presets OLLAMA_URL + OLLAMA_MODEL with zero-key guidance,
    Anthropic/OpenAI/Emergent keys are commented-out.
 6. backend/requirements.txt contains httpx (needed for Ollama streaming).
@@ -266,26 +266,26 @@ def test_stream_chat_raises_when_no_provider_configured():
 # =====================================================================
 # 4. docker-compose.yml lint check
 # =====================================================================
-def test_docker_compose_has_mongo_ollama_and_backend_depends_on_ollama_create():
+def test_docker_compose_has_mongo_ollama_and_backend_depends_on_ollama_bootstrap():
     assert DOCKER_COMPOSE_PATH.exists(), f"missing {DOCKER_COMPOSE_PATH}"
     with DOCKER_COMPOSE_PATH.open() as f:
         raw = f.read()
     doc = yaml.safe_load(raw)
     services = doc.get("services", {})
-    for svc in ("mongo", "ollama", "ollama-pull", "ollama-create", "backend"):
+    for svc in ("mongo", "ollama", "ollama-bootstrap", "backend"):
         assert svc in services, f"docker-compose missing service '{svc}': {list(services)}"
 
     ollama = services["ollama"]
     assert "ollama/ollama" in ollama["image"], ollama
 
-    ollama_pull = services["ollama-pull"]
-    dep = ollama_pull.get("depends_on")
+    bootstrap = services["ollama-bootstrap"]
+    dep = bootstrap.get("depends_on")
     if isinstance(dep, dict):
         assert "ollama" in dep, dep
     else:
         assert "ollama" in dep, dep
-    assert "OLLAMA_BASE_MODEL" in raw or "qwen2.5-coder:3b" in raw, \
-        "docker-compose should pull qwen2.5-coder:3b base for chipsutra-vlsi"
+    assert "ollama-bootstrap" in raw or "Modelfile" in raw, \
+        "docker-compose should bootstrap chipsutra-vlsi from Modelfile"
     assert "chipsutra-vlsi" in raw, "docker-compose should build chipsutra-vlsi Ollama tag"
     assert (REPO_ROOT / "models" / "chipsutra-vlsi" / "Modelfile.3b").exists(), \
         "missing models/chipsutra-vlsi/Modelfile.3b"
@@ -293,8 +293,8 @@ def test_docker_compose_has_mongo_ollama_and_backend_depends_on_ollama_create():
     backend = services["backend"]
     bdep = backend["depends_on"]
     assert isinstance(bdep, dict), f"backend.depends_on should be dict form: {bdep}"
-    assert "ollama-create" in bdep, bdep
-    assert bdep["ollama-create"].get("condition") == "service_completed_successfully", bdep
+    assert "ollama-bootstrap" in bdep, bdep
+    assert bdep["ollama-bootstrap"].get("condition") == "service_completed_successfully", bdep
 
     env = backend.get("environment") or {}
     if isinstance(env, list):
@@ -471,10 +471,10 @@ def test_fresh_clone_has_ollama_wiring():
     if proc.returncode != 0:
         pytest.skip(f"git clone failed (network?): {proc.stderr[:300]}")
 
-    # docker-compose.yml has ollama + ollama-pull
+    # docker-compose.yml has ollama + ollama-bootstrap
     compose = (FRESH_DIR / "docker-compose.yml").read_text()
     assert "ollama:" in compose, "fresh clone docker-compose missing ollama service"
-    assert "ollama-pull" in compose, "fresh clone docker-compose missing ollama-pull"
+    assert "ollama-bootstrap" in compose, "fresh clone docker-compose missing ollama-bootstrap"
     assert "chipsutra-vlsi" in compose or "qwen2.5-coder" in compose, \
         "fresh clone docker-compose missing VLSI model wiring"
 

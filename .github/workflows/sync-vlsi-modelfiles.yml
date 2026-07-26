@@ -1,0 +1,40 @@
+name: Sync ChipSutra-VLSI modelfiles
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "ChipSutra-VLSI-LLM git ref (branch/tag)"
+        required: false
+        default: master
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch upstream LLM repo
+        run: |
+          git clone --depth 1 --branch "${{ inputs.upstream_ref }}" \
+            https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM.git /tmp/vlsi-llm
+
+      - name: Copy modelfiles + VERSION
+        run: |
+          cp /tmp/vlsi-llm/modelfiles/Modelfile.* models/chipsutra-vlsi/
+          cp /tmp/vlsi-llm/VERSION models/chipsutra-vlsi/VERSION
+          chmod +x models/chipsutra-vlsi/ollama-bootstrap.sh
+
+      - name: Create PR if changed
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: "Sync models/chipsutra-vlsi from ChipSutra-VLSI-LLM."
+          title: "Sync ChipSutra-VLSI modelfiles (${{ inputs.upstream_ref }})"
+          body: |
+            Automated sync from [ChipSutra-VLSI-LLM](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM) `${{ inputs.upstream_ref }}`.
+            Review Modelfile diffs before merge.
+          branch: sync/vlsi-modelfiles
