@@ -5,6 +5,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 import os
 import re
+import sys
 import uuid
 import json
 import logging
@@ -15,6 +16,7 @@ from typing import Optional, List, Any
 
 import bcrypt
 import jwt
+import certifi
 import requests
 from fastapi import FastAPI, APIRouter, HTTPException, Depends, Header, UploadFile, File, Form, Query, Request
 from fastapi.responses import StreamingResponse, Response, RedirectResponse
@@ -64,7 +66,15 @@ logger = logging.getLogger("chipsutra")
 # =========================
 # Database
 # =========================
-client = AsyncIOMotorClient(MONGO_URL)
+def _motor_client(url: str) -> AsyncIOMotorClient:
+    """Atlas (mongodb+srv) on Windows needs explicit CA bundle (certifi)."""
+    kwargs: dict = {}
+    if url.startswith("mongodb+srv://") or "tls=true" in url.lower():
+        kwargs["tlsCAFile"] = certifi.where()
+    return AsyncIOMotorClient(url, **kwargs)
+
+
+client = _motor_client(MONGO_URL)
 db = client[DB_NAME]
 
 # =========================
@@ -211,10 +221,19 @@ async def startup():
         await client.admin.command("ping")
     except Exception as e:
         hint = ""
+        err_s = str(e)
         if "localhost" in MONGO_URL or "127.0.0.1" in MONGO_URL:
             hint = (
                 " In Docker, localhost is the container — use MongoDB Atlas "
                 "(mongodb+srv://...) in backend/.env, not mongodb://localhost:27017."
+            )
+        elif "SSL" in err_s or "TLS" in err_s or "tlsv1" in err_s.lower():
+            py = sys.version.split()[0]
+            hint = (
+                f" Atlas TLS failed (common on Python 3.14+ on Windows — use **Python 3.11 or 3.12**; "
+                f"current: {py}). Install 3.12, then: py -3.12 -m venv .venv && .venv\\Scripts\\activate && "
+                "pip install -r requirements-oss.txt. Also check Atlas Network Access (0.0.0.0/0 for dev). "
+                "See docs/MONGODB_ATLAS_SETUP.md#ssl-handshake-errors."
             )
         logger.error("MongoDB connection failed: %s.%s", e, hint)
         raise RuntimeError(f"MongoDB connection failed: {e}.{hint}") from e

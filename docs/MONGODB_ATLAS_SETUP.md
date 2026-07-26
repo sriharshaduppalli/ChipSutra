@@ -92,6 +92,29 @@ Browser: http://localhost:8001/api/health — should return `"status": "healthy"
 
 ---
 
+## SSL handshake errors (`TLSV1_ALERT_INTERNAL_ERROR`)
+
+If startup fails with **SSL handshake failed** to `*.mongodb.net`:
+
+1. **Use Python 3.11 or 3.12** for the backend (recommended). **Python 3.14** on Windows often cannot complete TLS with Atlas yet.  
+   Check: `python --version`  
+   Install: https://www.python.org/downloads/ (3.12.x), then:
+   ```powershell
+   cd ChipSutra\backend
+   py -3.12 -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -r requirements-oss.txt
+   python -m uvicorn server:app --host 0.0.0.0 --port 8001
+   ```
+2. **Atlas Network Access** — allow your IP or `0.0.0.0/0` (dev).  
+3. **Connection string** — copy fresh from Atlas → Connect → Drivers; URL-encode special characters in the password.  
+4. **VPN / antivirus** — try off or another network; some intercept HTTPS/TLS.  
+5. **Docker backend** — run API inside the Linux container (uses Debian OpenSSL); keep Atlas `MONGO_URL` in `backend/.env`.
+
+ChipSutra sets `tlsCAFile` via **certifi** for `mongodb+srv://` URLs automatically.
+
+---
+
 ## Next steps
 
 - **Native Windows (no Docker):** [docs/OPEN_SOURCE.md](./OPEN_SOURCE.md) + `.\setup-native.ps1`  

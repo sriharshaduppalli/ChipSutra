@@ -68,8 +68,11 @@ if ($InstallPythonDeps) {
 
 Write-Host ''
 Write-Host '=== Start ChipSutra (two terminals) ==='
-Write-Host 'Terminal 1 - backend:'
+Write-Host 'Terminal 1 - backend (use Python 3.11 or 3.12; avoid 3.14 for Atlas on Windows):'
 Write-Host "  cd $Root\backend"
+Write-Host '  py -3.12 -m venv .venv'
+Write-Host '  .\.venv\Scripts\Activate.ps1'
+Write-Host '  pip install -r requirements-oss.txt'
 Write-Host '  python -m uvicorn server:app --host 0.0.0.0 --port 8001'
 Write-Host ''
 Write-Host 'Terminal 2 - frontend:'
