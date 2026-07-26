@@ -21,6 +21,9 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
   const [vcdFileId, setVcdFileId] = useState(null);
   const [verilatorAvailable, setVerilatorAvailable] = useState(null);
   const [includeAllRtl, setIncludeAllRtl] = useState(false);
+  const [withCoverage, setWithCoverage] = useState(false);
+  const [seed, setSeed] = useState("");
+  const [coverageSummary, setCoverageSummary] = useState(null);
 
   useEffect(() => {
     fetch(`${API}/health`)
@@ -52,7 +55,7 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
       toast.error("Select at least one .v/.sv file in the Files list (left), or use Select all RTL.");
       return;
     }
-    setLogs([]); setStatus(null); setEngine(null); setVcdFileId(null); setRunning(true);
+    setLogs([]); setStatus(null); setEngine(null); setVcdFileId(null); setCoverageSummary(null); setRunning(true);
     try {
       const res = await fetch(`${API}/simulate/stream`, {
         method: "POST",
@@ -64,6 +67,8 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
           top_module: topModule || null,
           mode,
           sim_time_ns: simTime,
+          coverage: mode === "run" && withCoverage,
+          seed: seed === "" ? null : parseInt(seed, 10),
         }),
       });
       if (!res.ok) {
@@ -87,6 +92,7 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
             const j = JSON.parse(line.slice(5).trim());
             if (j.type === "meta") setEngine(j.engine);
             else if (j.type === "log") setLogs(prev => [...prev, { level: j.level || "info", line: j.line }]);
+            else if (j.type === "coverage") setCoverageSummary(j);
             else if (j.type === "done") { setStatus(j.status); if (j.vcd_file_id) { setVcdFileId(j.vcd_file_id); onVcdCreated && onVcdCreated(); } }
           } catch {}
         }
@@ -153,6 +159,12 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
               <span className="font-mono text-[10px] text-slate-400">SIM TIME</span>
               <input type="number" min={50} max={100000} value={simTime} onChange={e => setSimTime(parseInt(e.target.value) || 1000)} className="w-24 bg-[#0B0E14] border border-[#1E293B] px-2 py-1 text-xs font-mono focus:outline-none focus:border-emerald-500" data-testid="sim-time" />
               <span className="font-mono text-[10px] text-slate-500">cycles</span>
+              <label className="font-mono text-[10px] text-slate-400 inline-flex items-center gap-1 cursor-pointer">
+                <input type="checkbox" checked={withCoverage} onChange={(e) => setWithCoverage(e.target.checked)} data-testid="sim-coverage" />
+                coverage
+              </label>
+              <span className="font-mono text-[10px] text-slate-400">SEED</span>
+              <input type="number" placeholder="opt" value={seed} onChange={(e) => setSeed(e.target.value)} className="w-20 bg-[#0B0E14] border border-[#1E293B] px-2 py-1 text-xs font-mono focus:outline-none focus:border-emerald-500" data-testid="sim-seed" />
             </div>
           )}
           <input placeholder="top module (auto)" value={topModule} onChange={e => setTopModule(e.target.value)} className="flex-1 min-w-[180px] bg-[#0B0E14] border border-[#1E293B] px-2 py-1 text-xs font-mono focus:outline-none focus:border-emerald-500" data-testid="sim-top" />
@@ -181,6 +193,12 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
             <div className={`mt-4 p-2 border-l-2 ${status === 'done' ? 'border-emerald-500 text-emerald-400' : 'border-red-500 text-red-400'}`}>
               [{status.toUpperCase()}] {status === 'done' ? 'Simulation completed successfully' : 'Simulation ended with errors'}
               {vcdFileId && <div className="mt-2 text-emerald-400 flex items-center gap-1"><Waves size={12} /> VCD captured. <Link to="/app/waveform" className="underline">Open Waveform viewer →</Link></div>}
+              {coverageSummary && (
+                <div className="mt-2 text-emerald-400">
+                  Coverage overall {coverageSummary.overall}% · holes {coverageSummary.holes?.length || 0}
+                  {" "}· <Link to="/app/coverage" className="underline">Coverage page →</Link>
+                </div>
+              )}
             </div>
           )}
         </div>

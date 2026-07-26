@@ -24,18 +24,26 @@ ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement
 - [x] Workspaces, roles, notifications, templates, CI template
 - [x] **ChipSutra-VLSI** custom Ollama model (default in Docker) — **v1.2.0** protocol index
 - [x] Keyword RAG (`backend/knowledge/`) + RTL port injection + lint/sim fix-loop (`tool_log`)
+- [x] Verilator coverage persist + run manifests + formal CEX/property table
+- [x] CDC/RDC heuristic analyzer (experimental)
 
 ## In progress (Community — next 90 days)
 
 - [ ] Pre-built GHCR Docker images (`docker publish` on git tag `v*`) — see `.github/workflows/docker-publish.yml`
+- [ ] Multi-test regression matrix (N tests × seeds)
 - [ ] Closed-loop: coverage upload → `coverage_holes` → re-sim suggestion
 - [ ] Auto-attach Verilator output from Simulation panel into `tool_log`
+- [ ] Waveform zoom / hierarchy / FST
+- [ ] Lint waivers + policy gate
+- [ ] Yosys synth + eqy LEC on AI-generated RTL
 - [ ] Embedding / vector RAG for larger libraries
 - [ ] UCIS / industry coverage format adapters (beyond regex `.rpt`)
-- [ ] Yosys ≥ 0.35 in default Docker image
+- [ ] cocotb support for OSS class-based TBs
 - [ ] Redis rate limiter for multi-replica deploys
 - [ ] Regression dashboard (pass/fail trends per project)
 - [ ] Golden DUT suite beyond `counter.sv` (FIFO, AXI-lite slave)
+
+Industry gap matrix: **[docs/INDUSTRY_EDA_GAPS.md](./docs/INDUSTRY_EDA_GAPS.md)**.
 
 ## Enterprise backlog (not in OSS unless contributed)
 

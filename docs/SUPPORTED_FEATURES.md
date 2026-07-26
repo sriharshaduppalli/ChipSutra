@@ -27,11 +27,14 @@ Optional cloud LLMs (Anthropic/OpenAI/Emergent) are **supported when configured*
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Coverage upload parser | ✅ | Regex on `.rpt/.log/.txt/.csv`; not UCIS-native |
+| Coverage upload parser | ✅ | Regex on `.rpt/.log/.txt/.csv`; optional project persist |
+| Verilator native coverage | 🧪 | Sim “coverage” toggle → `coverage_runs` |
 | Coverage heatmap / holes | ✅ | Holes = metrics &lt; 90% |
 | VCD waveform viewer | ✅ | Parsed subset; not full Verdi/DVE |
-| Assertion debug (dedicated) | 📋 | Use **debug** + formal hints today |
+| CDC / RDC analyzer | 🧪 | Heuristic v0 — Project **CDC** button |
+| Assertion debug (dedicated) | 📋 | Use **debug** + formal property table |
 | Auto test from holes (closed loop) | 📋 | Manual: run module then sim |
+| Run manifests | ✅ | Tool versions + argv + input hashes on sim/formal |
 
 ## Simulation & formal
 
@@ -39,7 +42,9 @@ Optional cloud LLMs (Anthropic/OpenAI/Emergent) are **supported when configured*
 |---------|--------|-------|
 | Verilator lint | ✅ | Streaming logs |
 | Verilator compile + run + VCD | ✅ | Block-level SV; UVM may need vendor sim |
-| SymbiYosys formal | 🧪 | Yosys 0.23 in image → version warnings |
+| Sim seed / coverage flags | ✅ | UI + API |
+| SymbiYosys formal | 🧪 | Prefer OSS CAD Suite Yosys ≥ 0.35 in Docker |
+| Formal property table + CEX VCD | ✅ | When SBY produces traces |
 | Questa / VCS / Xcelium | ❌ | Enterprise roadmap |
 
 ## Platform

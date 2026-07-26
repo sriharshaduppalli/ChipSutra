@@ -6,7 +6,7 @@
 
 **Generate UVM testbenches, SVA assertions, coverage plans, and debug hints for your Verilog/SystemVerilog/VHDL designs — automatically, in seconds, with zero API keys.**
 
-[**🚀 Try live**](https://chipsutra-verify.emergent.host) · [**📥 Self-host**](#-quick-start-30-seconds) · [**📚 Docs**](./SELF_HOST.md) · [**🗺️ Roadmap**](./ROADMAP.md) · [**✅ Supported features**](./docs/SUPPORTED_FEATURES.md) · [**🤖 Local LLM**](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM) · [**🎯 LLM accuracy**](./docs/LLM_ACCURACY.md) · [**🔄 LLM sync**](./docs/LLM_SYNC.md)
+[**🚀 Try live**](https://chipsutra-verify.emergent.host) · [**📥 Self-host**](#-quick-start-30-seconds) · [**📚 Docs**](./SELF_HOST.md) · [**🗺️ Roadmap**](./ROADMAP.md) · [**✅ Supported features**](./docs/SUPPORTED_FEATURES.md) · [**🏭 Industry EDA gaps**](./docs/INDUSTRY_EDA_GAPS.md) · [**🤖 Local LLM**](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM) · [**🎯 LLM accuracy**](./docs/LLM_ACCURACY.md) · [**🔄 LLM sync**](./docs/LLM_SYNC.md)
 
 [![License: MIT+attribution](https://img.shields.io/badge/License-MIT%20+%20attribution-emerald)](./LICENSE)
 [![Made in India](https://img.shields.io/badge/Made%20in-India-orange)](https://github.com/sriharshaduppalli/ChipSutra)

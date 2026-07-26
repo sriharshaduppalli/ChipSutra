@@ -29,6 +29,10 @@ from llm_provider import stream_chat as llm_stream_chat, available_providers as 
 from rag import augment_generation_context, rag_status as llm_rag_status
 from rtl_ports import extract_port_context_from_texts, rtl_ports_status
 from lint_feedback import format_lint_feedback, lint_feedback_status
+from coverage_parse import parse_text_report, summarize_coverage_dat
+from formal_parse import parse_sby_log, find_cex_vcds
+from cdc import analyze_rtl_texts
+from eda_tools import build_manifest, sha256_paths, tool_versions
 from storage_provider import init_storage as storage_init, put_object as put_object_impl, get_object as get_object_impl, storage_mode
 from google_auth import google_mode, resolve_emergent_session, build_google_auth_url, exchange_code as google_exchange_code
 
@@ -285,6 +289,10 @@ async def startup():
     await db.workspaces.create_index("members.user_id")
     await db.notifications.create_index([("user_id", 1), ("created_at", -1)])
     await db.activity.create_index([("workspace_id", 1), ("created_at", -1)])
+    await db.coverage_runs.create_index([("project_id", 1), ("created_at", -1)])
+    await db.formal_runs.create_index([("project_id", 1), ("created_at", -1)])
+    await db.cdc_runs.create_index([("project_id", 1), ("created_at", -1)])
+    await db.simulations.create_index([("project_id", 1), ("created_at", -1)])
     # Seed admin
     existing = await db.users.find_one({"email": ADMIN_EMAIL})
     if not existing:
@@ -360,6 +368,8 @@ async def health():
         "rag": llm_rag_status(),
         "rtl_ports": rtl_ports_status(),
         "lint_feedback": lint_feedback_status(),
+        "eda_tools": tool_versions(),
+        "cdc": {"engine": "chipsutra-cdc-v0", "status": "experimental"},
         "google_auth": google_mode(),
     }
 
@@ -826,35 +836,37 @@ async def list_generations(pid: str, user=Depends(get_current_user)):
 # Coverage parser (simple)
 # =========================
 @api.post("/coverage/parse")
-async def parse_coverage(file: UploadFile = File(...), user=Depends(get_current_user)):
+async def parse_coverage(
+    file: UploadFile = File(...),
+    project_id: Optional[str] = Form(None),
+    user=Depends(get_current_user),
+):
     data = (await file.read()).decode("utf-8", errors="ignore")
-    lines = data.splitlines()
-    metrics = []
-    # Look for lines like: "Statement coverage: 87.5%" or "line: 92%"
-    pat = re.compile(r"([A-Za-z][A-Za-z _\-]{2,40})\s*[:=]\s*([0-9]{1,3}(?:\.[0-9]+)?)\s*%")
-    for line in lines:
-        for m in pat.finditer(line):
-            name = m.group(1).strip()
-            try:
-                pct = float(m.group(2))
-                if 0 <= pct <= 100:
-                    metrics.append({"name": name, "pct": pct})
-            except Exception:
-                pass
-    # deduplicate by name (keep last)
-    seen = {}
-    for m in metrics:
-        seen[m["name"].lower()] = m
-    metrics = list(seen.values())[:40]
+    result = parse_text_report(data)
+    if project_id:
+        await require_project(project_id, user["id"], "editor")
+        run_id = str(uuid.uuid4())
+        doc = {
+            "id": run_id,
+            "project_id": project_id,
+            "user_id": user["id"],
+            "source": result.get("source", "text_report"),
+            "filename": file.filename,
+            "overall": result["overall"],
+            "metrics": result["metrics"],
+            "holes": result["holes"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.coverage_runs.insert_one(doc)
+        result["coverage_run_id"] = run_id
+    return result
 
-    holes = [m for m in metrics if m["pct"] < 90]
-    overall = round(sum(m["pct"] for m in metrics) / len(metrics), 1) if metrics else 0.0
-    return {
-        "overall": overall,
-        "metrics": metrics,
-        "holes": sorted(holes, key=lambda x: x["pct"]),
-        "count": len(metrics),
-    }
+
+@api.get("/projects/{pid}/coverage")
+async def list_coverage_runs(pid: str, user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "viewer")
+    docs = await db.coverage_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return docs
 
 # =========================
 # VCD parser (simple)
@@ -975,6 +987,8 @@ class SimulateIn(BaseModel):
     top_module: Optional[str] = None
     mode: str = "lint"  # lint | run
     sim_time_ns: int = 1000  # for run mode
+    seed: Optional[int] = None
+    coverage: bool = False  # Verilator --coverage when running
 
 def _extract_top_module(sv_text: str) -> Optional[str]:
     m = re.search(r"\bmodule\s+([A-Za-z_]\w*)", sv_text or "")
@@ -1046,6 +1060,9 @@ async def simulate_stream(inp: SimulateIn, user=Depends(get_current_user)):
         "engine": "verilator" if VERILATOR_BIN else "mock",
         "file_ids": all_ids,
         "top_module": inp.top_module,
+        "mode": inp.mode,
+        "seed": inp.seed,
+        "coverage": bool(inp.coverage),
         "status": "streaming",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1111,17 +1128,22 @@ async def simulate_stream(inp: SimulateIn, user=Depends(get_current_user)):
                                 cmd = [VERILATOR_BIN, "--cc", "--exe", "--build",
                                        "-Wno-fatal", "--trace", "--timing",
                                        "--top-module", top,
-                                       "--Mdir", "obj_dir"] + [os.path.basename(p) for p in written]
+                                       "--Mdir", "obj_dir"]
+                                if inp.coverage:
+                                    cmd += ["--coverage-line", "--coverage-toggle"]
+                                cmd += [os.path.basename(p) for p in written]
                                 # Provide a minimal main if testbench has no $finish — we still need main.cpp
                                 main_cpp = os.path.join(tmp, "sim_main.cpp")
+                                seed_line = f"    srand({int(inp.seed)});\n" if inp.seed is not None else ""
                                 with open(main_cpp, "w") as fh:
                                     fh.write(f"""
 #include <verilated.h>
 #include <verilated_vcd_c.h>
+#include <cstdlib>
 #include "V{top}.h"
 int main(int argc, char** argv) {{
     Verilated::commandArgs(argc, argv);
-    V{top}* top = new V{top};
+{seed_line}    V{top}* top = new V{top};
     Verilated::traceEverOn(true);
     VerilatedVcdC* tfp = new VerilatedVcdC;
     top->trace(tfp, 99);
@@ -1133,12 +1155,23 @@ int main(int argc, char** argv) {{
         t++;
     }}
     tfp->close();
+    top->final();
     delete top;
     return 0;
 }}
 """)
                                 cmd.append(os.path.basename(main_cpp))
+                                manifest = build_manifest(
+                                    engine="verilator",
+                                    mode="run",
+                                    command=cmd,
+                                    top_module=top,
+                                    file_hashes=sha256_paths(written),
+                                    extra={"seed": inp.seed, "coverage": inp.coverage, "sim_time_ns": inp.sim_time_ns},
+                                )
+                                await db.simulations.update_one({"id": sim_id}, {"$set": {"manifest": manifest}})
                                 yield log(f"$ {' '.join(cmd)}")
+                                yield log(f"[manifest] tools: {manifest.get('tool_versions', {})}")
                                 try:
                                     proc = await asyncio.create_subprocess_exec(
                                         *cmd, cwd=tmp,
@@ -1203,6 +1236,36 @@ int main(int argc, char** argv) {{
                                                 yield log(f"[verilator] ✓ simulation complete. VCD saved as {vcd_name}", "success")
                                             else:
                                                 yield log("[verilator] simulation ran but no VCD was produced (add $dumpfile/$dumpvars in TB)", "warn")
+                                            if inp.coverage:
+                                                cov = summarize_coverage_dat(tmp)
+                                                if cov:
+                                                    cov_id = str(uuid.uuid4())
+                                                    await db.coverage_runs.insert_one({
+                                                        "id": cov_id,
+                                                        "project_id": inp.project_id,
+                                                        "user_id": user["id"],
+                                                        "simulation_id": sim_id,
+                                                        "source": cov.get("source", "verilator"),
+                                                        "overall": cov.get("overall", 0),
+                                                        "metrics": cov.get("metrics", []),
+                                                        "holes": cov.get("holes", []),
+                                                        "created_at": datetime.now(timezone.utc).isoformat(),
+                                                    })
+                                                    await db.simulations.update_one(
+                                                        {"id": sim_id},
+                                                        {"$set": {"coverage_run_id": cov_id, "coverage_summary": {
+                                                            "overall": cov.get("overall"),
+                                                            "count": cov.get("count"),
+                                                            "source": cov.get("source"),
+                                                        }}},
+                                                    )
+                                                    yield log(
+                                                        f"[coverage] overall={cov.get('overall')}% holes={len(cov.get('holes') or [])} (run {cov_id[:8]})",
+                                                        "success",
+                                                    )
+                                                    yield f"data: {json.dumps({'type':'coverage','coverage_run_id': cov_id, 'overall': cov.get('overall'), 'holes': cov.get('holes', [])[:20]})}\n\n"
+                                                else:
+                                                    yield log("[coverage] enabled but no coverage.dat found", "warn")
                                             status = "done"
                                         else:
                                             yield log("[verilator] executable not found after build", "error")
@@ -1705,11 +1768,60 @@ prep -top {top}
                                 lvl = "error" if "FAIL" in line or "ERROR" in line else ("success" if "PASS" in line else "info")
                                 yield log(line, lvl)
                             rc = await proc.wait()
+                            props = parse_sby_log("\n".join(logs))
+                            cex_fid = None
+                            for vcdp in find_cex_vcds(tmp)[:1]:
+                                try:
+                                    vcd_bytes = vcdp.read_bytes()
+                                    cex_fid = str(uuid.uuid4())
+                                    vcd_name = f"formal_cex_{top}_{formal_id[:8]}.vcd"
+                                    storage_path = None
+                                    try:
+                                        r = put_object(f"{APP_NAME}/projects/{inp.project_id}/{cex_fid}.vcd", vcd_bytes, "text/plain")
+                                        storage_path = r["path"]
+                                    except Exception:
+                                        pass
+                                    await db.files.insert_one({
+                                        "id": cex_fid,
+                                        "project_id": inp.project_id,
+                                        "original_filename": vcd_name,
+                                        "ext": "vcd",
+                                        "kind": "vcd",
+                                        "size": len(vcd_bytes),
+                                        "content_type": "text/plain",
+                                        "storage_path": storage_path,
+                                        "inline_content": vcd_bytes.decode("utf-8", errors="ignore") if storage_path is None else None,
+                                        "is_deleted": False,
+                                        "created_at": datetime.now(timezone.utc).isoformat(),
+                                    })
+                                    yield log(f"[sby] counterexample VCD saved as {vcd_name}", "warn")
+                                except Exception as e:
+                                    yield log(f"[sby] could not save CEX VCD: {e}", "warn")
+                            manifest = build_manifest(
+                                engine="sby",
+                                mode=inp.mode,
+                                command=cmd,
+                                top_module=top,
+                                file_hashes=sha256_paths(written),
+                                extra={"depth": inp.depth, "properties": props[:20]},
+                            )
+                            await db.formal_runs.update_one(
+                                {"id": formal_id},
+                                {"$set": {
+                                    "properties": props,
+                                    "cex_vcd_file_id": cex_fid,
+                                    "manifest": manifest,
+                                }},
+                            )
+                            if props:
+                                yield f"data: {json.dumps({'type':'properties','items': props})}\n\n"
+                            if cex_fid:
+                                yield f"data: {json.dumps({'type':'cex','file_id': cex_fid})}\n\n"
                             status = "done" if rc == 0 else "error"
                             if rc == 0:
                                 yield log("[sby] ✓ formal verification passed", "success")
                             elif saw_prep_error:
-                                yield log("[sby] NOTE: This environment ships Yosys 0.23 which is incompatible with the latest SBY 'formalff' pass. Full formal proofs need Yosys ≥ 0.35 built from source. For now, use the AI 'Formal Hints' module to draft SVA properties.", "warn")
+                                yield log("[sby] NOTE: This environment may ship an old Yosys incompatible with latest SBY 'formalff'. Prefer Yosys ≥ 0.35 / OSS CAD Suite. Use AI Formal Hints meanwhile.", "warn")
                             else:
                                 yield log(f"[sby] returned {rc} — see log for details.", "error")
                         except Exception as e:
@@ -1722,6 +1834,45 @@ prep -top {top}
 
     return StreamingResponse(evgen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+# ---- CDC / RDC heuristic analyzer (experimental) ----
+class CdcIn(BaseModel):
+    project_id: str
+    rtl_file_ids: List[str] = []
+
+
+@api.post("/cdc/analyze")
+async def cdc_analyze(inp: CdcIn, user=Depends(get_current_user)):
+    await require_project(inp.project_id, user["id"], "editor")
+    if not inp.rtl_file_ids:
+        raise HTTPException(400, "Provide at least one RTL file")
+    fdocs = await db.files.find(
+        {"id": {"$in": inp.rtl_file_ids}, "project_id": inp.project_id, "is_deleted": {"$ne": True}},
+        {"_id": 0},
+    ).to_list(50)
+    files = []
+    for f in fdocs:
+        text = _get_file_text(f)
+        if text:
+            files.append((f.get("original_filename") or f["id"], text))
+    result = analyze_rtl_texts(files)
+    run_id = str(uuid.uuid4())
+    doc = {
+        "id": run_id,
+        "project_id": inp.project_id,
+        "user_id": user["id"],
+        **result,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.cdc_runs.insert_one(doc)
+    result["cdc_run_id"] = run_id
+    return result
+
+
+@api.get("/projects/{pid}/cdc")
+async def list_cdc_runs(pid: str, user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "viewer")
+    return await db.cdc_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(30)
 
 # Add a new AI module: formal_hints (LLM)
 MODULE_PROMPTS["formal_hints"] = "You are a formal-verification expert. Given the RTL below, generate 8–12 SVA-style formal properties suitable for SymbiYosys / JasperGold: mix of `assert property`, `assume property`, and `cover property`. Include a short comment for each explaining the intent and expected proof depth. Output only SystemVerilog code."

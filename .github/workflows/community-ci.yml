@@ -30,7 +30,7 @@ jobs:
       - name: Offline backend checks (Ollama / compose / env / RAG)
         run: |
           cd backend
-          pytest tests/test_iteration_5.py tests/test_rag_and_golden.py tests/test_rtl_ports_and_feedback.py -n 0 \
+          pytest tests/test_iteration_5.py tests/test_rag_and_golden.py tests/test_rtl_ports_and_feedback.py tests/test_eda_industry.py -n 0 \
             -k "docker_compose or env_example or requirements or readme or available_providers or stream_chat or rag or golden"
 
       - name: Modelfiles present

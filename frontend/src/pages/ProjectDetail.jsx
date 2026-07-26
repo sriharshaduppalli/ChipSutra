@@ -4,11 +4,12 @@ import { api, API, getToken } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import Editor from "@monaco-editor/react";
-import { Upload, FileText, Cpu, Zap, Download, Loader2, X, ArrowLeft, Play, Users, Shield } from "lucide-react";
+import { Upload, FileText, Cpu, Zap, Download, Loader2, X, ArrowLeft, Play, Users, Shield, GitBranch } from "lucide-react";
 import ShareModal from "@/components/ShareModal";
 import SimulationPanel from "@/components/SimulationPanel";
 import CommentsPanel from "@/components/CommentsPanel";
 import FormalPanel from "@/components/FormalPanel";
+import CdcPanel from "@/components/CdcPanel";
 
 const MODULES = [
   { id: "testbench", label: "UVM Testbench", desc: "Scalable, reusable testbench with driver/monitor/scoreboard/sequences" },
@@ -46,6 +47,7 @@ export default function ProjectDetail() {
   const [showShare, setShowShare] = useState(false);
   const [showSim, setShowSim] = useState(false);
   const [showFormal, setShowFormal] = useState(false);
+  const [showCdc, setShowCdc] = useState(false);
   const [currentGenId, setCurrentGenId] = useState(null);
   const outputRef = useRef(null);
 
@@ -217,6 +219,7 @@ export default function ProjectDetail() {
         </div>
         <div className="flex gap-2">
           <button onClick={() => setShowFormal(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-formal"><Shield size={12} /> Formal</button>
+          <button onClick={() => setShowCdc(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-cdc"><GitBranch size={12} /> CDC</button>
           <button onClick={() => setShowSim(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-simulate"><Play size={12} /> Simulate</button>
           <button onClick={() => setShowShare(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-share"><Users size={12} /> Share ({project.collaborators?.length || 0})</button>
         </div>
@@ -368,6 +371,7 @@ export default function ProjectDetail() {
       {showShare && <ShareModal project={project} onClose={() => setShowShare(false)} onUpdate={load} />}
       {showSim && <SimulationPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowSim(false)} onVcdCreated={load} />}
       {showFormal && <FormalPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowFormal(false)} />}
+      {showCdc && <CdcPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowCdc(false)} />}
 
       {/* File preview modal */}
       {previewFile && (

@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { API, getToken } from "@/lib/api";
-import { Shield, Loader2, X, Play } from "lucide-react";
+import { Shield, Loader2, X, Play, Waves } from "lucide-react";
 import { toast } from "sonner";
+import { Link } from "react-router-dom";
 
 export default function FormalPanel({ project, selectedFileIds, onClose }) {
   const [running, setRunning] = useState(false);
@@ -11,6 +12,8 @@ export default function FormalPanel({ project, selectedFileIds, onClose }) {
   const [topModule, setTopModule] = useState("");
   const [depth, setDepth] = useState(10);
   const [mode, setMode] = useState("prove");
+  const [properties, setProperties] = useState([]);
+  const [cexFileId, setCexFileId] = useState(null);
 
   const rtlIds = selectedFileIds.filter(fid => {
     const f = (project.files || []).find(x => x.id === fid);
@@ -19,7 +22,7 @@ export default function FormalPanel({ project, selectedFileIds, onClose }) {
 
   const run = async () => {
     if (rtlIds.length === 0) { toast.error("Select at least one .v/.sv file"); return; }
-    setLogs([]); setStatus(null); setEngine(null); setRunning(true);
+    setLogs([]); setStatus(null); setEngine(null); setProperties([]); setCexFileId(null); setRunning(true);
     try {
       const res = await fetch(`${API}/formal/stream`, {
         method: "POST",
@@ -49,6 +52,8 @@ export default function FormalPanel({ project, selectedFileIds, onClose }) {
             const j = JSON.parse(line.slice(5).trim());
             if (j.type === "meta") setEngine(j.engine);
             else if (j.type === "log") setLogs(prev => [...prev, { level: j.level || "info", line: j.line }]);
+            else if (j.type === "properties") setProperties(j.items || []);
+            else if (j.type === "cex") setCexFileId(j.file_id);
             else if (j.type === "done") setStatus(j.status);
           } catch {}
         }
@@ -85,6 +90,16 @@ export default function FormalPanel({ project, selectedFileIds, onClose }) {
           </button>
         </div>
         <div className="p-2 border-b border-[#1E293B] font-mono text-[10px] text-slate-500">RTL must contain <span className="text-emerald-400">`assert property`</span>, <span className="text-emerald-400">`assume property`</span>, or <span className="text-emerald-400">`cover property`</span>. Use the AI module "Formal Hints" to draft them.</div>
+        {properties.length > 0 && (
+          <div className="px-4 py-2 border-b border-[#1E293B] max-h-28 overflow-auto">
+            <div className="font-mono text-[10px] text-slate-400 mb-1">PROPERTY TABLE</div>
+            {properties.map((p, i) => (
+              <div key={i} className={`font-mono text-[11px] ${p.status === "PASS" ? "text-emerald-400" : p.status === "FAIL" ? "text-red-400" : "text-slate-300"}`}>
+                [{p.status}] {p.name}
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex-1 overflow-auto bg-[#0B0E14] p-4 font-mono text-[11px] scanline">
           {logs.length === 0 && !running && (
             <div className="text-slate-500">
@@ -98,6 +113,11 @@ export default function FormalPanel({ project, selectedFileIds, onClose }) {
           {status && (
             <div className={`mt-4 p-2 border-l-2 ${status === 'done' ? 'border-emerald-500 text-emerald-400' : 'border-red-500 text-red-400'}`}>
               [{status.toUpperCase()}] Formal {status === 'done' ? 'proof completed' : 'ended with counterexamples'}
+              {cexFileId && (
+                <div className="mt-2 text-amber-400 flex items-center gap-1">
+                  <Waves size={12} /> CEX VCD saved. <Link to="/app/waveform" className="underline">Open Waveform →</Link>
+                </div>
+              )}
             </div>
           )}
         </div>
