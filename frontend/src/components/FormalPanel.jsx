@@ -115,7 +115,7 @@ export default function FormalPanel({ project, selectedFileIds, onClose }) {
               [{status.toUpperCase()}] Formal {status === 'done' ? 'proof completed' : 'ended with counterexamples'}
               {cexFileId && (
                 <div className="mt-2 text-amber-400 flex items-center gap-1">
-                  <Waves size={12} /> CEX VCD saved. <Link to="/app/waveform" className="underline">Open Waveform →</Link>
+                  <Waves size={12} /> CEX VCD saved. <Link to={`/app/waveform?pid=${project.id}&file_id=${cexFileId}`} className="underline">Open Waveform →</Link>
                 </div>
               )}
             </div>

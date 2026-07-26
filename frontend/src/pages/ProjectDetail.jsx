@@ -4,12 +4,14 @@ import { api, API, getToken } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import Editor from "@monaco-editor/react";
-import { Upload, FileText, Cpu, Zap, Download, Loader2, X, ArrowLeft, Play, Users, Shield, GitBranch } from "lucide-react";
+import { Upload, FileText, Cpu, Zap, Download, Loader2, X, ArrowLeft, Play, Users, Shield, GitBranch, Grid3X3, FlaskConical } from "lucide-react";
 import ShareModal from "@/components/ShareModal";
 import SimulationPanel from "@/components/SimulationPanel";
 import CommentsPanel from "@/components/CommentsPanel";
 import FormalPanel from "@/components/FormalPanel";
 import CdcPanel from "@/components/CdcPanel";
+import SynthPanel from "@/components/SynthPanel";
+import RegressionPanel from "@/components/RegressionPanel";
 
 const MODULES = [
   { id: "testbench", label: "UVM Testbench", desc: "Scalable, reusable testbench with driver/monitor/scoreboard/sequences" },
@@ -48,6 +50,8 @@ export default function ProjectDetail() {
   const [showSim, setShowSim] = useState(false);
   const [showFormal, setShowFormal] = useState(false);
   const [showCdc, setShowCdc] = useState(false);
+  const [showSynth, setShowSynth] = useState(false);
+  const [showRegression, setShowRegression] = useState(false);
   const [currentGenId, setCurrentGenId] = useState(null);
   const outputRef = useRef(null);
 
@@ -131,6 +135,19 @@ export default function ProjectDetail() {
 
   const toggleFile = (fid) => {
     setSelectedFileIds((prev) => prev.includes(fid) ? prev.filter(x => x !== fid) : [...prev, fid]);
+  };
+
+  const scaffoldCocotb = async () => {
+    const rtl = (project.files || []).find((f) => selectedFileIds.includes(f.id) && ["v", "sv"].includes((f.ext || "").toLowerCase()))
+      || (project.files || []).find((f) => ["v", "sv"].includes((f.ext || "").toLowerCase()));
+    if (!rtl) return toast.error("Select or upload an RTL file first");
+    try {
+      await api.post(`/projects/${pid}/scaffold/cocotb`, { rtl_file_id: rtl.id });
+      toast.success("cocotb Makefile and Python smoke test added");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not scaffold cocotb");
+    }
   };
 
   const generate = async () => {
@@ -217,9 +234,12 @@ export default function ProjectDetail() {
           <h1 className="font-display text-3xl font-bold">{project.name}</h1>
           <p className="font-mono text-xs text-slate-400 mt-1">{project.description || "—"}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <button onClick={() => setShowFormal(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-formal"><Shield size={12} /> Formal</button>
           <button onClick={() => setShowCdc(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-cdc"><GitBranch size={12} /> CDC</button>
+          <button onClick={() => setShowSynth(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-synth"><Cpu size={12} /> Synth</button>
+          <button onClick={() => setShowRegression(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-regression"><Grid3X3 size={12} /> Regression</button>
+          <button onClick={scaffoldCocotb} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-cocotb"><FlaskConical size={12} /> cocotb</button>
           <button onClick={() => setShowSim(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-simulate"><Play size={12} /> Simulate</button>
           <button onClick={() => setShowShare(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-share"><Users size={12} /> Share ({project.collaborators?.length || 0})</button>
         </div>
@@ -372,6 +392,8 @@ export default function ProjectDetail() {
       {showSim && <SimulationPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowSim(false)} onVcdCreated={load} />}
       {showFormal && <FormalPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowFormal(false)} />}
       {showCdc && <CdcPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowCdc(false)} />}
+      {showSynth && <SynthPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowSynth(false)} />}
+      {showRegression && <RegressionPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowRegression(false)} />}
 
       {/* File preview modal */}
       {previewFile && (

@@ -24,6 +24,7 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
   const [withCoverage, setWithCoverage] = useState(false);
   const [seed, setSeed] = useState("");
   const [coverageSummary, setCoverageSummary] = useState(null);
+  const [lintReport, setLintReport] = useState(null);
 
   useEffect(() => {
     fetch(`${API}/health`)
@@ -55,7 +56,7 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
       toast.error("Select at least one .v/.sv file in the Files list (left), or use Select all RTL.");
       return;
     }
-    setLogs([]); setStatus(null); setEngine(null); setVcdFileId(null); setCoverageSummary(null); setRunning(true);
+    setLogs([]); setStatus(null); setEngine(null); setVcdFileId(null); setCoverageSummary(null); setLintReport(null); setRunning(true);
     try {
       const res = await fetch(`${API}/simulate/stream`, {
         method: "POST",
@@ -69,6 +70,7 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
           sim_time_ns: simTime,
           coverage: mode === "run" && withCoverage,
           seed: seed === "" ? null : parseInt(seed, 10),
+          use_lint_policy: true,
         }),
       });
       if (!res.ok) {
@@ -93,6 +95,7 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
             if (j.type === "meta") setEngine(j.engine);
             else if (j.type === "log") setLogs(prev => [...prev, { level: j.level || "info", line: j.line }]);
             else if (j.type === "coverage") setCoverageSummary(j);
+            else if (j.type === "lint_report") setLintReport(j);
             else if (j.type === "done") { setStatus(j.status); if (j.vcd_file_id) { setVcdFileId(j.vcd_file_id); onVcdCreated && onVcdCreated(); } }
           } catch {}
         }
@@ -192,11 +195,16 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
           {status && (
             <div className={`mt-4 p-2 border-l-2 ${status === 'done' ? 'border-emerald-500 text-emerald-400' : 'border-red-500 text-red-400'}`}>
               [{status.toUpperCase()}] {status === 'done' ? 'Simulation completed successfully' : 'Simulation ended with errors'}
-              {vcdFileId && <div className="mt-2 text-emerald-400 flex items-center gap-1"><Waves size={12} /> VCD captured. <Link to="/app/waveform" className="underline">Open Waveform viewer →</Link></div>}
+              {vcdFileId && <div className="mt-2 text-emerald-400 flex items-center gap-1"><Waves size={12} /> VCD captured. <Link to={`/app/waveform?pid=${project.id}&file_id=${vcdFileId}`} className="underline">Open Waveform viewer →</Link></div>}
               {coverageSummary && (
                 <div className="mt-2 text-emerald-400">
                   Coverage overall {coverageSummary.overall}% · holes {coverageSummary.holes?.length || 0}
                   {" "}· <Link to="/app/coverage" className="underline">Coverage page →</Link>
+                </div>
+              )}
+              {lintReport && (
+                <div className="mt-2 text-slate-300">
+                  Lint policy: active {lintReport.counts?.active || 0} · waived {lintReport.counts?.waived || 0} · blocking {lintReport.counts?.blocking || 0}
                 </div>
               )}
             </div>

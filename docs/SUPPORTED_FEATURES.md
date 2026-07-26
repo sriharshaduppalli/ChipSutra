@@ -30,11 +30,12 @@ Optional cloud LLMs (Anthropic/OpenAI/Emergent) are **supported when configured*
 | Coverage upload parser | ✅ | Regex on `.rpt/.log/.txt/.csv`; optional project persist |
 | Verilator native coverage | 🧪 | Sim “coverage” toggle → `coverage_runs` |
 | Coverage heatmap / holes | ✅ | Holes = metrics &lt; 90% |
-| VCD waveform viewer | ✅ | Parsed subset; not full Verdi/DVE |
+| VCD waveform viewer | ✅ | Hierarchy/search/zoom/cursor; not full Verdi/DVE |
 | CDC / RDC analyzer | 🧪 | Heuristic v0 — Project **CDC** button |
 | Assertion debug (dedicated) | 📋 | Use **debug** + formal property table |
 | Auto test from holes (closed loop) | 📋 | Manual: run module then sim |
 | Run manifests | ✅ | Tool versions + argv + input hashes on sim/formal |
+| Lint policy / waivers | ✅ | `chipsutra.lint.json`; reason + owner required |
 
 ## Simulation & formal
 
@@ -45,6 +46,9 @@ Optional cloud LLMs (Anthropic/OpenAI/Emergent) are **supported when configured*
 | Sim seed / coverage flags | ✅ | UI + API |
 | SymbiYosys formal | 🧪 | Prefer OSS CAD Suite Yosys ≥ 0.35 in Docker |
 | Formal property table + CEX VCD | ✅ | When SBY produces traces |
+| Seeded regression matrix | ✅ | Sequential single-node matrix; max 20 cells |
+| Yosys synthesis / equivalence | 🧪 | Synth subset; internal pre/post optimization check |
+| cocotb scaffold | ✅ | Generates Makefile + Python smoke test; runner is manual |
 | Questa / VCS / Xcelium | ❌ | Enterprise roadmap |
 
 ## Platform

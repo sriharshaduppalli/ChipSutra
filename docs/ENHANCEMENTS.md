@@ -36,7 +36,12 @@ Prioritized for an India-first open-source EDA verification startup.
 |-----|-----------|
 | Coverage: regex only | UCIS/IMC parsers, merge across regressions |
 | No Questa/VCS/Xcelium | Enterprise adapters + job queue |
-| Formal: Yosys 0.23 | Ship Yosys ≥ 0.35 in Docker image |
+| Formal tool age | ✅ OSS CAD Suite path; keep pinned/reproducible |
+| No regression matrix | ✅ Sequential tests × seeds; parallel workers/trends next |
+| No synthesis sanity | ✅ Yosys synth + internal equivalence; eqy/OpenSTA next |
+| Weak lint governance | ✅ Project policy + owned waivers |
+| Basic waveform | ✅ VCD hierarchy/search/zoom/cursor; FST next |
+| Python TB path | ✅ cocotb scaffold; integrated runner next |
 | CI webhook stub | Worker: PR diff → lint → optional AI comment |
 | Closed-loop coverage | Upload → holes → auto `coverage_holes` → suggest re-run |
 

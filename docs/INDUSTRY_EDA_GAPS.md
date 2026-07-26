@@ -11,8 +11,8 @@ ChipSutra is an **AI verification copilot** with a growing OSS EDA engine layer 
 | Formal | 🧪 SymbiYosys (+ Yosys via OSS CAD Suite in Docker) | Jasper / VC Formal / Questa Formal |
 | Coverage | ✅ Upload parser + 🧪 Verilator `--coverage` persist | IMC / URG / UCIS |
 | CDC / RDC | 🧪 Heuristic v0 | Spyglass CDC / Questa CDC |
-| Waveform | ✅ Basic VCD | Verdi / DVE / Surfer |
-| Synthesis / LEC / STA | 📋 Planned (Yosys/eqy) | DC / Genus / Formality / PT |
+| Waveform | ✅ VCD hierarchy/search/zoom/cursor | Verdi / DVE / Surfer |
+| Synthesis / LEC / STA | 🧪 Yosys synth + internal equivalence; no STA | DC / Genus / Formality / PT |
 | Vendor adapters / farm / SSO | ❌ Enterprise | Native |
 
 ## Shipped toward industry credibility (this wave)
@@ -23,16 +23,21 @@ ChipSutra is an **AI verification copilot** with a growing OSS EDA engine layer 
 - Sim **seed** + coverage toggle in UI
 - **CDC/RDC v0** panel (`POST /cdc/analyze`)
 - Docker optional **OSS CAD Suite** for newer Yosys/SBY
+- Seeded **regression matrix** persisted in Mongo
+- Verilator **lint policy/waiver gate** (`chipsutra.lint.json`)
+- Yosys **synthesis + equivalence sanity**
+- VCD **hierarchy/search/zoom/cursor** and direct project-file loading
+- **cocotb scaffold** generation
 
 ## Still missing (priority)
 
-1. Multi-test **regression matrix** (N tests × seeds)
-2. Waveform zoom / hierarchy / FST
-3. Lint **waivers** + policy files
-4. Yosys **synth + eqy** LEC sanity on AI RTL
-5. **cocotb** path for OSS UVM-like flows
-6. Coverage **merge/trend** charts
-7. Structural CDC via Yosys JSON netlist (upgrade v0)
+1. Regression **trend/dashboard** and parallel workers
+2. **FST** ingestion and deeper waveform debug
+3. Full **eqy** LEC and synthesis artifact export
+4. One-click **cocotb runner** (scaffold shipped)
+5. Coverage **merge/trend** charts
+6. Structural CDC via Yosys JSON netlist (upgrade v0)
+7. SDC/STA sanity via OpenSTA
 
 ## Enterprise-only (by design)
 

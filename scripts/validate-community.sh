@@ -15,8 +15,8 @@ pip install -q -r backend/requirements-oss.txt
 
 echo "[3/5] pytest offline (compose, env, llm_provider, rag)..."
 cd backend
-pytest tests/test_iteration_5.py tests/test_rag_and_golden.py tests/test_rtl_ports_and_feedback.py tests/test_eda_industry.py -n 0 \
-  -k "docker_compose or env_example or requirements or readme or available_providers or stream_chat or rag or golden"
+pytest tests/test_iteration_5.py tests/test_rag_and_golden.py tests/test_rtl_ports_and_feedback.py tests/test_eda_industry.py tests/test_credibility_targets.py -n 0 \
+  -k "docker_compose or env_example or requirements or readme or available_providers or stream_chat or rag or golden or lint_policy or lint_waiver or yosys or cocotb"
 
 echo "[4/5] modelfiles..."
 test -f ../models/chipsutra-vlsi/Modelfile.3b

@@ -150,8 +150,12 @@ Then click **Simulate → Compile + Run** and get a real VCD trace back, viewabl
 
 ### 🔬 Real Verification Toolchain
 - **Verilator** lint + compile + run + VCD capture
+- Seeded **regression matrix** + Verilator coverage persistence
+- Project **lint policy / waivers**
 - **SymbiYosys** formal verification (Yosys + Z3 SMT)
-- In-browser **VCD waveform viewer** (WaveDrom-style)
+- **Yosys synthesis + equivalence sanity**
+- In-browser **VCD waveform viewer** with hierarchy/search/zoom/cursor
+- Experimental **CDC/RDC** analysis + **cocotb scaffold**
 - **Coverage** heatmap + hole ranking
 - **Monaco** code editor with SV syntax highlighting
 

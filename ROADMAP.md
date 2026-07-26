@@ -26,19 +26,22 @@ ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement
 - [x] Keyword RAG (`backend/knowledge/`) + RTL port injection + lint/sim fix-loop (`tool_log`)
 - [x] Verilator coverage persist + run manifests + formal CEX/property table
 - [x] CDC/RDC heuristic analyzer (experimental)
+- [x] Seeded multi-test regression matrix (single-node, max 20 cells)
+- [x] Project lint policy + owned/reasoned waivers (`chipsutra.lint.json`)
+- [x] Yosys synthesis + pre/post optimization equivalence sanity
+- [x] VCD hierarchy/search/zoom/cursor + direct sim/formal links
+- [x] cocotb project scaffold (runner remains local/Docker)
 
 ## In progress (Community — next 90 days)
 
 - [ ] Pre-built GHCR Docker images (`docker publish` on git tag `v*`) — see `.github/workflows/docker-publish.yml`
-- [ ] Multi-test regression matrix (N tests × seeds)
 - [ ] Closed-loop: coverage upload → `coverage_holes` → re-sim suggestion
 - [ ] Auto-attach Verilator output from Simulation panel into `tool_log`
-- [ ] Waveform zoom / hierarchy / FST
-- [ ] Lint waivers + policy gate
-- [ ] Yosys synth + eqy LEC on AI-generated RTL
+- [ ] FST waveform ingestion
+- [ ] Full eqy LEC flow beyond Yosys internal equivalence sanity
 - [ ] Embedding / vector RAG for larger libraries
 - [ ] UCIS / industry coverage format adapters (beyond regex `.rpt`)
-- [ ] cocotb support for OSS class-based TBs
+- [ ] One-click cocotb runner (scaffold is shipped)
 - [ ] Redis rate limiter for multi-replica deploys
 - [ ] Regression dashboard (pass/fail trends per project)
 - [ ] Golden DUT suite beyond `counter.sv` (FIFO, AXI-lite slave)
