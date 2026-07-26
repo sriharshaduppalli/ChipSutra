@@ -76,8 +76,15 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y verilator
 
       - name: Lint golden DUTs
+        working-directory: backend/knowledge/golden
         run: |
-          for f in backend/knowledge/golden/*.sv; do
-            echo "== $f"
-            verilator --lint-only -Wno-fatal "$f"
-          done
+          verilator --lint-only -Wall fifo.sv
+          verilator --lint-only -Wall axi_lite_slave.sv
+
+      - name: Lint golden testbenches with their DUT
+        working-directory: backend/knowledge/golden
+        # A testbench cannot resolve its DUT standalone, and needs --timing for delays.
+        run: |
+          verilator --lint-only --timing --top-module fifo_tb fifo.sv fifo_tb.sv
+          verilator --lint-only --timing --top-module axi_lite_slave_tb \
+            axi_lite_slave.sv axi_lite_slave_tb.sv

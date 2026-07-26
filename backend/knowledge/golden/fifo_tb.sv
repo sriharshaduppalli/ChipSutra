@@ -1,7 +1,10 @@
 // Golden testbench — self-checking directed tests for fifo.sv
 //
-// Run in ChipSutra (Simulate → run) or:
-//   verilator --binary --timing --trace --top-module fifo_tb fifo.sv fifo_tb.sv
+// Run in ChipSutra (Simulate → run) or from a shell:
+//   $ verilator --binary --timing --trace --top-module fifo_tb fifo.sv fifo_tb.sv
+//
+// (the "$ " matters: Verilator reads a comment starting with "verilator" as a
+//  lint pragma and errors on it)
 `timescale 1ns / 1ps
 
 module fifo_tb;
