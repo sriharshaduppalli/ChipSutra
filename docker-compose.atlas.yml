@@ -47,7 +47,10 @@ services:
     ports:
       - "8001:8001"
     env_file:
-      - ./backend/.env
+      # Optional so `docker compose config` works on a fresh clone; the Atlas
+      # stack still needs a real backend/.env at runtime for MONGO_URL.
+      - path: ./backend/.env
+        required: false
     environment:
       STORAGE_MODE: local
       STORAGE_LOCAL_PATH: /app/storage
