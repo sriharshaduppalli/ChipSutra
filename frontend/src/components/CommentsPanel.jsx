@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { MessageSquare, Trash2 } from "lucide-react";
 import { toast } from "sonner";
@@ -8,14 +8,14 @@ export default function CommentsPanel({ generationId, currentUserId }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const { data } = await api.get(`/generations/${generationId}/comments`);
       setComments(data);
     } catch {}
-  };
+  }, [generationId]);
 
-  useEffect(() => { if (generationId) load(); }, [generationId]);
+  useEffect(() => { if (generationId) load(); }, [generationId, load]);
 
   const submit = async (e) => {
     e.preventDefault();

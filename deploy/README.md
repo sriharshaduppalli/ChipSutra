@@ -34,9 +34,13 @@ Open `https://chipsutra.org` — register, upload RTL, Generate, Simulate (engin
 
 ## 5. Updates
 
+Merging to `main` deploys automatically once the deploy secrets are configured —
+see [docs/AUTOMATION.md](../docs/AUTOMATION.md).
+
+Manual fallback (same script CI runs):
+
 ```bash
-git pull
-docker compose -f docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
+cd /opt/chipsutra && ./scripts/deploy-prod.sh main
 ```
 
 ## Caddy notes

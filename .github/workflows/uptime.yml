@@ -1,0 +1,49 @@
+name: Production uptime check
+
+# Catches a dead or degraded chipsutra.org without anyone checking manually.
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Probe API and app
+        id: probe
+        run: |
+          chmod +x scripts/prod-smoke.sh
+          ./scripts/prod-smoke.sh \
+            "${{ vars.PUBLIC_API_URL || 'https://api.chipsutra.org' }}" \
+            "${{ vars.PUBLIC_APP_URL || 'https://chipsutra.org' }}"
+
+      - name: Open or update an incident issue
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = 'Production health check failing';
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = `Automated uptime probe failed.\n\nRun: ${run}\nTime: ${new Date().toISOString()}`;
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'incident',
+            });
+            const hit = existing.data.find(i => i.title === title);
+            if (hit) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo,
+                issue_number: hit.number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo,
+                title, body, labels: ['incident'],
+              });
+            }

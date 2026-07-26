@@ -1,0 +1,23 @@
+# Normalize text in the repo; keep anything Linux executes as LF regardless of
+# the contributor's OS (a CRLF entrypoint breaks `/bin/sh` inside containers).
+* text=auto
+
+*.sh            text eol=lf
+Dockerfile      text eol=lf
+*.Dockerfile    text eol=lf
+Makefile        text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+Caddyfile*      text eol=lf
+ollama-bootstrap.sh text eol=lf
+
+*.ps1           text eol=crlf
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.vcd -text
+*.fst binary

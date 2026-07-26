@@ -150,13 +150,14 @@ Then click **Simulate → Compile + Run** and get a real VCD trace back, viewabl
 
 ### 🔬 Real Verification Toolchain
 - **Verilator** lint + compile + run + VCD capture
-- Seeded **regression matrix** + Verilator coverage persistence
+- Seeded **regression matrix** (parallel workers, coverage, trends)
 - Project **lint policy / waivers**
 - **SymbiYosys** formal verification (Yosys + Z3 SMT)
-- **Yosys synthesis + equivalence sanity**
+- **Yosys synthesis / equivalence / eqy LEC** (eqy optional; falls back) + synth artifacts
+- **OpenSTA** SDC/TCL scaffold (liberty still required for real STA)
 - In-browser **VCD waveform viewer** with hierarchy/search/zoom/cursor
-- Experimental **CDC/RDC** analysis + **cocotb scaffold**
-- **Coverage** heatmap + hole ranking
+- Experimental **CDC/RDC** (heuristic + Yosys JSON) + **cocotb** scaffold/runner
+- **Coverage** heatmap + hole ranking + trends/merge
 - **Monaco** code editor with SV syntax highlighting
 
 </td></tr>
@@ -378,6 +379,9 @@ Contributions are welcome. Please:
 2. Create a feature branch (`git checkout -b feat/my-feature`)
 3. Run **`./scripts/validate-community.sh`** (or `scripts/validate-community.ps1` on Windows)
 4. Submit a PR against `main`
+
+CI runs the same checks on every PR, and a merge to `main` builds, publishes images,
+and deploys chipsutra.org on its own — see **[docs/AUTOMATION.md](./docs/AUTOMATION.md)**.
 
 See **[docs/CONTRIBUTOR_GUIDE.md](./docs/CONTRIBUTOR_GUIDE.md)** and **[docs/SUPPORTED_FEATURES.md](./docs/SUPPORTED_FEATURES.md)**.
 

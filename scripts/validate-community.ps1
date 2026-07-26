@@ -12,10 +12,11 @@ docker compose -f docker-compose.prod.yml --env-file deploy/env.prod.example con
 Write-Host "[2/5] pip install OSS requirements..."
 python -m pip install -q -r backend/requirements-oss.txt
 
-Write-Host "[3/5] pytest offline..."
-Set-Location backend
-python -m pytest tests/test_iteration_5.py tests/test_rag_and_golden.py tests/test_rtl_ports_and_feedback.py tests/test_eda_industry.py tests/test_credibility_targets.py -n 0 `
-  -k "docker_compose or env_example or requirements or readme or available_providers or stream_chat or rag or golden or lint_policy or lint_waiver or yosys or cocotb"
+Write-Host "[3/5] pytest offline (full suite)..."
+python scripts/check_source_sanity.py
+if ($LASTEXITCODE -ne 0) { throw "source sanity check failed" }
+python scripts/run_offline_tests.py
+if ($LASTEXITCODE -ne 0) { throw "offline test suite failed" }
 
 Set-Location $Root
 Write-Host "[4/5] modelfiles..."

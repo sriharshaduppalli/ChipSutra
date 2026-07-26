@@ -1,0 +1,46 @@
+name: Release
+
+# Tag -> GitHub Release with generated notes. No manual release writing.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build release notes
+        id: notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PREV="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+          {
+            echo "notes<<EOF"
+            if [ -n "$PREV" ]; then
+              echo "### Changes since ${PREV}"
+              git log --no-merges --pretty='- %s' "${PREV}..${TAG}"
+            else
+              echo "### Changes"
+              git log --no-merges --pretty='- %s' -n 50
+            fi
+            echo ""
+            echo "### Images"
+            echo "- \`ghcr.io/${GITHUB_REPOSITORY}-backend:${TAG#v}\`"
+            echo "- \`ghcr.io/${GITHUB_REPOSITORY}-frontend:${TAG#v}\`"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.notes.outputs.notes }}
+          generate_release_notes: true

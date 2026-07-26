@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { UserPlus, X, Users, Crown } from "lucide-react";
 import { toast } from "sonner";
@@ -9,14 +9,14 @@ export default function ShareModal({ project, onClose, onUpdate }) {
   const [role, setRole] = useState("editor");
   const [busy, setBusy] = useState(false);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const { data } = await api.get(`/projects/${project.id}/collaborators`);
       setCollabs(data);
     } catch {}
-  };
+  }, [project.id]);
 
-  useEffect(() => { load(); }, [project.id]);
+  useEffect(() => { load(); }, [load]);
 
   const invite = async (e) => {
     e.preventDefault();
