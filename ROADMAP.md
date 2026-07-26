@@ -1,6 +1,6 @@
 # Public roadmap — ChipSutra
 
-Last updated: 2026-07-25
+Last updated: 2026-07-26
 
 ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement). This roadmap splits **Community (open source)** from **Enterprise (commercial, future)**.
 
@@ -22,16 +22,20 @@ ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement
 - [x] SymbiYosys formal (best-effort; Yosys version notes)
 - [x] Coverage report parser + waveform (VCD) viewer
 - [x] Workspaces, roles, notifications, templates, CI template
-- [x] **ChipSutra-VLSI** custom Ollama model (default in Docker)
+- [x] **ChipSutra-VLSI** custom Ollama model (default in Docker) — **v1.2.0** protocol index
+- [x] Keyword RAG (`backend/knowledge/`) + RTL port injection + lint/sim fix-loop (`tool_log`)
 
 ## In progress (Community — next 90 days)
 
 - [ ] Pre-built GHCR Docker images (`docker publish` on git tag `v*`) — see `.github/workflows/docker-publish.yml`
 - [ ] Closed-loop: coverage upload → `coverage_holes` → re-sim suggestion
+- [ ] Auto-attach Verilator output from Simulation panel into `tool_log`
+- [ ] Embedding / vector RAG for larger libraries
 - [ ] UCIS / industry coverage format adapters (beyond regex `.rpt`)
 - [ ] Yosys ≥ 0.35 in default Docker image
 - [ ] Redis rate limiter for multi-replica deploys
 - [ ] Regression dashboard (pass/fail trends per project)
+- [ ] Golden DUT suite beyond `counter.sv` (FIFO, AXI-lite slave)
 
 ## Enterprise backlog (not in OSS unless contributed)
 

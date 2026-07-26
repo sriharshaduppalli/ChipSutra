@@ -29,10 +29,12 @@ if [ -f "$SRC/VERSION" ]; then
 fi
 KNOW="$ROOT/backend/knowledge"
 mkdir -p "$KNOW"
-if [ -f "$SRC/prompts/vlsi_protocols_compact.txt" ]; then
-  cp "$SRC/prompts/vlsi_protocols_compact.txt" "$KNOW/vlsi_protocols_compact.txt"
-  echo "[sync] updated $KNOW/vlsi_protocols_compact.txt"
-fi
+for f in vlsi_protocols_compact.txt vlsi_soc_dft_power.txt vlsi_verification_glossary.txt; do
+  if [ -f "$SRC/prompts/$f" ]; then
+    cp "$SRC/prompts/$f" "$KNOW/$f"
+    echo "[sync] updated $KNOW/$f"
+  fi
+done
 # Keep bootstrap script in ChipSutra (not overwritten)
 echo "[sync] updated $DEST from $SRC"
 echo "[sync] VERSION=$(cat "$DEST/VERSION" 2>/dev/null || echo unknown)"

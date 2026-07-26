@@ -9,16 +9,20 @@
 
 ## When you change the LLM
 
-1. Edit **ChipSutra-VLSI-LLM** (`modelfiles/`, `prompts/`, bump `VERSION`).
-2. Tag upstream e.g. `v1.1.0`.
+1. Edit **ChipSutra-VLSI-LLM** (`modelfiles/` SYSTEM text, `prompts/` RAG files, bump `VERSION`).
+2. Tag upstream e.g. `v1.2.0`.
 3. Sync into ChipSutra:
    - **Local:** `./scripts/sync-vlsi-llm.sh` or `.\scripts\sync-vlsi-llm.ps1`
    - **GitHub:** Actions → **Sync ChipSutra-VLSI modelfiles** → merge PR
-4. Rebuild Ollama tags on servers (`ollama create …`) or redeploy Compose (bootstrap skips if tag exists — delete tag to force recreate).
+4. Rebuild Ollama tags:
+   - Compose `ollama-bootstrap` recreates when `VERSION` changes (or set `OLLAMA_FORCE_RECREATE=1`)
+   - Native: `ollama create chipsutra-vlsi:3b -f models/chipsutra-vlsi/Modelfile.3b`
+
+Synced RAG files: `vlsi_protocols_compact.txt`, `vlsi_soc_dft_power.txt`, `vlsi_verification_glossary.txt`.
 
 ## Compose
 
-All compose files use **`ollama-bootstrap`** (not separate pull/create). Set in `.env` or shell:
+All compose files use **`ollama-bootstrap`**. Set in `.env` or shell:
 
 ```env
 OLLAMA_MODEL=chipsutra-vlsi:7b
@@ -26,11 +30,11 @@ OLLAMA_MODEL=chipsutra-vlsi:7b
 
 ## Optional git submodule
 
-For developers who want both repos fixed at a commit:
-
 ```bash
 git submodule add https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM.git external/ChipSutra-VLSI-LLM
 CHIPSUTRA_VLSI_LLM_REPO=external/ChipSutra-VLSI-LLM ./scripts/sync-vlsi-llm.sh
 ```
 
 Submodule is **optional**; vendored copy keeps single-repo clones simple.
+
+See also: [LLM_ACCURACY.md](./LLM_ACCURACY.md), [ENHANCEMENTS.md](./ENHANCEMENTS.md).

@@ -14,8 +14,10 @@ GOLDEN_COUNTER = REPO / "backend" / "knowledge" / "golden" / "counter.sv"
 def test_rag_status_has_protocol_chunks():
     st = rag_status()
     assert st["enabled"] is True
-    assert st["chunk_count"] >= 3
+    assert st["chunk_count"] >= 15
     assert "vlsi_protocols_compact.txt" in st["sources"]
+    assert "vlsi_soc_dft_power.txt" in st["sources"]
+    assert "vlsi_verification_glossary.txt" in st["sources"]
 
 
 def test_rag_retrieves_can_for_can_ip_prompt():
@@ -28,6 +30,24 @@ def test_rag_retrieves_axi_for_axi_prompt():
     chunks = retrieve("AXI4 valid ready handshake", module="assertions")
     blob = " ".join(c["title"] + c["body"] for c in chunks).lower()
     assert "axi" in blob
+
+
+def test_rag_retrieves_jtag_dft():
+    chunks = retrieve("JTAG TAP boundary scan DFT", module="testbench")
+    blob = " ".join(c["title"] + c["body"] for c in chunks).lower()
+    assert "jtag" in blob or "tap" in blob or "scan" in blob
+
+
+def test_rag_retrieves_cdc():
+    chunks = retrieve("async FIFO CDC metastability 2FF", module="debug")
+    blob = " ".join(c["title"] + c["body"] for c in chunks).lower()
+    assert "cdc" in blob or "fifo" in blob or "metastability" in blob
+
+
+def test_rag_retrieves_tilelink():
+    chunks = retrieve("TileLink TL-UL Get Put RISC-V", module="testbench")
+    blob = " ".join(c["title"] + c["body"] for c in chunks).lower()
+    assert "tilelink" in blob or "tl-" in blob
 
 
 def test_rag_augment_disabled(monkeypatch):

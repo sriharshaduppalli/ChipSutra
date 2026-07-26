@@ -16,10 +16,11 @@ Prioritized for an India-first open-source EDA verification startup.
 
 | Gap | Direction |
 |-----|-----------|
-| LLM-only generation | Parse RTL (Slang/Verilator frontend) → pass port list into prompts |
-| Generic system prompts | ChipSutra-VLSI-LLM v1.1 protocol appendix + RAG roadmap — [LLM_ACCURACY.md](./LLM_ACCURACY.md) |
+| LLM-only generation | ✅ Parse RTL ports (`rtl_ports.py`) → inject into Generate; richer AST later |
+| Generic system prompts | ChipSutra-VLSI-LLM **v1.2** protocol index + expanded RAG — [LLM_ACCURACY.md](./LLM_ACCURACY.md) |
 | No golden regression suite | Curated DUTs (Ibex, counters, FIFO) + expected SVA/TB snippets |
 | Spec→RTL oversold | Mark 🧪 in UI; require spec checklist before generate |
+| No closed tool loop | ✅ `tool_log` / `prior_output` API + Project UI paste-log field |
 
 ## P1 — Speed
 

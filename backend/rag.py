@@ -13,25 +13,53 @@ from typing import Iterable, List, Optional, Sequence
 
 KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
 
+# Not RAG corpus (Modelfile authoring / internal)
+_SKIP_KNOWLEDGE_FILES = frozenset({"vlsi_system.txt", "readme.txt"})
+
 # Boost retrieval when module or filenames hint at a domain
 MODULE_HINTS: dict[str, tuple[str, ...]] = {
-    "testbench": ("uvm", "sequence", "driver", "monitor", "scoreboard"),
-    "assertions": ("sva", "assert", "property", "formal"),
-    "debug": ("uvm_error", "simulation", "debug", "log", "timeout"),
-    "coverage_holes": ("coverage", "bin", "cross", "hole"),
+    "testbench": ("uvm", "sequence", "driver", "monitor", "scoreboard", "agent", "verilator"),
+    "assertions": ("sva", "assert", "property", "formal", "handshake"),
+    "checkers": ("checker", "scoreboard", "protocol"),
+    "covergroups": ("coverage", "bin", "cross", "covergroup"),
+    "debug": ("uvm_error", "simulation", "debug", "log", "timeout", "x propagation", "verilator"),
+    "coverage_holes": ("coverage", "bin", "cross", "hole", "sequence"),
     "formal_hints": ("sva", "assume", "cover", "formal"),
 }
 
 PROTOCOL_ALIASES: dict[str, tuple[str, ...]] = {
-    "can": ("can", "can-fd", "bus-off", "can_ip"),
-    "axi": ("axi", "axi4", "axi-lite", "valid", "ready"),
-    "apb": ("apb", "psel", "penable"),
-    "pcie": ("pcie", "tlp", "completion"),
-    "i2c": ("i2c", "sda", "scl"),
-    "spi": ("spi", "cpol", "cpha"),
-    "uart": ("uart", "baud"),
-    "ddr": ("ddr", "lpddr", "memory controller"),
-    "uvm": ("uvm", "uvm_env", "sequence"),
+    "can": ("can", "can-fd", "bus-off", "can_ip", "iso 11898"),
+    "lin": ("lin", "lin bus"),
+    "flexray": ("flexray", "tdma"),
+    "axi": ("axi", "axi4", "axi-lite", "axilite", "valid", "ready", "awvalid"),
+    "ace": ("ace", "ace-lite", "snoop", "coherency"),
+    "chi": ("chi", "amba chi", "flit"),
+    "apb": ("apb", "psel", "penable", "pready"),
+    "ahb": ("ahb", "htrans", "hready", "hburst"),
+    "axis": ("axis", "axi-stream", "axi stream", "tvalid", "tlast"),
+    "wishbone": ("wishbone", "wbm", "wbs", "cyc", "stb"),
+    "avalon": ("avalon", "waitrequest", "readdatavalid"),
+    "tilelink": ("tilelink", "tl-ul", "tl-uh", "tl-c"),
+    "pcie": ("pcie", "tlp", "completion", "ltssm"),
+    "cxl": ("cxl", "cxl.io", "cxl.cache"),
+    "ethernet": ("ethernet", "rgmii", "gmii", "mii", "mdio", "mac", "pcs"),
+    "ddr": ("ddr", "lpddr", "hbm", "memory controller", "dfi"),
+    "sram": ("sram", "rf ", "byte enable", "ecc"),
+    "i2c": ("i2c", "sda", "scl", "smbus"),
+    "i3c": ("i3c", "ccc", "ibi"),
+    "spi": ("spi", "cpol", "cpha", "qspi", "flash"),
+    "uart": ("uart", "baud", "usart"),
+    "i2s": ("i2s", "tdm", "pdm", "audio"),
+    "usb": ("usb", "utmi", "ulpi", "ltssm"),
+    "mipi": ("mipi", "csi", "dsi", "d-phy"),
+    "jtag": ("jtag", "tap", "tdi", "tdo", "tms", "boundary scan"),
+    "swd": ("swd", "swclk", "swdio"),
+    "dft": ("dft", "scan", "mbist", "lbist", "atpg", "occ"),
+    "cdc": ("cdc", "async fifo", "metastability", "2ff", "rdc"),
+    "upf": ("upf", "power domain", "isolation", "retention"),
+    "ucie": ("ucie", "bow", "chiplet", "die-to-die", "aib"),
+    "riscv": ("risc-v", "riscv", "plic", "clint", "pmp"),
+    "uvm": ("uvm", "uvm_env", "sequence", "ral", "scoreboard"),
 }
 
 
@@ -50,6 +78,8 @@ def load_chunks(knowledge_dir: Optional[Path] = None) -> List[dict]:
         return []
     chunks: List[dict] = []
     for path in sorted(root.glob("*.txt")):
+        if path.name.lower() in _SKIP_KNOWLEDGE_FILES:
+            continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         parts = re.split(r"(?m)^##\s+", text)
         if len(parts) <= 1:
@@ -64,15 +94,19 @@ def load_chunks(knowledge_dir: Optional[Path] = None) -> List[dict]:
     return chunks
 
 
-def _score_chunk(query_tokens: set[str], chunk: dict, extra_terms: Sequence[str]) -> float:
+def _score_chunk(query_tokens: set[str], chunk: dict, extra_terms: Sequence[str], protocol_terms: Sequence[str]) -> float:
     blob = f"{chunk['title']} {chunk['body']}".lower()
     ctoks = _tokenize(blob)
     if not ctoks:
         return 0.0
     overlap = len(query_tokens & ctoks)
+    for term in protocol_terms:
+        if term.lower() in blob:
+            overlap += 6
     for term in extra_terms:
         if term.lower() in blob:
-            overlap += 3
+            # Module hints only lightly boost unless also in the user query
+            overlap += 2 if term.lower() in query_tokens else 1
     return overlap - (len(chunk["body"]) / 8000.0)
 
 
@@ -81,7 +115,7 @@ def retrieve(
     *,
     module: str = "",
     filenames: Optional[Iterable[str]] = None,
-    top_k: int = 3,
+    top_k: int = 4,
     knowledge_dir: Optional[Path] = None,
 ) -> List[dict]:
     chunks = load_chunks(knowledge_dir)
@@ -90,11 +124,12 @@ def retrieve(
     q = " ".join(filter(None, [query, module, " ".join(filenames or [])]))
     qtok = _tokenize(q)
     extra: List[str] = list(MODULE_HINTS.get(module, ()))
+    protocol_terms: List[str] = []
     combined = q.lower()
     for _key, aliases in PROTOCOL_ALIASES.items():
         if any(a in combined for a in aliases):
-            extra.extend(aliases[:2])
-    scored = [( _score_chunk(qtok, c, extra), c) for c in chunks]
+            protocol_terms.extend(aliases)
+    scored = [(_score_chunk(qtok, c, extra, protocol_terms), c) for c in chunks]
     scored.sort(key=lambda x: x[0], reverse=True)
     out = [c for s, c in scored if s > 0][:top_k]
     if not out and chunks:
@@ -117,7 +152,7 @@ def augment_generation_context(
     module: str,
     prompt: str,
     filenames: Optional[Iterable[str]] = None,
-    top_k: int = 3,
+    top_k: int = 4,
 ) -> str:
     if not _enabled():
         return ""

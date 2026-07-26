@@ -96,20 +96,80 @@ Browser: http://localhost:8001/api/health — should return `"status": "healthy"
 
 If startup fails with **SSL handshake failed** to `*.mongodb.net`:
 
-1. **Use Python 3.11 or 3.12** for the backend (recommended). **Python 3.14** on Windows often cannot complete TLS with Atlas yet.  
-   Check: `python --version`  
-   Install: https://www.python.org/downloads/ (3.12.x), then:
-   ```powershell
-   cd ChipSutra\backend
-   py -3.12 -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   pip install -r requirements-oss.txt
-   python -m uvicorn server:app --host 0.0.0.0 --port 8001
-   ```
-2. **Atlas Network Access** — allow your IP or `0.0.0.0/0` (dev).  
-3. **Connection string** — copy fresh from Atlas → Connect → Drivers; URL-encode special characters in the password.  
-4. **VPN / antivirus** — try off or another network; some intercept HTTPS/TLS.  
-5. **Docker backend** — run API inside the Linux container (uses Debian OpenSSL); keep Atlas `MONGO_URL` in `backend/.env`.
+### 1. Atlas Network Access (most common)
+
+Atlas often returns **`TLSV1_ALERT_INTERNAL_ERROR`** when your **IP is not allowed** — not because Python or certificates are wrong.
+
+1. Open [MongoDB Atlas](https://cloud.mongodb.com/) → your project → **Network Access**.
+2. **Add IP Address** → **Add Current IP Address**, or for local dev only: **Allow Access from Anywhere** (`0.0.0.0/0`).
+3. Wait **1–2 minutes**, then retry.
+
+Check your public IPv4 (Atlas whitelist is usually IPv4):
+
+```powershell
+curl -4 https://ifconfig.me/ip
+```
+
+Add that address as `/32` in Network Access if you do not use `0.0.0.0/0`.
+
+Diagnostic (does not print your password):
+
+```powershell
+cd backend
+.\.venv\Scripts\Activate.ps1
+python scripts/test_mongo_connect.py
+```
+
+If **raw TLS** to the shard host fails with the same alert, whitelist/VPN is the fix — not certifi.
+
+### 2. Connection string
+
+Use the Atlas **Drivers** string and include the database name:
+
+```env
+MONGO_URL="mongodb+srv://USER:PASS@cluster....mongodb.net/chipsutra_db?retryWrites=true&w=majority"
+DB_NAME=chipsutra_db
+```
+
+URL-encode special characters in the password.
+
+### 3. Python version (Windows)
+
+Use **Python 3.11 or 3.12** for the backend. **Python 3.14** can also fail TLS with Atlas on Windows.
+
+```powershell
+cd ChipSutra\backend
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements-oss.txt
+python -m uvicorn server:app --host 0.0.0.0 --port 8001
+```
+
+### 4. VPN / antivirus
+
+Disable VPN or “HTTPS scanning” temporarily and retry.
+
+### 5. Dev fallback — local MongoDB in Docker
+
+If Atlas is blocked on your network, run Mongo locally and point the backend at it:
+
+```powershell
+cd ChipSutra
+docker compose up mongo -d
+```
+
+In `backend/.env`:
+
+```env
+MONGO_URL=mongodb://127.0.0.1:27017
+DB_NAME=chipsutra_db
+```
+
+Then start uvicorn again. (Data is separate from Atlas.)
+
+### 6. Docker backend + Atlas
+
+Run the API in Linux container: `docker compose -f docker-compose.atlas.yml up --build` with Atlas `MONGO_URL` in `backend/.env`.
 
 ChipSutra sets `tlsCAFile` via **certifi** for `mongodb+srv://` URLs automatically.
 

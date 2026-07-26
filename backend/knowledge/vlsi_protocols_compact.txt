@@ -1,30 +1,118 @@
-# Synced from ChipSutra-VLSI-LLM prompts/vlsi_protocols_compact.txt via scripts/sync-vlsi-llm.sh
+# Compact protocol / methodology reference (ChipSutra-VLSI-LLM v1.2+)
+# Canonical: ChipSutra-VLSI-LLM/prompts/ — synced to ChipSutra backend/knowledge/
+# ALWAYS prefer user RTL/spec signal names, widths, and timing. Do not invent JEDEC/vendor numbers.
 
-## Bus / interface cheat-sheet (verify against user RTL — do not invent signals)
-- AXI4/AXI4-Lite: valid/ready handshakes; AW/W/B read/write channels; AR/R; xVALID must not depend on xREADY; reset quiescence.
-- APB: PSEL, PENABLE two-phase; setup then access; PREADY stretches; PSLVERR for errors.
-- AHB: HTRANS, HREADY, HRESP; wait states; burst types HBURST.
-- AXI-Stream: TVALID/TREADY, TLAST, TKEEP; backpressure on ready.
-- PCIe: TLP types (MRd/MWr/Cfg); completion timeout; DLLP/PLP — usually higher-level VIP, not gate-level in TB.
-- CAN / CAN-FD: frame (SOF, ID, DLC, CRC, ACK); bit stuffing; error states (bus-off); ISO 11898 timing from user spec.
-- I2C: START/STOP, SDA/SCL, ACK/NACK; clock stretching.
-- SPI: CPOL/CPHA modes; CS active; full-duplex shift.
-- UART: start bit, data, parity optional, stop; baud-derived sampling.
-- Ethernet MAC/PHY (MII/GMII/RGMII): frame, preamble, FCS — check user PHY interface.
-- DDR/LPDDR: training, refresh, banks — use memory controller docs; do not guess timing.
+## AMBA on-chip buses (AXI / AHB / APB / ACE / CHI)
+- AXI4: separate write (AW/W/B) and read (AR/R); VALID/READY handshake; VALID must not depend on READY; AWLEN/ARLEN burst length; ASIZE transfer size; ABURST FIXED/INCR/WRAP; AID/RID/BID ordering; AxCACHE/AxPROT/AxLOCK/AxQOS/AxREGION; WLAST/RLAST; BRESP/RRESP OKAY/EXOKAY/SLVERR/DECERR; low-power via CSYSREQ/CSYSACK/CACTIVE when present.
+- AXI4-Lite: no bursts (LEN=0); simpler register access; same VALID/READY rules.
+- AXI4-Stream: TVALID/TREADY, TDATA, TSTRB/TKEEP, TLAST, TUSER, TID, TDEST; backpressure on TREADY; packet boundaries on TLAST.
+- ACE / ACE-Lite: coherency channels (CR/CD/AC) beyond AXI; shareable domains; use user VIP/spec — do not invent snoop timing.
+- AMBA CHI: layered flits (REQ/RSP/SNP/DAT); typically VIP/SoC level, not gate-level TB unless user provides interfaces.
+- AHB-Lite / AHB5: HTRANS IDLE/BUSY/NONSEQ/SEQ; HREADY/HREADYOUT; HRESP OKAY/ERROR; HBURST; HSIZE; HWRITE; HPROT; wait states via HREADY.
+- APB3/APB4: PSEL, PENABLE two-phase (setup→access); PWRITE, PADDR, PWDATA/PRDATA; PREADY wait; PSLVERR; PPROT/PSTRB on APB4; no bursts.
+- AXI interconnect / QoS: arbitration, decode, width conversion, clock-crossing bridges — verify decode map and timeout from user interconnect docs.
+
+## Other on-chip fabrics
+- Wishbone B4: CYC, STB, ACK, WE, SEL, ADR, DAT; classic pipelined vs registered feedback — match user variant.
+- Avalon-MM / Avalon-ST: waitrequest, readdatavalid, burstcount; ST ready/valid — Intel/Altera naming from user RTL.
+- TileLink (TL-UL/UH/C): A/D (and B/C/E for coherent); Get/Put/Acquire/Release opcodes — SiFive/Rocket style; use user TL params.
+- OCP / custom NoC: treat as user-defined; extract ports only from RTL/spec.
+- Crossbar vs NoC mesh/ring: routing, credit/flit, VC — prefer user NoC docs.
+
+## PCIe / CXL (transaction-level unless RTL given)
+- PCIe: TLP MRd/MWr/CfgRd/CfgWr/Cpl/CplD/Msg; tag/completer ID; completion timeout; credit-based FC; ASPM/LTR; usually VIP + BFM, not pin-level Gen5.
+- CXL.io / .cache / .mem: cache-coherent attach — high-level VIP; do not invent CXL.cache timing.
+- Root complex vs endpoint vs switch roles from user topology.
+
+## Ethernet / networking MAC–PHY
+- Ethernet frame: preamble, SFD, DA/SA, EtherType/length, payload, FCS; min/max frame; VLAN 802.1Q.
+- MII / RMII / GMII / RGMII / SGMII: TX/RX data + clock/control; RGMII DDR sourcing — use user PHY mode.
+- MDIO/MDC Clause 22/45: PHY register access; ST/OP/PHYAD/REGAD.
+- MAC control: TX/RX enable, pause frames, checksum offload — from user MAC CSR map.
+- TCP/IP stacks are usually software; HW TB focuses on MAC/PCS/PMA unless user asks otherwise.
+
+## Memory interfaces (DDR / LPDDR / HBM / SRAM)
+- DDR3/4/5, LPDDR4/5, HBM: command/address/data ratios, training (write leveling, Vref, read gate), refresh (REFab/REFpb), banks/bank groups, DQ/DQS, ECC — NEVER invent tCK/tRCD/tRP; use controller/PHY docs.
+- AXI/APB front-door to memory controller; DFI or vendor PHY interface behind controller.
+- On-chip SRAM/RF: chip-enable, write-enable, byte-enables, clock gating; ECC SECDED; scrubbing.
+- ROM/OTP/Flash controllers: busy, erase/program sequences from user FSM.
+- Atomics / exclusive monitors: AXLOCK EXCL; LDREX/STREX-style — match CPU/ISA docs.
+
+## Serial peripherals
+- I2C: START/STOP, 7/10-bit addr, ACK/NACK, clock stretching, repeated START; Fast/Fast+; SMBus PEC optional.
+- I3C: CCC commands, IBI, HDR modes — use MIPI I3C user timing; backward I2C mixed bus.
+- SPI: CPOL/CPHA (modes 0–3), MSB/LSB, CS/SS active level, full-duplex; dual/quad (QSPI) IO0–IO3 + addr/dummy/data phases.
+- UART / USART: start, data (5–9), parity, stop; baud tick; RTS/CTS flow; IrDA rare.
+- I2S / TDM / PDM audio: WS/LRCLK, BCLK, SDATA; slot maps from user codec.
+- 1-Wire, MDIO (see Ethernet), SPDIF — only if present in RTL.
+
+## USB / MIPI / display (usually VIP)
+- USB2: chirp, packet token/data/handshake; UTMI/ULPI PHY — prefer VIP.
+- USB3: LTSSM states, SuperSpeed — VIP-level.
+- MIPI CSI-2 / DSI: packet headers, virtual channels, LP/HS modes — use user D-PHY/C-PHY ports.
+- HDMI / DisplayPort: high-level link training; do not invent TMDS timing without spec.
+
+## Automotive / industrial
+- CAN 2.0A/B: SOF, ID (11/29), RTR, IDE, DLC, data, CRC, ACK, EOF; bit stuffing; error active/passive/bus-off; TEC/REC.
+- CAN-FD: FDF, BRS, larger DLC/payload; ISO vs non-ISO CRC — from user IP.
+- LIN: master/slave schedule, break/sync/ID/data/checksum.
+- FlexRay: static/dynamic segments, TDMA — VIP/spec driven.
+- SENT / PSI5 / automotive SPI variants: tick timing from sensor datasheet.
+
+## Debug / DFT / JTAG
+- JTAG IEEE 1149.1: TCK, TMS, TDI, TDO, TRST_n; TAP states; IR/DR; boundary scan cells.
+- SWD (ARM): SWCLK/SWDIO two-wire debug.
+- Scan DFT: scan_en, scan_clk, scan_in/out chains; shift/capture/update; lockup latch.
+- MBIST / LBIST: repair, March algorithms — use user BIST wrapper ports.
+- Boundary scan / IJTAG 1687 — only with user network description.
+- ATPG patterns are usually tool-generated; TB may apply scan vectors if user provides format.
+
+## Die-to-die / chiplet
+- UCIe: flit streaming, CXL/PCIe mapped modes — VIP/high-level unless user RTL.
+- BoW (Bunch of Wires), AIB, HBI: advanced packaging SerDes/parallel — from user interface doc.
+- Multi-die: sideband, reset share, DFT daisy-chain across dies.
+
+## Clock, reset, CDC, RDC
+- Clocks: PLL/FLL, mux, divider, gate (ICG); glitch-free mux; generated clocks.
+- Resets: async assert / sync deassert; reset tree; power-on vs soft reset; reset domain crossings (RDC).
+- CDC: 2FF/3FF sync, handshake, async FIFO (gray pointers), Mux-recirculation; no single-bit multi-bit without sync strategy.
+- Quiescence: clocks off / reset held for formal/scan modes.
+
+## Power intent (UPF concepts for TB/formal)
+- Power domains, isolation cells, retention, level shifters; supply nets.
+- Simulation with UPF: corrupt-on-activity policies; verify isolation enable polarity from UPF + RTL.
+- Do not invent UPF file structure — use user's UPF.
+
+## SerDes / PMA / PCS (high level)
+- PMA: PLL lock, CDR, equalization; PCS: 8b/10b or 64b/66b, scrambling, gearbox.
+- Link training / BER — usually lab or VIP; RTL TB uses status/lock/ready from user PCS.
+
+## RISC-V / CPU verification context
+- RV32/64 IMAFDQC etc.; CSRs; interrupt/exception; memory map; PMP/MMU when present.
+- Formal / riscv-dv style instruction streams when user asks ISA TB — keep DUT ports exact.
+- Bus: TileLink, AXI, custom — from SoC glue RTL.
 
 ## UVM structure (when asked for UVM)
 - env: agent(s), scoreboard, coverage, virtual sequencer; connect analysis ports in connect_phase.
-- sequences on sequencer; config_db for virtual interfaces; objections in run_phase.
+- sequences on sequencer; config_db for virtual interfaces; objections in run_phase; factory overrides.
+- RAL: uvm_reg_block, adapters, predictors for CSR front-door/back-door.
 - Full UVM may not compile on Verilator — offer SV testbench subset when user targets open-source sim.
 
-## Simulation & debug (when analyzing logs)
-- X propagation, reset deassertion, clock domain crossing metastability (sync stages).
-- UVM_ERROR/UVM_FATAL, assertion failures, timeout, handshake deadlock (valid without ready).
-- Coverage holes: cross bins, unreachable states, wrong reset defaults.
+## Simulation & debug
+- X propagation, uninitialized regs, multi-driver, case without default.
+- Reset deassertion vs first stimulus; clock gating mid-transfer.
+- CDC/RDC failures; valid/ready deadlock; FIFO overflow/underflow.
+- UVM_ERROR/FATAL, SVA fail, timeout, DPI mismatches.
+- Coverage holes: cross bins, unreachable FSM states, reset defaults.
 
-## Formal / lint hints
-- SVA: reset property in disable iff; cover for reachability; assume for environment constraints.
-- Lint: comb loops, latch inference, width mismatch, undriven nets.
+## Formal / lint
+- SVA: disable iff (rst); cover reachability; assume environment; bind modules.
+- Lint: comb loops, latch inference, width mismatch, undriven/unloaded nets, FSM unreachable.
+- Formal: BMC depth, induction; constrain inputs; cutpoints carefully.
 
-Use the user's spec for exact signal names, widths, and protocol variant.
+## Verification planning terms
+- Feature → scenario → test → coverpoint traceability; constrained-random vs directed vs formal.
+- Code coverage (line/toggle/FSM/cond) vs functional coverage; holes → new sequences.
+- Scoreboard reference models: TLMs, DPI-C golden, Python/C++ — match user choice.
+
+Use the user's spec for exact signal names, widths, protocol variant, and timing parameters.

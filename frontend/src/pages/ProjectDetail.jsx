@@ -38,6 +38,7 @@ export default function ProjectDetail() {
   const [models, setModels] = useState(DEFAULT_MODELS);
   const [modelIdx, setModelIdx] = useState(0);
   const [prompt, setPrompt] = useState("");
+  const [toolLog, setToolLog] = useState("");
   const [output, setOutput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -151,6 +152,9 @@ export default function ProjectDetail() {
           prompt,
           file_ids: selectedFileIds,
           language: project?.language || "systemverilog",
+          ...(toolLog.trim()
+            ? { tool_log: toolLog.trim(), prior_output: output || undefined }
+            : {}),
         }),
       });
       if (!res.ok || !res.body) throw new Error("Stream failed");
@@ -295,6 +299,17 @@ export default function ProjectDetail() {
               <div>
                 <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2">Prompt (optional)</div>
                 <textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g., focus on backpressure and AXI4 protocol violations" className="w-full bg-[#0B0E14] border border-[#1E293B] px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 resize-none" data-testid="prompt-input" />
+              </div>
+              <div>
+                <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2">Lint / sim log (optional fix loop)</div>
+                <textarea
+                  rows={3}
+                  value={toolLog}
+                  onChange={(e) => setToolLog(e.target.value)}
+                  placeholder="Paste Verilator / UVM / assert errors to regenerate a fix (sends prior output too)"
+                  className="w-full bg-[#0B0E14] border border-[#1E293B] px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 resize-none"
+                  data-testid="tool-log-input"
+                />
               </div>
               <button onClick={generate} disabled={streaming} className="btn-neon w-full inline-flex items-center justify-center gap-2" data-testid="generate-btn">
                 {streaming ? <><Loader2 size={14} className="animate-spin" /> Generating...</> : <><Cpu size={14} /> Generate ({selectedFileIds.length} files)</>}

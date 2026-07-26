@@ -28,7 +28,9 @@ jobs:
           cp /tmp/vlsi-llm/modelfiles/Modelfile.* models/chipsutra-vlsi/
           cp /tmp/vlsi-llm/VERSION models/chipsutra-vlsi/VERSION
           mkdir -p backend/knowledge
-          cp /tmp/vlsi-llm/prompts/vlsi_protocols_compact.txt backend/knowledge/vlsi_protocols_compact.txt
+          for f in vlsi_protocols_compact.txt vlsi_soc_dft_power.txt vlsi_verification_glossary.txt; do
+            cp "/tmp/vlsi-llm/prompts/$f" "backend/knowledge/$f"
+          done
           chmod +x models/chipsutra-vlsi/ollama-bootstrap.sh
 
       - name: Create PR if changed

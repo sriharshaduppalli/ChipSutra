@@ -27,6 +27,8 @@ from pydantic import BaseModel, EmailStr, Field
 # ChipSutra provider abstractions (auto-fall-back Emergent → standalone)
 from llm_provider import stream_chat as llm_stream_chat, available_providers as llm_available_providers, ollama_status as llm_ollama_status
 from rag import augment_generation_context, rag_status as llm_rag_status
+from rtl_ports import extract_port_context_from_texts, rtl_ports_status
+from lint_feedback import format_lint_feedback, lint_feedback_status
 from storage_provider import init_storage as storage_init, put_object as put_object_impl, get_object as get_object_impl, storage_mode
 from google_auth import google_mode, resolve_emergent_session, build_google_auth_url, exchange_code as google_exchange_code
 
@@ -72,6 +74,16 @@ def _motor_client(url: str) -> AsyncIOMotorClient:
     if url.startswith("mongodb+srv://") or "tls=true" in url.lower():
         kwargs["tlsCAFile"] = certifi.where()
     return AsyncIOMotorClient(url, **kwargs)
+
+
+def _public_ipv4_for_atlas_hint() -> str:
+    try:
+        r = requests.get("https://api.ipify.org", timeout=4)
+        if r.ok and r.text.strip():
+            return f" Add this IPv4 in Atlas Network Access: {r.text.strip()}/32 (mobile/Wi‑Fi IPs change often; dev shortcut: 0.0.0.0/0)."
+    except Exception:
+        pass
+    return " Check https://api.ipify.org for your IPv4 and add it in Atlas Network Access (or 0.0.0.0/0 for dev)."
 
 
 client = _motor_client(MONGO_URL)
@@ -194,11 +206,14 @@ class ProjectIn(BaseModel):
 class GenerateIn(BaseModel):
     project_id: str
     module: str  # testbench, assertions, checkers, covergroups, spec2rtl, rtl2spec, testplan, coverage_holes, debug
-    model_provider: str = "anthropic"  # anthropic | openai
-    model_name: str = "claude-sonnet-4-5-20250929"  # or gpt-5.2
+    model_provider: str = "ollama"
+    model_name: str = "chipsutra-vlsi:3b"
     prompt: Optional[str] = ""
     file_ids: Optional[List[str]] = []
     language: Optional[str] = "systemverilog"
+    # Closed-loop: paste Verilator/sim log (+ optional prior code) to regenerate/fix
+    tool_log: Optional[str] = None
+    prior_output: Optional[str] = None
 
 MODULE_PROMPTS = {
     "testbench": "You are an expert VLSI verification engineer. Generate a scalable, reusable UVM-style testbench for the provided RTL/spec in {language}. Include: interfaces, transactions, driver, monitor, scoreboard, sequences, and error injection hooks. Output only code with brief inline comments.",
@@ -215,8 +230,30 @@ MODULE_PROMPTS = {
 # =========================
 # Startup
 # =========================
+def _guard_python_for_atlas() -> None:
+    """Windows + Python 3.14+ often breaks Atlas TLS; require 3.11/3.12 venv."""
+    if "mongodb.net" not in MONGO_URL and not MONGO_URL.startswith("mongodb+srv://"):
+        return
+    if sys.platform != "win32":
+        return
+    if sys.version_info >= (3, 14):
+        venv_py = ROOT_DIR / ".venv" / "Scripts" / "python.exe"
+        raise RuntimeError(
+            f"MongoDB Atlas on Windows needs Python 3.11 or 3.12 (you are on {sys.version.split()[0]}). "
+            "Do not use the default `python` on PATH. Run:\n"
+            f"  cd {ROOT_DIR}\n"
+            "  py -3.12 -m venv .venv\n"
+            "  .\\.venv\\Scripts\\Activate.ps1\n"
+            "  pip install -r requirements-oss.txt\n"
+            "  python -m uvicorn server:app --host 0.0.0.0 --port 8001\n"
+            "Or: .\\run-backend.ps1\n"
+            + (f"(venv exists: {venv_py})" if venv_py.is_file() else "")
+        )
+
+
 @app.on_event("startup")
 async def startup():
+    _guard_python_for_atlas()
     try:
         await client.admin.command("ping")
     except Exception as e:
@@ -230,10 +267,11 @@ async def startup():
         elif "SSL" in err_s or "TLS" in err_s or "tlsv1" in err_s.lower():
             py = sys.version.split()[0]
             hint = (
-                f" Atlas TLS failed (common on Python 3.14+ on Windows — use **Python 3.11 or 3.12**; "
-                f"current: {py}). Install 3.12, then: py -3.12 -m venv .venv && .venv\\Scripts\\activate && "
-                "pip install -r requirements-oss.txt. Also check Atlas Network Access (0.0.0.0/0 for dev). "
-                "See docs/MONGODB_ATLAS_SETUP.md#ssl-handshake-errors."
+                " Atlas is blocking this network (TLS alert, not a bad password). "
+                "Atlas -> Network Access -> confirm an Active entry (0.0.0.0/0 for dev, or your current IP)."
+                + _public_ipv4_for_atlas_hint()
+                + " Turn off VPN. On dual-stack Wi‑Fi, Atlas uses IPv4 only — whitelist your public IPv4, not IPv6."
+                f" Python {py}. Run: python scripts/test_mongo_connect.py"
             )
         logger.error("MongoDB connection failed: %s.%s", e, hint)
         raise RuntimeError(f"MongoDB connection failed: {e}.{hint}") from e
@@ -320,6 +358,8 @@ async def health():
         "llm_providers": providers,
         "ollama": llm_ollama_status(),
         "rag": llm_rag_status(),
+        "rtl_ports": rtl_ports_status(),
+        "lint_feedback": lint_feedback_status(),
         "google_auth": google_mode(),
     }
 
@@ -690,12 +730,14 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
     # Gather file contexts
     file_context = ""
     file_names: List[str] = []
+    file_bodies: List[str] = []
     if inp.file_ids:
         fdocs = await db.files.find({"id": {"$in": inp.file_ids}, "project_id": inp.project_id}, {"_id": 0}).to_list(50)
         for f in fdocs:
             file_names.append(f.get("original_filename") or "")
             text = _get_file_text(f)
             if text:
+                file_bodies.append(text)
                 file_context += f"\n\n--- FILE: {f['original_filename']} (kind={f.get('kind','')}) ---\n{text[:20000]}\n"
 
     lang = inp.language or proj.get("language", "systemverilog")
@@ -712,11 +754,17 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
             + rag_block
         )
 
+    port_block = extract_port_context_from_texts(file_bodies)
+    if port_block:
+        system_msg += "\n\n--- Parsed RTL interfaces ---\n" + port_block
+
     user_text = (inp.prompt or "").strip()
     if not user_text:
         user_text = "Please generate the requested artifact based on the attached files."
     if file_context:
         user_text += "\n\n" + file_context
+    if inp.tool_log:
+        user_text += "\n\n" + format_lint_feedback(inp.tool_log, prior_code=inp.prior_output)
 
     session_id = str(uuid.uuid4())
     gen_id = str(uuid.uuid4())

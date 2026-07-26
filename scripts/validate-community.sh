@@ -15,7 +15,7 @@ pip install -q -r backend/requirements-oss.txt
 
 echo "[3/5] pytest offline (compose, env, llm_provider, rag)..."
 cd backend
-pytest tests/test_iteration_5.py tests/test_rag_and_golden.py -n 0 \
+pytest tests/test_iteration_5.py tests/test_rag_and_golden.py tests/test_rtl_ports_and_feedback.py -n 0 \
   -k "docker_compose or env_example or requirements or readme or available_providers or stream_chat or rag or golden"
 
 echo "[4/5] modelfiles..."

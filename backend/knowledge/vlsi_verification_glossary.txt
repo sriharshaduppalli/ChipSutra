@@ -1,0 +1,57 @@
+# VLSI / DV glossary (RAG) — ChipSutra-VLSI-LLM v1.2+
+# Short definitions for common terms. Prefer user documents when they conflict.
+
+## RTL / HDL
+- synthesizable: maps to gates/flops; avoid #delays, initial for DUT (TB OK).
+- blocking (=) vs nonblocking (<=) in always_ff / always_comb discipline.
+- FSM: one-hot / binary / gray; encoded vs explicit.
+- parameterized RTL: WIDTH, DEPTH; generate for / if.
+- interface / modport / clocking block (SV TB glue).
+- package / import; `include; macros — prefer packages for reuse.
+
+## UVM / methodology
+- UVM: Universal Verification Methodology (Accellera); layers TB components.
+- TLM: analysis_port/export, put/get/peek ports.
+- factory: type/instance overrides; create vs new.
+- phasing: build/connect/end_of_elaboration/start_of_simulation/run/extract/check/report.
+- RAL: register abstraction layer for CSRs.
+- VIP: verification IP (BFM + protocol checks + coverage).
+- scoreboard: compares expected vs observed transactions.
+- virtual sequence: coordinates multiple sequencers.
+
+## Coverage
+- code coverage: line, toggle, FSM, condition/branch/expression.
+- functional coverage: covergroup/coverpoint/bins/cross/illegal_bins/ignore_bins.
+- assertion coverage: which SVA fired/covered.
+- hole: uncovered bin or code; drive new stimulus.
+
+## Assertions / formal
+- immediate vs concurrent assert; property/sequence; |-> vs |=>.
+- assume / assert / cover; restrict (tool-specific).
+- BMC: bounded model checking; induction for unbounded.
+- bind: attach assertions without editing DUT.
+
+## Sim / debug
+- X / Z / U states; strength (Verilog).
+- SDF / timing annotated gate-level sim.
+- DPI-C / VPI / PLI hooks.
+- Verilator: cycle-based, synthesizable-leaning SV subset; limited UVM.
+- cocotb / pyuvm: Python-driven TB alternatives.
+
+## Protocols (one-liners)
+- AXI: ARM AMBA memory-mapped burst bus with VALID/READY.
+- APB: simple peripheral bus, two-phase.
+- AHB: pipelined high-performance AMBA bus.
+- AXIS: streaming AMBA data path.
+- TileLink: SiFive/RISC-V coherent/noncoherent tile bus.
+- Wishbone: OpenCores classic SoC bus.
+- PCIe: serial computer expansion with TLP packets.
+- CAN: multi-master automotive differential bus with arbitration.
+- I2C/SPI/UART: common chip-to-chip serial links.
+- JTAG: TAP-based debug and boundary scan.
+- UCIe: open die-to-die interconnect standard.
+
+## Roles
+- DUT: design under test; TB: testbench; VIP: protocol agent.
+- Formal: mathematical proof/check vs simulation stimulus.
+- Emulation / FPGA prototype: acceleration platforms for large SoCs.

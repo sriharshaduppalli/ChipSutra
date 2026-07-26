@@ -22,10 +22,18 @@ $ver = Join-Path $SourceRepo 'VERSION'
 if (Test-Path $ver) { Copy-Item -Force $ver (Join-Path $Dest 'VERSION') }
 $know = Join-Path $Root 'backend\knowledge'
 New-Item -ItemType Directory -Force -Path $know | Out-Null
-$proto = Join-Path $SourceRepo 'prompts\vlsi_protocols_compact.txt'
-if (Test-Path $proto) {
-  Copy-Item -Force $proto (Join-Path $know 'vlsi_protocols_compact.txt')
-  Write-Host "[sync] updated backend/knowledge/vlsi_protocols_compact.txt"
+$prompts = Join-Path $SourceRepo 'prompts'
+$ragFiles = @(
+  'vlsi_protocols_compact.txt',
+  'vlsi_soc_dft_power.txt',
+  'vlsi_verification_glossary.txt'
+)
+foreach ($name in $ragFiles) {
+  $src = Join-Path $prompts $name
+  if (Test-Path $src) {
+    Copy-Item -Force $src (Join-Path $know $name)
+    Write-Host "[sync] updated backend/knowledge/$name"
+  }
 }
 
 Write-Host "[sync] updated $Dest"

@@ -1,0 +1,28 @@
+# Simulation & debug playbook (RAG). Use attached logs; do not invent waveforms.
+
+## First-pass triage
+- Classify: compile/lint error vs runtime UVM_ERROR vs assert fail vs timeout vs X-prop.
+- Note first failing time / hierarchy; later errors are often cascade.
+- Check reset release vs clock; async reset deassert timing.
+- Clock domain: missing sync, CDC, gated clocks.
+
+## Handshake & protocol deadlocks
+- valid stuck high, ready never asserted → backpressure / missing grant.
+- ready before valid ok for AXI; valid depending on ready is illegal.
+- FIFO full/empty ignored → overflow/underflow X or wrap.
+- CAN: bus-off, ACK error, bit stuffing — match error counters in DUT.
+
+## X propagation
+- Undriven nets, multi-driver, uninitialized regs after reset.
+- Case without default → latch/X; incomplete sensitivity list.
+- Fix at source; do not mask with `$isunknown` unless documenting known X.
+
+## Coverage holes → next tests
+- Unhit bins: add directed sequences for that encoding / corner.
+- Cross holes: constrain seq to hit both axes.
+- Reset defaults wrong → toggle reset mid-traffic tests.
+- Re-run regression after new seq; do not claim 100% without report.
+
+## Verilator / OSS sim notes
+- Subset of SV/UVM; prefer synthesizable TB or Verilator-compatible constructs.
+- Lint-only first (`verilator --lint-only`); fix width/undriven before functional debug.

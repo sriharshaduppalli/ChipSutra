@@ -1,0 +1,43 @@
+# SoC / DFT / power / CDC glossary for RAG (ChipSutra-VLSI-LLM v1.2+)
+# Prefer user RTL, UPF, and DFT specs over this cheat-sheet.
+
+## SoC integration checklist
+- Address map / decode: base, size, attributes (secure, cacheable, device).
+- Interrupt: wired IRQ/FIQ, MSI/MSI-X, PLIC/CLINT (RISC-V), GIC (ARM) — from user.
+- Clock/reset matrix: which IP on which domain; soft vs hard reset.
+- Firewalls / MPU / IOPMP / SMMU-IOMMU when present.
+- Boot: ROM → SRAM → flash; strap pins; secure boot hooks — do not invent keys.
+
+## NoC / interconnect verification
+- Request/response ordering rules per protocol (AXI ID, CHI txn).
+- Deadlock: credit starve, circular wait, QoS starvation.
+- Timeout / error slave / default slave decode.
+- Width/clock converters and bridges: latency & backpressure.
+
+## DFT terms
+- Stuck-at / transition / path delay fault models (conceptual).
+- Scan chain balancing, compression (X-tolerant), EDT-style — vendor specific.
+- Test modes: scan, BIST, boundary, burn-in; test_mode pin conflicts with functional.
+- On-chip clock control (OCC) for at-speed capture.
+- Analog/DFT wrappers: do not invent analog pin behavior.
+
+## Power / UPF terms
+- PD (power domain), supply_net, isolation strategy, retention strategy, level shifter.
+- Power switches / headers; inrush; sequence on/off from power intent.
+- Corruption semantics in sim; save-restore for retention flops.
+- Low-power interfaces: CSYSREQ (AXI), clock stop, retention isolation enables.
+
+## CDC / RDC terms
+- Metastability window; MTBF concept (qualitative).
+- Gray code multi-bit; valid+data bundled handshake; async FIFO occupancy.
+- Recirculation mux; pulse stretchers; named CDC structures in RTL comments.
+- Reset deassert sync into each clock domain; async assert OK if design says so.
+
+## Timing / STA awareness (for debug comments only)
+- Setup/hold conceptually; false path / multicycle — do not invent SDC.
+- Generated clocks, clock groups, case analysis for muxed clocks.
+- Verification code is usually not timed like synth RTL unless gate-level sim.
+
+## Chiplet / packaging terms
+- UCIe, BoW, AIB: die-to-die; sideband; redundancy lanes.
+- Known-good-die; DFT across package; thermal/power sharing — product context only.

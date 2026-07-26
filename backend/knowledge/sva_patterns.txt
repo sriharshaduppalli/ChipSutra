@@ -1,0 +1,23 @@
+# SystemVerilog Assertions patterns (RAG). Bind to real DUT signals only.
+
+## Concurrent SVA basics
+- `assert property (@(posedge clk) disable iff (rst) ... );`
+- Use `|->` (overlapping) vs `|=>` (non-overlapping) correctly for handshake timing.
+- `##[1:N]` for bounded delays; avoid unbounded `##[*]` in formal unless intended.
+- `cover property` for reachability; `assume property` for environment constraints only.
+
+## Protocol handshake properties
+- AXI-style: once valid high, hold data/ctrl until ready; valid must not depend on ready.
+- Never drop valid mid-transfer without ready (unless protocol allows).
+- Reset: outputs known/idle under reset; no spurious fires in `disable iff (rst)`.
+- APB: PENABLE only after PSEL setup; PREADY stretches access phase.
+
+## Safety / liveness
+- Safety: mutual exclusion, one-hot FSM, no X on control after reset release.
+- Liveness: request eventually granted within N cycles (bounded for formal).
+- CDC: 2FF sync; do not assert async paths without synchronizer assumptions.
+
+## Formal-friendly style
+- Prefer boolean / bit-vector ops over DPI or `$past` depth explosion.
+- Name properties; one intent per assert; short comment of expected proof depth.
+- Bind files: `bind dut_module assertions_m u_asrt (.*);` with matching port list.

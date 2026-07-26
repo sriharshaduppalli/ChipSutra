@@ -1,0 +1,25 @@
+# UVM / SV testbench patterns (RAG). Prefer user RTL ports over invented names.
+
+## UVM agent skeleton
+- agent = driver + monitor + sequencer; active/passive via is_active.
+- driver: get_next_item → drive pins → item_done; never invent ports — use virtual interface from config_db.
+- monitor: sample DUT pins → analysis_port.write(txn); no drive.
+- sequencer: default_sequence or start(seq) from test; virtual sequencer for multi-agent.
+
+## UVM env & scoreboard
+- env builds agents, scoreboard, coverage; connect_phase: mon.ap.connect(sb.analysis_export).
+- scoreboard: expected vs actual; uvm_tlm_analysis_fifo or write() with compare.
+- Objections in test/run_phase; raise/drop around sequences.
+- config_db#(virtual if)::set(null, "uvm_test_top.*", "vif", vif) before run_test.
+
+## SV testbench without full UVM (Verilator-friendly)
+- Clock/reset block; DUT instance with exact port map from RTL.
+- Stimulus tasks/functions; $display/$error on check fail; $finish.
+- Avoid uvm_* if user targets Verilator-only; provide pure SV TB when asked for OSS sim.
+- Interface + clocking block optional; keep signals matching RTL widths.
+
+## Sequences & coverage
+- sequence_item fields mirror protocol fields (id, data, ctrl) from user spec.
+- body(): `start_item` / `finish_item` or `uvm_do` macros sparingly.
+- covergroup in monitor or separate cov collector; sample on transaction.
+- Cross coverage: opcode × status, addr range × burst length — match DUT capabilities.
