@@ -24,7 +24,8 @@ const SECTIONS = [
       "Covergroups — bins, cross coverage, illegal_bins.",
       "Spec → RTL / RTL → Spec — bi-directional conversion.",
       "Testplan / Coverage-Hole Tests / Debug Analysis.",
-      "Switch model: Claude Sonnet 4.5 (default) ↔ GPT-5.2 in the right panel.",
+      "Formal Hints — SVA properties for SymbiYosys proofs.",
+      "Model: ChipSutra-VLSI 3B runs locally by default; Claude and GPT appear in the switcher only if you configure API keys.",
     ]
   },
   {

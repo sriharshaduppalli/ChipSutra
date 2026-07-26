@@ -41,10 +41,16 @@ const Nav = () => (
 const modules = [
   { icon: FileCode, title: "Testbench Generation", desc: "Scalable, reusable UVM/SV testbenches with error injection hooks, drivers, monitors, scoreboards.", tag: "SV / UVM" },
   { icon: Shield, title: "SVA Assertion Gen", desc: "Protocol, safety and liveness assertions synthesized from spec + RTL context.", tag: "SVA" },
-  { icon: Activity, title: "Coverage Analysis", desc: "Parse coverage DB / reports, surface holes, generate closure tests.", tag: "COV" },
-  { icon: Waves, title: "Waveform Viewer", desc: "In-browser VCD parser with WaveDrom-style timing diagrams and summary reports.", tag: "VCD" },
+  { icon: LayoutGrid, title: "Covergroups & Testplan", desc: "Covergroups with bins, crosses and illegal_bins, plus the testplan that justifies them.", tag: "PLAN" },
   { icon: GitBranch, title: "Spec ↔ RTL", desc: "Bi-directional: generate RTL from spec, or extract a spec from existing RTL.", tag: "S↔R" },
-  { icon: Cog, title: "Debug Analysis", desc: "Paste sim log — get ranked root-cause hypotheses and next debug steps.", tag: "DBG" },
+  { icon: Zap, title: "Compile · Elaborate · Run", desc: "Verilator builds and runs your DUT in the browser, streaming the log and dumping waveforms.", tag: "SIM" },
+  { icon: Waves, title: "Waveform Viewer", desc: "VCD and FST ingestion with WaveDrom-style timing diagrams and signal summaries.", tag: "VCD / FST" },
+  { icon: CheckCircle2, title: "Formal Proofs", desc: "SymbiYosys bounded and unbounded proofs from generated SVA properties.", tag: "FORMAL" },
+  { icon: Network, title: "Synthesis & LEC", desc: "Yosys synthesis with area and cell reports, plus gold-vs-gate equivalence checking.", tag: "SYNTH" },
+  { icon: Layers, title: "CDC Analysis", desc: "Clock-domain crossings with reconvergence, multi-bit and synchronizer-depth checks.", tag: "CDC" },
+  { icon: Activity, title: "Coverage Closure", desc: "Parse UCIS or tool reports, rank the holes, generate directed tests, re-simulate, measure the delta.", tag: "COV" },
+  { icon: Puzzle, title: "Regression Matrix", desc: "Parallel multi-seed, multi-config runs with per-cell drilldown and pass-rate trends.", tag: "REG" },
+  { icon: Cog, title: "Debug Analysis", desc: "Paste a sim log — get ranked root-cause hypotheses and the next debug step.", tag: "DBG" },
 ];
 
 const usecases = [
@@ -168,15 +174,16 @@ export default function Landing() {
         <div className="relative max-w-7xl mx-auto px-6 pt-24 pb-28">
           <div className="flex items-center gap-3 mb-8">
             <span className="pin-badge text-emerald-400 border-emerald-500/40">MADE IN INDIA · AI × EDA</span>
-            <span className="font-mono text-xs text-slate-500 uppercase tracking-widest">v0.1 · Early Access</span>
+            <span className="font-mono text-xs text-slate-500 uppercase tracking-widest">Open source · Self-hostable</span>
           </div>
           <h1 className="font-display text-5xl sm:text-6xl lg:text-7xl font-bold tracking-tight max-w-5xl leading-[1.05]">
             Silicon-grade <span className="text-emerald-400">verification</span>,
             <br />automated from spec to <span className="ion-text">coverage closure</span>.
           </h1>
           <p className="mt-8 text-lg font-mono text-slate-400 max-w-2xl leading-relaxed">
-            ChipSutra generates UVM testbenches, SVA assertions, covergroups, testplans and debug hints for
-            Verilog / SystemVerilog / VHDL blocks, IPs, SoCs and chiplets — powered by Claude Sonnet 4.5 and GPT-5.2.
+            ChipSutra generates UVM testbenches, SVA assertions, covergroups and testplans for
+            Verilog / SystemVerilog / VHDL — then compiles, simulates, synthesizes and closes coverage
+            with Verilator, Yosys and SymbiYosys. Runs on a local VLSI model, so no API key is required.
           </p>
           <div className="mt-10 flex flex-wrap gap-4 items-center">
             <Link to="/signup" className="btn-neon inline-flex items-center gap-2" data-testid="hero-cta-signup">
@@ -185,7 +192,7 @@ export default function Landing() {
             <a href="#waitlist" className="btn-outline-neon" data-testid="hero-cta-waitlist">Join Waitlist</a>
             <div className="flex items-center gap-2 text-xs font-mono text-slate-500">
               <div className="w-2 h-2 bg-emerald-500 animate-pulse"></div>
-              <span>LLM online · Claude Sonnet 4.5 + GPT-5.2</span>
+              <span>Local model · ChipSutra-VLSI 3B via Ollama</span>
             </div>
           </div>
 
@@ -214,9 +221,9 @@ export default function Landing() {
           <div className="flex items-end justify-between mb-12 flex-wrap gap-4">
             <div>
               <div className="pin-badge mb-4 inline-block">01 · MODULES</div>
-              <h2 className="font-display text-4xl font-bold tracking-tight max-w-2xl">Six AI-powered engines. One verification workspace.</h2>
+              <h2 className="font-display text-4xl font-bold tracking-tight max-w-2xl">Ten AI modules, wired to real EDA tools.</h2>
             </div>
-            <p className="text-sm font-mono text-slate-400 max-w-md">Iterate spec → RTL → tests → coverage in one loop. Every artifact is downloadable, versioned, and diff-able.</p>
+            <p className="text-sm font-mono text-slate-400 max-w-md">Generation is only half of it — every artifact runs through an actual tool, so you get a log and a number back, not a guess. Downloadable, versioned, diff-able.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {modules.map((m, i) => <Feature key={m.title} idx={i} {...m} />)}
@@ -259,13 +266,13 @@ export default function Landing() {
         <div className="max-w-7xl mx-auto px-6">
           <div className="pin-badge mb-4 inline-block">04 · PRICING</div>
           <h2 className="font-display text-4xl font-bold tracking-tight mb-4">Simple tiers. Made for engineers.</h2>
-          <p className="font-mono text-sm text-slate-400 mb-8 max-w-lg">Pay for outcomes, not for models. ChipSutra picks the right frontier LLM automatically — Claude Sonnet 4.5, GPT-5.2, or a fine-tuned domain model — and only bills you for what you ship.</p>
+          <p className="font-mono text-sm text-slate-400 mb-8 max-w-lg">The default model is ChipSutra-VLSI, tuned for RTL and running locally through Ollama — no API key, no per-token bill. Add your own Anthropic or OpenAI key if you want a frontier model, and it appears in the switcher.</p>
           <div className="mb-12 flex items-center gap-3">
             <div className="pin-badge border-emerald-500/40 text-emerald-400 flex items-center gap-2">
               <div className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></div>
-              Model routing · fully automatic
+              Local by default · bring your own key
             </div>
-            <div className="font-mono text-[10px] text-slate-500">Claude Sonnet 4.5 + GPT-5.2 · zero configuration</div>
+            <div className="font-mono text-[10px] text-slate-500">MIT licensed · self-host the whole stack</div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {tiers.map((t) => (
