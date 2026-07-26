@@ -28,10 +28,11 @@ Optional cloud LLMs (Anthropic/OpenAI/Emergent) are **supported when configured*
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Coverage upload parser | ✅ | Regex on `.rpt/.log/.txt/.csv`; optional project persist |
-| Verilator native coverage | 🧪 | Sim “coverage” toggle → `coverage_runs` |
+| Verilator native coverage | 🧪 | Sim + regression “coverage” toggle → `coverage_runs` |
 | Coverage heatmap / holes | ✅ | Holes = metrics &lt; 90% |
+| Coverage trends / merge | 🧪 | `GET …/coverage/trends`, `POST …/coverage/merge` |
 | VCD waveform viewer | ✅ | Hierarchy/search/zoom/cursor; not full Verdi/DVE |
-| CDC / RDC analyzer | 🧪 | Heuristic v0 — Project **CDC** button |
+| CDC / RDC analyzer | 🧪 | Heuristic + optional Yosys JSON — Project **CDC** button |
 | Assertion debug (dedicated) | 📋 | Use **debug** + formal property table |
 | Auto test from holes (closed loop) | 📋 | Manual: run module then sim |
 | Run manifests | ✅ | Tool versions + argv + input hashes on sim/formal |
@@ -46,9 +47,11 @@ Optional cloud LLMs (Anthropic/OpenAI/Emergent) are **supported when configured*
 | Sim seed / coverage flags | ✅ | UI + API |
 | SymbiYosys formal | 🧪 | Prefer OSS CAD Suite Yosys ≥ 0.35 in Docker |
 | Formal property table + CEX VCD | ✅ | When SBY produces traces |
-| Seeded regression matrix | ✅ | Sequential single-node matrix; max 20 cells |
-| Yosys synthesis / equivalence | 🧪 | Synth subset; internal pre/post optimization check |
-| cocotb scaffold | ✅ | Generates Makefile + Python smoke test; runner is manual |
+| Seeded regression matrix | ✅ | Parallel workers 1–4; max 20 cells; trends endpoint |
+| Yosys synthesis / equivalence | 🧪 | Synth + internal equiv; exports `synth.json` / netlist |
+| eqy LEC | 🧪 | Needs `eqy` on PATH; else falls back to Yosys equiv + note |
+| OpenSTA scaffold | 🧪 | Generates SDC+TCL; full STA needs liberty (not included) |
+| cocotb scaffold + runner | 🧪 | Scaffold + `POST /cocotb/stream`; mock if tools missing |
 | Questa / VCS / Xcelium | ❌ | Enterprise roadmap |
 
 ## Platform

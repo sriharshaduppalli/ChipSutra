@@ -11,6 +11,11 @@ import re
 from pathlib import Path
 from typing import Iterable, List, Optional, Sequence
 
+try:  # optional: vector/embedding reranking. Keyword retrieval works without it.
+    import rag_vector
+except Exception:  # pragma: no cover - module absent or broken import
+    rag_vector = None  # type: ignore[assignment]
+
 KNOWLEDGE_DIR = Path(__file__).resolve().parent / "knowledge"
 
 # Not RAG corpus (Modelfile authoring / internal)
@@ -110,6 +115,25 @@ def _score_chunk(query_tokens: set[str], chunk: dict, extra_terms: Sequence[str]
     return overlap - (len(chunk["body"]) / 8000.0)
 
 
+def _hybrid_rerank(
+    chunks: Sequence[dict],
+    query: str,
+    scores: Sequence[float],
+    top_k: int,
+) -> Optional[List[dict]]:
+    """Blend keyword scores with embedding similarity; None when vector RAG is unavailable."""
+    if rag_vector is None:
+        return None
+    try:
+        if rag_vector.vector_backend() == "disabled":
+            return None
+        keyword_scores = {i: s for i, s in enumerate(scores) if s > 0}
+        hits = rag_vector.hybrid_search(list(chunks), query, keyword_scores=keyword_scores, top_k=top_k)
+    except Exception:
+        return None
+    return hits or None
+
+
 def retrieve(
     query: str,
     *,
@@ -129,9 +153,12 @@ def retrieve(
     for _key, aliases in PROTOCOL_ALIASES.items():
         if any(a in combined for a in aliases):
             protocol_terms.extend(aliases)
-    scored = [(_score_chunk(qtok, c, extra, protocol_terms), c) for c in chunks]
-    scored.sort(key=lambda x: x[0], reverse=True)
-    out = [c for s, c in scored if s > 0][:top_k]
+    scores = [_score_chunk(qtok, c, extra, protocol_terms) for c in chunks]
+    out = _hybrid_rerank(chunks, q, scores, top_k)
+    if out is None:
+        scored = list(zip(scores, chunks))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        out = [c for s, c in scored if s > 0][:top_k]
     if not out and chunks:
         # Fallback: first section (bus cheat-sheet) for generate calls with no keywords
         out = chunks[: min(2, len(chunks))]
@@ -163,9 +190,16 @@ def augment_generation_context(
 def rag_status() -> dict:
     root = KNOWLEDGE_DIR
     chunks = load_chunks(root)
+    vector: dict = {"enabled": False, "backend": "disabled", "note": "rag_vector unavailable"}
+    if rag_vector is not None:
+        try:
+            vector = rag_vector.rag_vector_status()
+        except Exception as e:
+            vector = {"enabled": False, "backend": "disabled", "note": f"rag_vector error: {e}"}
     return {
         "enabled": _enabled(),
         "knowledge_dir": str(root),
         "chunk_count": len(chunks),
         "sources": sorted({c["source"] for c in chunks}),
+        "vector": vector,
     }

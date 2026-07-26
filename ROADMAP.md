@@ -26,11 +26,14 @@ ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement
 - [x] Keyword RAG (`backend/knowledge/`) + RTL port injection + lint/sim fix-loop (`tool_log`)
 - [x] Verilator coverage persist + run manifests + formal CEX/property table
 - [x] CDC/RDC heuristic analyzer (experimental)
-- [x] Seeded multi-test regression matrix (single-node, max 20 cells)
+- [x] Seeded multi-test regression matrix (parallel workers 1–4, coverage, trends)
 - [x] Project lint policy + owned/reasoned waivers (`chipsutra.lint.json`)
-- [x] Yosys synthesis + pre/post optimization equivalence sanity
+- [x] Yosys synthesis + equivalence sanity + **eqy LEC** (fallback to internal equiv) + synth artifacts
 - [x] VCD hierarchy/search/zoom/cursor + direct sim/formal links
-- [x] cocotb project scaffold (runner remains local/Docker)
+- [x] cocotb project scaffold + **one-click runner** (mock if tools missing)
+- [x] Coverage merge/trends endpoints; regression panel trend summary
+- [x] CDC heuristic + optional **Yosys JSON** structural merge (experimental)
+- [x] OpenSTA **scaffold** (SDC + TCL; liberty still required for real STA)
 
 ## In progress (Community — next 90 days)
 
@@ -38,13 +41,11 @@ ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement
 - [ ] Closed-loop: coverage upload → `coverage_holes` → re-sim suggestion
 - [ ] Auto-attach Verilator output from Simulation panel into `tool_log`
 - [ ] FST waveform ingestion
-- [ ] Full eqy LEC flow beyond Yosys internal equivalence sanity
 - [ ] Embedding / vector RAG for larger libraries
 - [ ] UCIS / industry coverage format adapters (beyond regex `.rpt`)
-- [ ] One-click cocotb runner (scaffold is shipped)
 - [ ] Redis rate limiter for multi-replica deploys
-- [ ] Regression dashboard (pass/fail trends per project)
 - [ ] Golden DUT suite beyond `counter.sv` (FIFO, AXI-lite slave)
+- [ ] Full OpenSTA run with liberty upload (scaffold shipped)
 
 Industry gap matrix: **[docs/INDUSTRY_EDA_GAPS.md](./docs/INDUSTRY_EDA_GAPS.md)**.
 

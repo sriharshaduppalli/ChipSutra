@@ -24,6 +24,11 @@ def tool_versions() -> Dict[str, Optional[str]]:
         "yosys": _run_version(["yosys", "-V"]),
         "sby": _run_version(["sby", "--help"]) or ("present" if shutil.which("sby") else None),
         "z3": _run_version(["z3", "--version"]),
+        "eqy": ("present" if shutil.which("eqy") else None),
+        "opensta": _run_version(["sta", "-version"])
+        or _run_version(["opensta", "-version"])
+        or ("present" if (shutil.which("sta") or shutil.which("opensta")) else None),
+        "cocotb": ("present" if shutil.which("cocotb-config") else None),
     }
 
 

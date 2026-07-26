@@ -136,3 +136,55 @@ def summarize_coverage_dat(work_dir: str | Path) -> Optional[dict]:
     except Exception as e:
         return {"overall": 0.0, "metrics": [], "holes": [], "count": 0, "source": "coverage.dat", "note": str(e)}
     return parse_verilator_annotate(ann)
+
+
+def trend_points(runs: List[dict], *, limit: int = 30) -> dict:
+    """Build a compact coverage trend series from coverage_runs docs."""
+    pts = []
+    for r in runs[:limit]:
+        pts.append(
+            {
+                "id": r.get("id"),
+                "created_at": r.get("created_at"),
+                "overall": r.get("overall"),
+                "source": r.get("source"),
+                "simulation_id": r.get("simulation_id"),
+                "filename": r.get("filename"),
+            }
+        )
+    overalls = [p["overall"] for p in pts if isinstance(p.get("overall"), (int, float))]
+    delta = None
+    if len(overalls) >= 2:
+        delta = round(overalls[0] - overalls[-1], 1)
+    return {
+        "points": list(reversed(pts)),
+        "latest": overalls[0] if overalls else None,
+        "delta_vs_oldest": delta,
+        "count": len(pts),
+    }
+
+
+def merge_metric_lists(runs: List[dict]) -> dict:
+    """Average overlapping metric names across coverage run summaries (simple merge)."""
+    buckets: Dict[str, List[float]] = {}
+    for r in runs:
+        for m in r.get("metrics") or []:
+            name = str(m.get("name") or "").strip()
+            pct = m.get("pct")
+            if not name or not isinstance(pct, (int, float)):
+                continue
+            buckets.setdefault(name, []).append(float(pct))
+    metrics = [
+        {"name": name, "pct": round(sum(vals) / len(vals), 1), "samples": len(vals)}
+        for name, vals in sorted(buckets.items())
+    ][:80]
+    overall = round(sum(m["pct"] for m in metrics) / len(metrics), 1) if metrics else 0.0
+    holes = [m for m in metrics if m["pct"] < 90]
+    return {
+        "overall": overall,
+        "metrics": metrics,
+        "holes": sorted(holes, key=lambda x: x["pct"])[:40],
+        "count": len(metrics),
+        "source": "merged_runs",
+        "merged_from": len(runs),
+    }

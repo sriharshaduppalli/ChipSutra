@@ -34,14 +34,14 @@ Prioritized for an India-first open-source EDA verification startup.
 
 | Gap | Direction |
 |-----|-----------|
-| Coverage: regex only | UCIS/IMC parsers, merge across regressions |
+| Coverage: regex only | UCIS/IMC parsers, merge across regressions — 🧪 trends/merge helpers shipped |
 | No Questa/VCS/Xcelium | Enterprise adapters + job queue |
 | Formal tool age | ✅ OSS CAD Suite path; keep pinned/reproducible |
-| No regression matrix | ✅ Sequential tests × seeds; parallel workers/trends next |
-| No synthesis sanity | ✅ Yosys synth + internal equivalence; eqy/OpenSTA next |
+| No regression matrix | ✅ Parallel workers 1–4 + coverage + trend summary |
+| No synthesis sanity | ✅ Yosys synth/equiv + eqy LEC (fallback) + OpenSTA scaffold |
 | Weak lint governance | ✅ Project policy + owned waivers |
 | Basic waveform | ✅ VCD hierarchy/search/zoom/cursor; FST next |
-| Python TB path | ✅ cocotb scaffold; integrated runner next |
+| Python TB path | ✅ cocotb scaffold + one-click runner (mock without tools) |
 | CI webhook stub | Worker: PR diff → lint → optional AI comment |
 | Closed-loop coverage | Upload → holes → auto `coverage_holes` → suggest re-run |
 

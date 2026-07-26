@@ -6,6 +6,7 @@ import { toast } from "sonner";
 export default function CdcPanel({ project, selectedFileIds, onClose }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(null);
+  const [engine, setEngine] = useState("auto");
 
   const rtlIds = selectedFileIds.filter((fid) => {
     const f = (project.files || []).find((x) => x.id === fid);
@@ -24,6 +25,7 @@ export default function CdcPanel({ project, selectedFileIds, onClose }) {
       const { data } = await api.post("/cdc/analyze", {
         project_id: project.id,
         rtl_file_ids: ids,
+        engine,
       });
       setResult(data);
       toast.success(`CDC: ${data.counts?.cdc_warn || 0} warnings`);
@@ -33,6 +35,8 @@ export default function CdcPanel({ project, selectedFileIds, onClose }) {
     setRunning(false);
   };
 
+  const badge = result?.engine_used || (engine === "auto" ? "auto→yosys/heuristic" : engine);
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-6" data-testid="cdc-modal">
       <div className="card-surface w-full max-w-3xl h-[80vh] flex flex-col">
@@ -40,13 +44,18 @@ export default function CdcPanel({ project, selectedFileIds, onClose }) {
           <div className="flex items-center gap-2">
             <GitBranch size={16} className="text-emerald-400" />
             <div className="font-mono text-sm">CDC / RDC (experimental) · {project.name}</div>
-            <span className="pin-badge text-amber-400 border-amber-500/40">v0 heuristic</span>
+            <span className="pin-badge text-amber-400 border-amber-500/40">{badge}</span>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-100" data-testid="cdc-close"><X size={16} /></button>
         </div>
-        <div className="p-4 border-b border-[#1E293B] flex items-center gap-3">
+        <div className="p-4 border-b border-[#1E293B] flex flex-wrap items-center gap-3">
+          <select value={engine} onChange={(e) => setEngine(e.target.value)} className="bg-[#0B0E14] border border-[#1E293B] px-2 py-1 text-xs font-mono">
+            <option value="auto">auto (Yosys JSON + heuristic)</option>
+            <option value="heuristic">heuristic only</option>
+            <option value="yosys-json">Yosys JSON structural</option>
+          </select>
           <div className="font-mono text-[10px] text-slate-500 flex-1">
-            Regex clock-domain heuristics + 2FF detection. Not a Spyglass/Questa CDC replacement.
+            Experimental CDC — not Spyglass/Questa. auto tries Yosys synth.json then merges heuristic.
           </div>
           <button disabled={running || !ids.length} onClick={run} className="btn-neon text-xs inline-flex items-center gap-1" data-testid="cdc-run">
             {running ? <><Loader2 size={12} className="animate-spin" /> Analyzing...</> : <><Play size={12} /> Analyze CDC</>}
@@ -58,7 +67,9 @@ export default function CdcPanel({ project, selectedFileIds, onClose }) {
             <>
               <div className="text-emerald-400 mb-2">
                 clocks: {(result.clocks || []).join(", ") || "(none found)"} · warn={result.counts?.cdc_warn} info={result.counts?.cdc_info} rdc={result.counts?.rdc}
+                · engine={result.engine_used || result.engine}
               </div>
+              {result.note && <div className="text-amber-400 mb-2">{result.note}</div>}
               <div className="text-slate-500 mb-3">{result.disclaimer}</div>
               {(result.findings || []).map((f, i) => (
                 <div key={i} className={`mb-2 ${f.severity === "warn" ? "text-amber-400" : "text-slate-300"}`}>

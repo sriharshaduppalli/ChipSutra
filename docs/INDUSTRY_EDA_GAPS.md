@@ -10,9 +10,9 @@ ChipSutra is an **AI verification copilot** with a growing OSS EDA engine layer 
 | Lint / cycle sim | ✅ Verilator | VCS / Xcelium / Questa |
 | Formal | 🧪 SymbiYosys (+ Yosys via OSS CAD Suite in Docker) | Jasper / VC Formal / Questa Formal |
 | Coverage | ✅ Upload parser + 🧪 Verilator `--coverage` persist | IMC / URG / UCIS |
-| CDC / RDC | 🧪 Heuristic v0 | Spyglass CDC / Questa CDC |
+| CDC / RDC | 🧪 Heuristic + optional Yosys JSON | Spyglass CDC / Questa CDC |
 | Waveform | ✅ VCD hierarchy/search/zoom/cursor | Verdi / DVE / Surfer |
-| Synthesis / LEC / STA | 🧪 Yosys synth + internal equivalence; no STA | DC / Genus / Formality / PT |
+| Synthesis / LEC / STA | 🧪 Yosys synth + equiv + eqy LEC (fallback); OpenSTA scaffold only | DC / Genus / Formality / PT |
 | Vendor adapters / farm / SSO | ❌ Enterprise | Native |
 
 ## Shipped toward industry credibility (this wave)
@@ -21,23 +21,23 @@ ChipSutra is an **AI verification copilot** with a growing OSS EDA engine layer 
 - **Run manifests** (tool versions, argv, input hashes) on sim/formal
 - Formal **property table** + **CEX VCD** harvest
 - Sim **seed** + coverage toggle in UI
-- **CDC/RDC v0** panel (`POST /cdc/analyze`)
+- **CDC/RDC** heuristic + optional Yosys-JSON merge (`POST /cdc/analyze`)
 - Docker optional **OSS CAD Suite** for newer Yosys/SBY
-- Seeded **regression matrix** persisted in Mongo
+- Seeded **regression matrix** with **parallel workers (1–4)**, coverage, and trends
 - Verilator **lint policy/waiver gate** (`chipsutra.lint.json`)
-- Yosys **synthesis + equivalence sanity**
+- Yosys **synthesis + equivalence** + **eqy LEC** (RTL vs auto-synth netlist; falls back to internal equiv) + artifact export
 - VCD **hierarchy/search/zoom/cursor** and direct project-file loading
-- **cocotb scaffold** generation
+- **cocotb scaffold** + **one-click runner** (`POST /api/cocotb/stream`; mock if tools missing)
+- Coverage **trends/merge** endpoints; OpenSTA **SDC/TCL scaffold** (not full STA without liberty)
 
 ## Still missing (priority)
 
-1. Regression **trend/dashboard** and parallel workers
-2. **FST** ingestion and deeper waveform debug
-3. Full **eqy** LEC and synthesis artifact export
-4. One-click **cocotb runner** (scaffold shipped)
-5. Coverage **merge/trend** charts
-6. Structural CDC via Yosys JSON netlist (upgrade v0)
-7. SDC/STA sanity via OpenSTA
+1. **FST** ingestion and deeper waveform debug
+2. Full OpenSTA timing **with liberty** (scaffold only today)
+3. UCIS / industry coverage format adapters
+4. Closed-loop coverage → holes → re-sim
+5. Richer regression dashboard UX beyond SSE + trend summary
+6. Multi-revision LEC (UI currently compares RTL vs auto-synth netlist)
 
 ## Enterprise-only (by design)
 

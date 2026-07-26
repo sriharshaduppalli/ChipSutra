@@ -29,13 +29,36 @@ from llm_provider import stream_chat as llm_stream_chat, available_providers as 
 from rag import augment_generation_context, rag_status as llm_rag_status
 from rtl_ports import extract_port_context_from_texts, rtl_ports_status
 from lint_feedback import format_lint_feedback, lint_feedback_status
-from coverage_parse import parse_text_report, summarize_coverage_dat
+from coverage_parse import parse_text_report, summarize_coverage_dat, trend_points
+from coverage_merge import merge_summary_points
+from coverage_loop import rank_holes, build_closure_prompt, suggest_resim_plan, closure_status
 from formal_parse import parse_sby_log, find_cex_vcds
 from cdc import analyze_rtl_texts
+from cdc_netlist import analyze_yosys_json, merge_cdc_results
+from cdc_deep import analyze_deep, merge_deep
+from fst_parse import ensure_vcd, fst_status, sniff_waveform_format
+import ucis_parse
 from eda_tools import build_manifest, sha256_paths, tool_versions
 from lint_policy import parse_policy, parse_verilator_findings, apply_lint_policy
-from yosys_flow import synth_script, equiv_script, parse_yosys_log
+from yosys_flow import (
+    synth_script,
+    equiv_script,
+    eqy_config,
+    parse_yosys_log,
+    parse_eqy_log,
+    fallback_equiv_note,
+)
 from cocotb_scaffold import render_cocotb_scaffold
+from cocotb_runner import cocotb_available, pick_scaffold_files, build_make_cmd, parse_cocotb_log
+from opensta_flow import (
+    sta_bin,
+    sta_command,
+    build_sta_tcl,
+    liberty_is_plausible,
+    parse_sta_log,
+    default_sdc_stub,
+)
+from rate_limit import enforce_rate_limit, rate_limit_status
 from storage_provider import init_storage as storage_init, put_object as put_object_impl, get_object as get_object_impl, storage_mode
 from google_auth import google_mode, resolve_emergent_session, build_google_auth_url, exchange_code as google_exchange_code
 
@@ -298,6 +321,8 @@ async def startup():
     await db.simulations.create_index([("project_id", 1), ("created_at", -1)])
     await db.regressions.create_index([("project_id", 1), ("created_at", -1)])
     await db.synth_runs.create_index([("project_id", 1), ("created_at", -1)])
+    await db.cocotb_runs.create_index([("project_id", 1), ("created_at", -1)])
+    await db.sta_runs.create_index([("project_id", 1), ("created_at", -1)])
     # Seed admin
     existing = await db.users.find_one({"email": ADMIN_EMAIL})
     if not existing:
@@ -370,13 +395,16 @@ async def health():
         "eqy": bool(_sh.which("eqy")),
         "sby": bool(_sh.which("sby")),
         "cocotb": bool(_sh.which("cocotb-config")),
+        "opensta": bool(sta_bin()),
+        "fst": fst_status(),
+        "rate_limit": rate_limit_status(),
         "llm_providers": providers,
         "ollama": llm_ollama_status(),
         "rag": llm_rag_status(),
         "rtl_ports": rtl_ports_status(),
         "lint_feedback": lint_feedback_status(),
         "eda_tools": tool_versions(),
-        "cdc": {"engine": "chipsutra-cdc-v0", "status": "experimental"},
+        "cdc": {"engine": "chipsutra-cdc-v0|v1-yosys", "status": "experimental"},
         "google_auth": google_mode(),
     }
 
@@ -648,7 +676,7 @@ async def delete_comment(comment_id: str, user=Depends(get_current_user)):
 # =========================
 # File uploads
 # =========================
-ALLOWED_EXTS = {"v", "sv", "vhd", "vhdl", "pdf", "md", "docx", "txt", "vcd", "csv", "json", "log", "rpt"}
+ALLOWED_EXTS = {"v", "sv", "vhd", "vhdl", "pdf", "md", "docx", "txt", "vcd", "fst", "csv", "json", "log", "rpt", "lib", "sdc", "xml"}
 
 @api.post("/projects/{pid}/files")
 async def upload_file(pid: str, file: UploadFile = File(...), kind: str = Form("rtl"), user=Depends(get_current_user)):
@@ -676,7 +704,7 @@ async def upload_file(pid: str, file: UploadFile = File(...), kind: str = Form("
         "size": len(data),
         "content_type": file.content_type or "application/octet-stream",
         "storage_path": storage_path,
-        "inline_content": data.decode("utf-8", errors="ignore") if storage_path is None and ext in ("v","sv","vhd","vhdl","txt","md","vcd","log","rpt","csv","json") else None,
+        "inline_content": data.decode("utf-8", errors="ignore") if storage_path is None and ext in ("v","sv","vhd","vhdl","txt","md","vcd","log","rpt","csv","json","lib","sdc","xml") else None,
         "is_deleted": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -720,6 +748,19 @@ def _get_file_text(fdoc: dict) -> str:
         except Exception:
             return ""
     return ""
+
+def _get_file_bytes(fdoc: dict) -> bytes:
+    """Raw bytes of a stored file (binary-safe — FST waveforms cannot round-trip as text)."""
+    if fdoc.get("storage_path"):
+        try:
+            data, _ = get_object(fdoc["storage_path"])
+            return data
+        except Exception:
+            return b""
+    inline = fdoc.get("inline_content")
+    if inline:
+        return inline.encode("utf-8", errors="ignore")
+    return b""
 
 @api.post("/generate/stream")
 async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
@@ -849,7 +890,11 @@ async def parse_coverage(
     user=Depends(get_current_user),
 ):
     data = (await file.read()).decode("utf-8", errors="ignore")
-    result = parse_text_report(data)
+    # Industry exports first (UCIS XML / IMC-URG / CSV), plain text report as the fallback.
+    try:
+        result = ucis_parse.detect_and_parse(data, file.filename or "")
+    except ValueError:
+        result = parse_text_report(data)
     if project_id:
         await require_project(project_id, user["id"], "editor")
         run_id = str(uuid.uuid4())
@@ -858,6 +903,7 @@ async def parse_coverage(
             "project_id": project_id,
             "user_id": user["id"],
             "source": result.get("source", "text_report"),
+            "detected": result.get("detected"),
             "filename": file.filename,
             "overall": result["overall"],
             "metrics": result["metrics"],
@@ -874,6 +920,104 @@ async def list_coverage_runs(pid: str, user=Depends(get_current_user)):
     await require_project(pid, user["id"], "viewer")
     docs = await db.coverage_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(50)
     return docs
+
+
+@api.get("/projects/{pid}/coverage/trends")
+async def coverage_trends(pid: str, limit: int = Query(30, ge=1, le=100), user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "viewer")
+    docs = await db.coverage_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    return trend_points(docs, limit=limit)
+
+
+class CoverageMergeIn(BaseModel):
+    coverage_run_ids: List[str] = Field(default_factory=list)
+
+
+@api.post("/projects/{pid}/coverage/merge")
+async def coverage_merge(pid: str, inp: CoverageMergeIn, user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "editor")
+    ids = (inp.coverage_run_ids or [])[:20]
+    if len(ids) < 2:
+        raise HTTPException(400, "Provide at least two coverage_run_ids")
+    docs = await db.coverage_runs.find(
+        {"project_id": pid, "id": {"$in": ids}},
+        {"_id": 0},
+    ).to_list(20)
+    if len(docs) < 2:
+        raise HTTPException(404, "Need at least two persisted coverage runs")
+    # Union merge: a point is covered if any run covered it (averaging under-reports).
+    merged = merge_summary_points(docs)
+    run_id = str(uuid.uuid4())
+    doc = {
+        "id": run_id,
+        "project_id": pid,
+        "user_id": user["id"],
+        **merged,
+        "source_ids": [d["id"] for d in docs],
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.coverage_runs.insert_one(doc)
+    merged["coverage_run_id"] = run_id
+    return merged
+
+
+async def _coverage_doc(pid: str, cov_id: str) -> dict:
+    doc = await db.coverage_runs.find_one({"project_id": pid, "id": cov_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Coverage run not found")
+    return doc
+
+
+@api.get("/projects/{pid}/coverage/{cov_id}/holes")
+async def coverage_holes(
+    pid: str,
+    cov_id: str,
+    limit: int = Query(20, ge=1, le=200),
+    user=Depends(get_current_user),
+):
+    await require_project(pid, user["id"], "viewer")
+    doc = await _coverage_doc(pid, cov_id)
+    return {"holes": rank_holes(doc, limit=limit)}
+
+
+class CoverageClosureIn(BaseModel):
+    rtl_file_ids: List[str] = Field(default_factory=list)
+    top_module: Optional[str] = None
+    limit: int = 12
+    base_seed: int = 1
+    max_cases: int = 6
+
+
+@api.post("/projects/{pid}/coverage/{cov_id}/closure-plan")
+async def coverage_closure_plan(pid: str, cov_id: str, inp: CoverageClosureIn, user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "editor")
+    doc = await _coverage_doc(pid, cov_id)
+    rtl_names: List[str] = []
+    if inp.rtl_file_ids:
+        fdocs = await db.files.find(
+            {"id": {"$in": inp.rtl_file_ids[:50]}, "project_id": pid, "is_deleted": {"$ne": True}},
+            {"_id": 0},
+        ).to_list(50)
+        rtl_names = [f.get("original_filename") or f["id"] for f in fdocs]
+    return {
+        "coverage_run_id": cov_id,
+        "prompt": build_closure_prompt(doc, rtl_names, top_module=inp.top_module, limit=inp.limit),
+        "resim": suggest_resim_plan(doc, base_seed=inp.base_seed, max_cases=inp.max_cases),
+        "rtl_names": rtl_names,
+    }
+
+
+class CoverageClosureStatusIn(BaseModel):
+    before_id: str
+    after_id: str
+
+
+@api.post("/projects/{pid}/coverage/closure-status")
+async def coverage_closure_status(pid: str, inp: CoverageClosureStatusIn, user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "viewer")
+    before = await _coverage_doc(pid, inp.before_id)
+    after = await _coverage_doc(pid, inp.after_id)
+    return closure_status(before, after)
 
 # =========================
 # VCD parser
@@ -1020,9 +1164,27 @@ def parse_vcd(
         "truncated": truncated,
     }
 
+def _vcd_text_from_waveform(data: bytes, filename: str = "waveform") -> str:
+    """VCD text from raw waveform bytes. FST is converted via fst2vcd; VCD passes through."""
+    if sniff_waveform_format(data) != "fst":
+        return data.decode("utf-8", errors="ignore")
+    safe = re.sub(r"[^A-Za-z0-9_.\-]", "_", filename or "waveform") or "waveform"
+    if not safe.lower().endswith(".fst"):
+        safe += ".fst"
+    with tempfile.TemporaryDirectory(prefix="chipsutra_fst_") as tmp:
+        src = os.path.join(tmp, safe)
+        with open(src, "wb") as fh:
+            fh.write(data)
+        res = ensure_vcd(src, out_dir=tmp)
+        if not res.get("ok"):
+            raise HTTPException(400, res.get("note") or "FST waveform could not be converted to VCD")
+        with open(res["vcd_path"], encoding="utf-8", errors="ignore") as fh:
+            return fh.read()
+
+
 @api.post("/waveform/parse")
 async def parse_waveform(file: UploadFile = File(...), user=Depends(get_current_user)):
-    data = (await file.read()).decode("utf-8", errors="ignore")
+    data = _vcd_text_from_waveform(await file.read(), file.filename or "waveform")
     try:
         result = parse_vcd(data)
     except Exception as e:
@@ -1047,7 +1209,11 @@ async def parse_project_waveform(inp: WaveformProjectIn, user=Depends(get_curren
     )
     if not f:
         raise HTTPException(404, "VCD file not found")
-    text = _get_file_text(f)
+    raw = _get_file_bytes(f)
+    if sniff_waveform_format(raw) == "fst":
+        text = _vcd_text_from_waveform(raw, f.get("original_filename") or "waveform")
+    else:
+        text = _get_file_text(f)
     if not text:
         raise HTTPException(400, "VCD file is empty or unreadable")
     try:
@@ -1242,11 +1408,13 @@ async def simulate_stream(inp: SimulateIn, user=Depends(get_current_user)):
                                 # Provide a minimal main if testbench has no $finish — we still need main.cpp
                                 main_cpp = os.path.join(tmp, "sim_main.cpp")
                                 seed_line = f"    srand({int(inp.seed)});\n" if inp.seed is not None else ""
+                                coverage_include = "#include <verilated_cov.h>\n" if inp.coverage else ""
+                                coverage_write = '    VerilatedCov::write("coverage.dat");\n' if inp.coverage else ""
                                 with open(main_cpp, "w") as fh:
                                     fh.write(f"""
 #include <verilated.h>
 #include <verilated_vcd_c.h>
-#include <cstdlib>
+{coverage_include}#include <cstdlib>
 #include "V{top}.h"
 int main(int argc, char** argv) {{
     Verilated::commandArgs(argc, argv);
@@ -1263,7 +1431,7 @@ int main(int argc, char** argv) {{
     }}
     tfp->close();
     top->final();
-    delete top;
+{coverage_write}    delete top;
     return 0;
 }}
 """)
@@ -1300,6 +1468,8 @@ int main(int argc, char** argv) {{
                                     if rc == 0 and not timed_out:
                                         # Run the built executable
                                         exe_path = os.path.join(tmp, "obj_dir", exe_name)
+                                        if os.name == "nt" and os.path.exists(exe_path + ".exe"):
+                                            exe_path += ".exe"
                                         if os.path.exists(exe_path):
                                             yield log(f"$ ./obj_dir/{exe_name}")
                                             rp = await asyncio.create_subprocess_exec(exe_path, cwd=tmp,
@@ -1448,31 +1618,226 @@ async def list_simulations(pid: str, user=Depends(get_current_user)):
     return docs
 
 
+TOOL_LOG_MAX_CHARS = 8000
+
+@api.get("/projects/{pid}/latest-tool-log")
+async def latest_tool_log(pid: str, user=Depends(get_current_user)):
+    """Tail of the newest simulation/lint log so Generate can auto-fill tool_log."""
+    await require_project(pid, user["id"], "viewer")
+    doc = await db.simulations.find_one(
+        {"project_id": pid, "log": {"$nin": [None, ""]}},
+        {"_id": 0},
+        sort=[("created_at", -1)],
+    )
+    if not doc:
+        return {"tool_log": None, "simulation_id": None, "status": None, "created_at": None}
+    log = doc.get("log") or ""
+    return {
+        "tool_log": log[-TOOL_LOG_MAX_CHARS:],
+        "simulation_id": doc.get("id"),
+        "status": doc.get("status"),
+        "created_at": doc.get("created_at"),
+        "truncated": len(log) > TOOL_LOG_MAX_CHARS,
+    }
+
+
 # =========================
 # Seeded regression matrix
 # =========================
 class RegressionCase(BaseModel):
     name: str
-    rtl_file_ids: List[str] = []
+    rtl_file_ids: List[str] = Field(default_factory=list)
     tb_file_id: Optional[str] = None
     top_module: Optional[str] = None
     mode: str = "run"  # lint | run
     sim_time_ns: int = 1000
-    seeds: List[int] = []
+    seeds: List[int] = Field(default_factory=list)
+    coverage: bool = False
 
 
 class RegressionIn(BaseModel):
     project_id: str
-    cases: List[RegressionCase] = []
+    cases: List[RegressionCase] = Field(default_factory=list)
     stop_on_fail: bool = False
+    max_workers: int = 1
 
 
-def _expand_regression_cases(cases: List[RegressionCase]) -> List[tuple[RegressionCase, Optional[int]]]:
-    cells: List[tuple[RegressionCase, Optional[int]]] = []
+def _expand_regression_cases(cases: List[RegressionCase]) -> List[tuple]:
+    cells: List[tuple] = []
     for case in cases:
         for seed in (case.seeds or [None]):
             cells.append((case, seed))
     return cells
+
+
+async def _run_regression_cell(
+    *,
+    index: int,
+    case: RegressionCase,
+    seed: Optional[int],
+    project_id: str,
+    user_id: str,
+    regression_id: str,
+) -> dict:
+    sim_id = str(uuid.uuid4())
+    all_ids = list(case.rtl_file_ids)
+    if case.tb_file_id and case.tb_file_id not in all_ids:
+        all_ids.append(case.tb_file_id)
+    cell = {
+        "index": index,
+        "name": case.name,
+        "seed": seed,
+        "simulation_id": sim_id,
+        "status": "error",
+    }
+    logs: List[str] = []
+    engine = "verilator" if VERILATOR_BIN else "mock"
+    await db.simulations.insert_one(
+        {
+            "id": sim_id,
+            "regression_id": regression_id,
+            "project_id": project_id,
+            "user_id": user_id,
+            "engine": engine,
+            "file_ids": all_ids,
+            "top_module": case.top_module,
+            "mode": case.mode,
+            "seed": seed,
+            "status": "streaming",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    if not all_ids:
+        logs.append("No RTL/TB files supplied")
+    elif not VERILATOR_BIN:
+        logs.append("[mock] Verilator unavailable; regression cell not executed")
+        cell["status"] = "mock"
+    else:
+        with tempfile.TemporaryDirectory(prefix="chipsutra_reg_") as tmp:
+            try:
+                written = await _write_files_to_dir(all_ids, project_id, tmp)
+                top = case.top_module
+                if not top and written:
+                    with open(written[0], encoding="utf-8", errors="ignore") as fh:
+                        top = _extract_top_module(fh.read())
+                if not top:
+                    raise RuntimeError("top module not detected")
+                basenames = [os.path.basename(p) for p in written]
+                if case.mode == "lint":
+                    cmd = [VERILATOR_BIN, "--lint-only", "-Wno-fatal", "--top-module", top] + basenames
+                else:
+                    main_cpp = os.path.join(tmp, "reg_main.cpp")
+                    seed_line = f"srand({int(seed)});" if seed is not None else ""
+                    coverage_include = "#include <verilated_cov.h>\n" if case.coverage else ""
+                    coverage_write = '  VerilatedCov::write("coverage.dat");\n' if case.coverage else ""
+                    with open(main_cpp, "w", encoding="utf-8") as fh:
+                        fh.write(
+                            f"""#include <verilated.h>
+{coverage_include}#include <cstdlib>
+#include "V{top}.h"
+int main(int argc, char** argv) {{
+  Verilated::commandArgs(argc, argv); {seed_line}
+  V{top} dut;
+  for (vluint64_t t = 0; t < {max(50, case.sim_time_ns)} && !Verilated::gotFinish(); ++t) dut.eval();
+  dut.final();
+{coverage_write}  return 0;
+}}
+"""
+                        )
+                    cmd = [
+                        VERILATOR_BIN,
+                        "--cc",
+                        "--exe",
+                        "--build",
+                        "-Wno-fatal",
+                        "--timing",
+                        "--top-module",
+                        top,
+                        "--Mdir",
+                        "obj_dir",
+                    ]
+                    if case.coverage:
+                        cmd += ["--coverage-line", "--coverage-toggle"]
+                    cmd += basenames + [os.path.basename(main_cpp)]
+                manifest = build_manifest(
+                    engine="verilator",
+                    mode=case.mode,
+                    command=cmd,
+                    top_module=top,
+                    file_hashes=sha256_paths(written),
+                    extra={"seed": seed, "regression_id": regression_id},
+                )
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    cwd=tmp,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                assert proc.stdout is not None
+                async for raw, timed_out in _stream_with_timeout(proc, 90.0):
+                    line = raw.decode("utf-8", errors="ignore").rstrip()
+                    if line:
+                        logs.append(line)
+                    if timed_out:
+                        logs.append("Regression cell timed out")
+                        break
+                rc = await proc.wait()
+                if rc == 0 and case.mode == "run":
+                    exe = os.path.join(tmp, "obj_dir", f"V{top}")
+                    if os.name == "nt":
+                        exe_win = exe + ".exe"
+                        if os.path.exists(exe_win):
+                            exe = exe_win
+                    rp = await asyncio.create_subprocess_exec(
+                        exe,
+                        cwd=tmp,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                    assert rp.stdout is not None
+                    async for raw, timed_out in _stream_with_timeout(rp, 30.0):
+                        line = raw.decode("utf-8", errors="ignore").rstrip()
+                        if line:
+                            logs.append(line)
+                        if timed_out:
+                            break
+                    rc = await rp.wait()
+                    if case.coverage:
+                        cov = summarize_coverage_dat(tmp)
+                        if cov:
+                            cov_id = str(uuid.uuid4())
+                            await db.coverage_runs.insert_one(
+                                {
+                                    "id": cov_id,
+                                    "project_id": project_id,
+                                    "user_id": user_id,
+                                    "simulation_id": sim_id,
+                                    "regression_id": regression_id,
+                                    **cov,
+                                    "created_at": datetime.now(timezone.utc).isoformat(),
+                                }
+                            )
+                            cell["coverage_run_id"] = cov_id
+                            cell["coverage_overall"] = cov.get("overall")
+                            await db.simulations.update_one(
+                                {"id": sim_id},
+                                {"$set": {"coverage_run_id": cov_id, "coverage_summary": cov}},
+                            )
+                cell["status"] = "done" if rc == 0 else "error"
+                await db.simulations.update_one({"id": sim_id}, {"$set": {"manifest": manifest}})
+            except Exception as e:
+                logs.append(str(e))
+                cell["status"] = "error"
+    await db.simulations.update_one(
+        {"id": sim_id},
+        {"$set": {
+            "status": cell["status"],
+            "log": "\n".join(logs),
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        }},
+    )
+    cell["log_tail"] = logs[-8:]
+    return cell
 
 
 @api.post("/regress/stream")
@@ -1483,6 +1848,7 @@ async def regression_stream(inp: RegressionIn, user=Depends(get_current_user)):
         raise HTTPException(400, "Provide at least one regression case")
     if len(cells) > 20:
         raise HTTPException(400, "Regression matrix is capped at 20 runs")
+    max_workers = max(1, min(4, int(inp.max_workers or 1)))
 
     regression_id = str(uuid.uuid4())
     await db.regressions.insert_one(
@@ -1492,148 +1858,72 @@ async def regression_stream(inp: RegressionIn, user=Depends(get_current_user)):
             "user_id": user["id"],
             "status": "streaming",
             "requested_runs": len(cells),
+            "max_workers": max_workers,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
     )
 
     async def evgen():
-        yield f"data: {json.dumps({'type':'meta','regression_id': regression_id, 'runs': len(cells)})}\n\n"
+        yield f"data: {json.dumps({'type':'meta','regression_id': regression_id, 'runs': len(cells), 'max_workers': max_workers})}\n\n"
         results = []
-        for index, (case, seed) in enumerate(cells):
-            sim_id = str(uuid.uuid4())
-            all_ids = list(case.rtl_file_ids)
-            if case.tb_file_id and case.tb_file_id not in all_ids:
-                all_ids.append(case.tb_file_id)
-            cell = {
-                "index": index,
-                "name": case.name,
-                "seed": seed,
-                "simulation_id": sim_id,
-                "status": "error",
-            }
-            yield f"data: {json.dumps({'type':'case_start', **cell})}\n\n"
-            logs: List[str] = []
-            engine = "verilator" if VERILATOR_BIN else "mock"
-            await db.simulations.insert_one(
-                {
-                    "id": sim_id,
-                    "regression_id": regression_id,
-                    "project_id": inp.project_id,
-                    "user_id": user["id"],
-                    "engine": engine,
-                    "file_ids": all_ids,
-                    "top_module": case.top_module,
-                    "mode": case.mode,
-                    "seed": seed,
-                    "status": "streaming",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
-            if not all_ids:
-                logs.append("No RTL/TB files supplied")
-            elif not VERILATOR_BIN:
-                logs.append("[mock] Verilator unavailable; regression cell not executed")
-                cell["status"] = "mock"
-            else:
-                with tempfile.TemporaryDirectory(prefix="chipsutra_reg_") as tmp:
-                    try:
-                        written = await _write_files_to_dir(all_ids, inp.project_id, tmp)
-                        top = case.top_module
-                        if not top and written:
-                            with open(written[0], encoding="utf-8", errors="ignore") as fh:
-                                top = _extract_top_module(fh.read())
-                        if not top:
-                            raise RuntimeError("top module not detected")
-                        basenames = [os.path.basename(p) for p in written]
-                        if case.mode == "lint":
-                            cmd = [VERILATOR_BIN, "--lint-only", "-Wno-fatal", "--top-module", top] + basenames
-                        else:
-                            main_cpp = os.path.join(tmp, "reg_main.cpp")
-                            seed_line = f"srand({int(seed)});" if seed is not None else ""
-                            with open(main_cpp, "w", encoding="utf-8") as fh:
-                                fh.write(
-                                    f"""#include <verilated.h>
-#include <cstdlib>
-#include "V{top}.h"
-int main(int argc, char** argv) {{
-  Verilated::commandArgs(argc, argv); {seed_line}
-  V{top} dut;
-  for (vluint64_t t = 0; t < {max(50, case.sim_time_ns)} && !Verilated::gotFinish(); ++t) dut.eval();
-  dut.final();
-  return 0;
-}}
-"""
-                                )
-                            cmd = [
-                                VERILATOR_BIN,
-                                "--cc",
-                                "--exe",
-                                "--build",
-                                "-Wno-fatal",
-                                "--timing",
-                                "--top-module",
-                                top,
-                                "--Mdir",
-                                "obj_dir",
-                            ] + basenames + [os.path.basename(main_cpp)]
-                        manifest = build_manifest(
-                            engine="verilator",
-                            mode=case.mode,
-                            command=cmd,
-                            top_module=top,
-                            file_hashes=sha256_paths(written),
-                            extra={"seed": seed, "regression_id": regression_id},
-                        )
-                        proc = await asyncio.create_subprocess_exec(
-                            *cmd,
-                            cwd=tmp,
-                            stdout=asyncio.subprocess.PIPE,
-                            stderr=asyncio.subprocess.STDOUT,
-                        )
-                        assert proc.stdout is not None
-                        async for raw, timed_out in _stream_with_timeout(proc, 90.0):
-                            line = raw.decode("utf-8", errors="ignore").rstrip()
-                            if line:
-                                logs.append(line)
-                            if timed_out:
-                                logs.append("Regression cell timed out")
-                                break
-                        rc = await proc.wait()
-                        if rc == 0 and case.mode == "run":
-                            exe = os.path.join(tmp, "obj_dir", f"V{top}")
-                            rp = await asyncio.create_subprocess_exec(
-                                exe,
-                                cwd=tmp,
-                                stdout=asyncio.subprocess.PIPE,
-                                stderr=asyncio.subprocess.STDOUT,
-                            )
-                            assert rp.stdout is not None
-                            async for raw, timed_out in _stream_with_timeout(rp, 30.0):
-                                line = raw.decode("utf-8", errors="ignore").rstrip()
-                                if line:
-                                    logs.append(line)
-                                if timed_out:
-                                    break
-                            rc = await rp.wait()
-                        cell["status"] = "done" if rc == 0 else "error"
-                        await db.simulations.update_one({"id": sim_id}, {"$set": {"manifest": manifest}})
-                    except Exception as e:
-                        logs.append(str(e))
-                        cell["status"] = "error"
-            await db.simulations.update_one(
-                {"id": sim_id},
-                {"$set": {
-                    "status": cell["status"],
-                    "log": "\n".join(logs),
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                }},
-            )
-            results.append(cell)
-            yield f"data: {json.dumps({'type':'case_done', **cell, 'log_tail': logs[-8:]})}\n\n"
-            if inp.stop_on_fail and cell["status"] == "error":
+        event_q: asyncio.Queue = asyncio.Queue()
+        sem = asyncio.Semaphore(max_workers)
+        stop_event = asyncio.Event()
+
+        async def worker(index: int, case: RegressionCase, seed: Optional[int]):
+            if stop_event.is_set():
+                return
+            await event_q.put({"type": "case_start", "index": index, "name": case.name, "seed": seed, "status": "running"})
+            async with sem:
+                if stop_event.is_set():
+                    await event_q.put({
+                        "type": "case_done",
+                        "index": index,
+                        "name": case.name,
+                        "seed": seed,
+                        "status": "skipped",
+                        "simulation_id": None,
+                        "log_tail": ["Skipped after stop_on_fail"],
+                    })
+                    return
+                cell = await _run_regression_cell(
+                    index=index,
+                    case=case,
+                    seed=seed,
+                    project_id=inp.project_id,
+                    user_id=user["id"],
+                    regression_id=regression_id,
+                )
+            await event_q.put({"type": "case_done", **cell})
+            if inp.stop_on_fail and cell.get("status") == "error":
+                stop_event.set()
+
+        tasks = [
+            asyncio.create_task(worker(index, case, seed))
+            for index, (case, seed) in enumerate(cells)
+        ]
+
+        async def _join_tasks():
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await event_q.put(None)
+
+        joiner = asyncio.create_task(_join_tasks())
+        while True:
+            event = await event_q.get()
+            if event is None:
                 break
-        passed = sum(1 for r in results if r["status"] == "done")
-        failed = sum(1 for r in results if r["status"] == "error")
+            if event.get("type") == "case_done":
+                results.append({k: event[k] for k in event if k != "type"})
+                await db.regressions.update_one(
+                    {"id": regression_id},
+                    {"$set": {"results": results, "passed": sum(1 for r in results if r.get("status") == "done"),
+                              "failed": sum(1 for r in results if r.get("status") == "error")}},
+                )
+            yield f"data: {json.dumps(event)}\n\n"
+        await joiner
+        results.sort(key=lambda r: r.get("index", 0))
+        passed = sum(1 for r in results if r.get("status") == "done")
+        failed = sum(1 for r in results if r.get("status") == "error")
         final_status = "done" if failed == 0 else "error"
         await db.regressions.update_one(
             {"id": regression_id},
@@ -1658,6 +1948,25 @@ int main(int argc, char** argv) {{
 async def list_regressions(pid: str, user=Depends(get_current_user)):
     await require_project(pid, user["id"], "viewer")
     return await db.regressions.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(30)
+
+
+@api.get("/projects/{pid}/regressions/trends")
+async def regression_trends(pid: str, limit: int = Query(30, ge=1, le=100), user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "viewer")
+    docs = await db.regressions.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(limit)
+    points = []
+    for d in reversed(docs):
+        points.append(
+            {
+                "id": d.get("id"),
+                "created_at": d.get("created_at"),
+                "passed": d.get("passed", 0),
+                "failed": d.get("failed", 0),
+                "status": d.get("status"),
+                "requested_runs": d.get("requested_runs"),
+            }
+        )
+    return {"points": points, "count": len(points)}
 
 # =========================
 # Chiplet Templates (UCIe/BoW)
@@ -1729,6 +2038,101 @@ async def get_template(tid: str):
         if t["id"] == tid:
             return t
     raise HTTPException(404, "Template not found")
+
+# =========================
+# Golden reference DUTs (backend/knowledge/golden)
+# =========================
+GOLDEN_DIR = ROOT_DIR / "knowledge" / "golden"
+
+
+def _golden_descriptions() -> dict:
+    """Map filename -> one-line description from the README markdown table."""
+    out: dict = {}
+    readme = GOLDEN_DIR / "README.md"
+    if not readme.is_file():
+        return out
+    try:
+        text = readme.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return out
+    for line in text.splitlines():
+        m = re.match(r"^\|\s*`([^`]+)`\s*\|\s*(.+?)\s*\|\s*$", line.strip())
+        if m:
+            out[m.group(1)] = m.group(2).replace("`", "")
+    return out
+
+
+def _golden_entries() -> List[dict]:
+    if not GOLDEN_DIR.is_dir():
+        return []
+    descriptions = _golden_descriptions()
+    entries = []
+    for path in sorted(GOLDEN_DIR.iterdir()):
+        if not path.is_file():
+            continue
+        entries.append(
+            {
+                "name": path.name,
+                "bytes": path.stat().st_size,
+                "kind": _golden_kind(path.name),
+                "description": descriptions.get(path.name),
+            }
+        )
+    return entries
+
+
+def _golden_kind(name: str) -> str:
+    low = name.lower()
+    if not low.endswith((".sv", ".v")):
+        return "doc"
+    return "tb" if low.endswith("_tb.sv") or low.endswith("_tb.v") else "rtl"
+
+
+@api.get("/golden-duts")
+async def list_golden_duts():
+    """Known-good reference RTL/testbenches shipped with ChipSutra."""
+    return {"files": _golden_entries(), "dir": str(GOLDEN_DIR)}
+
+
+class ImportGoldenIn(BaseModel):
+    names: Optional[List[str]] = None
+
+
+@api.post("/projects/{pid}/import-golden")
+async def import_golden_duts(pid: str, inp: ImportGoldenIn, user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "editor")
+    available = {e["name"]: e for e in _golden_entries()}
+    if not available:
+        raise HTTPException(404, "No golden DUTs available in this installation")
+    if inp.names is None:
+        wanted = [n for n in available if n.lower().endswith((".sv", ".v"))]
+    else:
+        wanted = []
+        for raw in inp.names:
+            # Exact basenames only — never let a caller escape the golden directory.
+            name = os.path.basename(str(raw or "").strip())
+            if name not in available:
+                raise HTTPException(400, f"Unknown golden DUT: {raw}")
+            wanted.append(name)
+    if not wanted:
+        raise HTTPException(400, "No golden DUTs selected")
+
+    created = []
+    for name in wanted:
+        path = GOLDEN_DIR / name
+        try:
+            content = path.read_text(encoding="utf-8", errors="ignore")
+        except Exception as e:
+            raise HTTPException(500, f"Cannot read golden DUT {name}: {e}")
+        saved = await _persist_project_text_file(
+            project_id=pid,
+            filename=name,
+            content=content,
+            kind=_golden_kind(name),
+            content_type="text/plain",
+        )
+        created.append(saved)
+    return {"files": created, "count": len(created)}
 
 # =========================
 # Google OAuth (Emergent-managed OR standalone)
@@ -1997,19 +2401,10 @@ async def workspace_projects(wid: str, user=Depends(get_current_user)):
     return docs
 
 # =========================
-# Rate limiting (in-memory)
+# Rate limiting (Redis when REDIS_URL is set, in-memory otherwise — see rate_limit.py)
 # =========================
-_rate_buckets: dict[str, list[float]] = {}
 def _rate_limit(key: str, max_calls: int = 10, window_s: float = 60.0):
-    import time as _t
-    now = _t.time()
-    buf = _rate_buckets.setdefault(key, [])
-    # Purge old
-    while buf and buf[0] < now - window_s:
-        buf.pop(0)
-    if len(buf) >= max_calls:
-        raise HTTPException(429, "Too many requests. Try again in a moment.")
-    buf.append(now)
+    return enforce_rate_limit(key, max_calls=max_calls, window_s=window_s)
 
 # =========================
 # Include router
@@ -2176,24 +2571,77 @@ prep -top {top}
     return StreamingResponse(evgen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
-# ---- Yosys synthesis / equivalence sanity ----
+# ---- Yosys synthesis / equivalence / eqy LEC ----
 YOSYS_BIN = shutil.which("yosys")
+EQY_BIN = shutil.which("eqy")
 
 
 class SynthIn(BaseModel):
     project_id: str
-    rtl_file_ids: List[str] = []
+    rtl_file_ids: List[str] = Field(default_factory=list)
     top_module: Optional[str] = None
-    mode: str = "synth"  # synth | equiv
+    mode: str = "synth"  # synth | equiv | eqy
+    # Multi-revision LEC: compare two explicit file sets (eqy mode) instead of RTL vs its own netlist
+    gold_file_ids: List[str] = Field(default_factory=list)
+    gate_file_ids: List[str] = Field(default_factory=list)
+
+
+async def _unique_project_filename(project_id: str, filename: str) -> str:
+    exists = await db.files.find_one(
+        {"project_id": project_id, "original_filename": filename, "is_deleted": {"$ne": True}},
+        {"_id": 0, "id": 1},
+    )
+    if not exists:
+        return filename
+    if "." in filename:
+        stem, ext = filename.rsplit(".", 1)
+        return f"{stem}_{uuid.uuid4().hex[:8]}.{ext}"
+    return f"{filename}_{uuid.uuid4().hex[:8]}"
+
+
+async def _persist_project_text_file(
+    *,
+    project_id: str,
+    filename: str,
+    content: str,
+    kind: str = "artifact",
+    content_type: str = "text/plain",
+) -> dict:
+    name = await _unique_project_filename(project_id, filename)
+    file_id = str(uuid.uuid4())
+    data = content.encode("utf-8")
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    storage_path = None
+    try:
+        r = put_object(f"{APP_NAME}/projects/{project_id}/{file_id}.{ext or 'txt'}", data, content_type)
+        storage_path = r["path"]
+    except Exception:
+        pass
+    doc = {
+        "id": file_id,
+        "project_id": project_id,
+        "original_filename": name,
+        "ext": ext,
+        "kind": kind,
+        "size": len(data),
+        "content_type": content_type,
+        "storage_path": storage_path,
+        "inline_content": content if storage_path is None else None,
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.files.insert_one(doc)
+    return {k: v for k, v in doc.items() if k not in ("inline_content", "_id")}
 
 
 @api.post("/synth/stream")
 async def synth_stream(inp: SynthIn, user=Depends(get_current_user)):
     await require_project(inp.project_id, user["id"], "editor")
-    if not inp.rtl_file_ids:
+    multi_rev = inp.mode == "eqy" and bool(inp.gold_file_ids) and bool(inp.gate_file_ids)
+    if not inp.rtl_file_ids and not multi_rev:
         raise HTTPException(400, "Provide at least one synthesizable RTL file")
-    if inp.mode not in ("synth", "equiv"):
-        raise HTTPException(400, "mode must be synth or equiv")
+    if inp.mode not in ("synth", "equiv", "eqy"):
+        raise HTTPException(400, "mode must be synth, equiv, or eqy")
     run_id = str(uuid.uuid4())
     await db.synth_runs.insert_one(
         {
@@ -2208,64 +2656,236 @@ async def synth_stream(inp: SynthIn, user=Depends(get_current_user)):
 
     async def evgen():
         engine = "yosys" if YOSYS_BIN else "mock"
-        yield f"data: {json.dumps({'type':'meta','synth_id': run_id,'engine': engine})}\n\n"
+        if inp.mode == "eqy" and EQY_BIN and YOSYS_BIN:
+            engine = "eqy"
+        yield f"data: {json.dumps({'type':'meta','synth_id': run_id,'engine': engine, 'mode': inp.mode})}\n\n"
         logs: List[str] = []
         status = "error"
-        stats = {}
+        stats: dict = {}
+        artifact_ids: List[str] = []
+        note: Optional[str] = None
+
         if not YOSYS_BIN:
-            logs.append("[mock] Yosys unavailable. Use Docker/OSS CAD Suite for synthesis.")
-            yield f"data: {json.dumps({'type':'log','level':'warn','line':logs[-1]})}\n\n"
+            msg = "[mock] Yosys unavailable. Use Docker/OSS CAD Suite for synthesis / LEC."
+            logs.append(msg)
+            yield f"data: {json.dumps({'type':'log','level':'warn','line':msg})}\n\n"
             status = "mock"
+            stats = {"note": msg, "equivalence": None}
         else:
             with tempfile.TemporaryDirectory(prefix="chipsutra_synth_") as tmp:
                 try:
-                    written = await _write_files_to_dir(inp.rtl_file_ids, inp.project_id, tmp)
-                    if not written:
-                        raise RuntimeError("No readable RTL files")
+                    gold_rel: List[str] = []
+                    gate_rel: List[str] = []
+                    if multi_rev:
+                        # Separate subdirs so a revision pair with identical filenames does not collide.
+                        gold_dir = os.path.join(tmp, "gold")
+                        gate_dir = os.path.join(tmp, "gate")
+                        os.makedirs(gold_dir, exist_ok=True)
+                        os.makedirs(gate_dir, exist_ok=True)
+                        gold_written = await _write_files_to_dir(inp.gold_file_ids, inp.project_id, gold_dir)
+                        gate_written = await _write_files_to_dir(inp.gate_file_ids, inp.project_id, gate_dir)
+                        if not gold_written or not gate_written:
+                            raise RuntimeError("Multi-revision LEC needs readable gold and gate files")
+                        gold_rel = ["gold/" + os.path.basename(p) for p in gold_written]
+                        gate_rel = ["gate/" + os.path.basename(p) for p in gate_written]
+                        written = gold_written + gate_written
+                    else:
+                        written = await _write_files_to_dir(inp.rtl_file_ids, inp.project_id, tmp)
+                        if not written:
+                            raise RuntimeError("No readable RTL files")
                     top = inp.top_module
                     if not top:
                         with open(written[0], encoding="utf-8", errors="ignore") as fh:
                             top = _extract_top_module(fh.read())
                     if not top:
                         raise RuntimeError("top module not detected")
-                    basenames = [os.path.basename(p) for p in written]
-                    script = synth_script(top, basenames) if inp.mode == "synth" else equiv_script(top, basenames)
-                    ys = os.path.join(tmp, "chipsutra.ys")
-                    with open(ys, "w", encoding="utf-8") as fh:
-                        fh.write(script)
-                    cmd = [YOSYS_BIN, "-s", os.path.basename(ys)]
-                    manifest = build_manifest(
-                        engine="yosys",
-                        mode=inp.mode,
-                        command=cmd,
-                        top_module=top,
-                        file_hashes=sha256_paths(written),
-                    )
-                    yield f"data: {json.dumps({'type':'log','level':'info','line':'$ ' + ' '.join(cmd)})}\n\n"
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        cwd=tmp,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                    )
-                    assert proc.stdout is not None
-                    async for raw, timed_out in _stream_with_timeout(proc, 90.0):
-                        line = raw.decode("utf-8", errors="ignore").rstrip()
-                        if line:
-                            logs.append(line)
-                            level = "error" if "error:" in line.lower() else "info"
-                            yield f"data: {json.dumps({'type':'log','level':level,'line':line})}\n\n"
-                        if timed_out:
-                            logs.append("Yosys timed out")
-                            break
-                    rc = await proc.wait()
-                    stats = parse_yosys_log("\n".join(logs))
-                    status = "done" if rc == 0 and not stats.get("errors") else "error"
-                    await db.synth_runs.update_one(
-                        {"id": run_id},
-                        {"$set": {"manifest": manifest, "stats": stats, "top_module": top}},
-                    )
-                    yield f"data: {json.dumps({'type':'stats','stats':stats})}\n\n"
+                    basenames = gold_rel if multi_rev else [os.path.basename(p) for p in written]
+                    effective_mode = inp.mode
+                    if inp.mode == "eqy" and not EQY_BIN:
+                        note = fallback_equiv_note(True)
+                        effective_mode = "equiv"
+                        if multi_rev:
+                            note += (
+                                " Multi-revision compare needs eqy; ran the internal Yosys equiv "
+                                "check on the gold revision only."
+                            )
+                        warn = f"[eqy] {note}"
+                        logs.append(warn)
+                        yield f"data: {json.dumps({'type':'log','level':'warn','line':warn})}\n\n"
+
+                    # --- eqy path: compare two revisions, or RTL vs its own synthesized netlist ---
+                    if inp.mode == "eqy" and EQY_BIN:
+                        hash_paths = list(written)
+                        if multi_rev:
+                            msg = (
+                                f"[eqy] multi-revision LEC: gold={', '.join(gold_rel)} "
+                                f"vs gate={', '.join(gate_rel)}"
+                            )
+                            logs.append(msg)
+                            yield f"data: {json.dumps({'type':'log','level':'info','line':msg})}\n\n"
+                        else:
+                            syn_script = synth_script(top, basenames)
+                            ys = os.path.join(tmp, "chipsutra_synth.ys")
+                            with open(ys, "w", encoding="utf-8") as fh:
+                                fh.write(syn_script)
+                            synth_cmd = [YOSYS_BIN, "-s", os.path.basename(ys)]
+                            logs.append("$ " + " ".join(synth_cmd))
+                            yield f"data: {json.dumps({'type':'log','level':'info','line':logs[-1]})}\n\n"
+                            proc = await asyncio.create_subprocess_exec(
+                                *synth_cmd,
+                                cwd=tmp,
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.STDOUT,
+                            )
+                            assert proc.stdout is not None
+                            async for raw, timed_out in _stream_with_timeout(proc, 90.0):
+                                line = raw.decode("utf-8", errors="ignore").rstrip()
+                                if line:
+                                    logs.append(line)
+                                    level = "error" if "error:" in line.lower() else "info"
+                                    yield f"data: {json.dumps({'type':'log','level':level,'line':line})}\n\n"
+                                if timed_out:
+                                    logs.append("Yosys synth (for eqy) timed out")
+                                    break
+                            src = await proc.wait()
+                            netlist = os.path.join(tmp, "synth_netlist.v")
+                            if src != 0 or not os.path.isfile(netlist):
+                                raise RuntimeError("Could not synthesize gate netlist for eqy LEC")
+                            gold_rel = basenames
+                            gate_rel = ["synth_netlist.v"]
+                            hash_paths.append(netlist)
+                        cfg = eqy_config(top, gold_rel, gate_rel)
+                        eqy_path = os.path.join(tmp, "chipsutra.eqy")
+                        with open(eqy_path, "w", encoding="utf-8") as fh:
+                            fh.write(cfg)
+                        eqy_cmd = [EQY_BIN, "-f", "chipsutra.eqy"]
+                        manifest = build_manifest(
+                            engine="eqy",
+                            mode="eqy",
+                            command=eqy_cmd,
+                            top_module=top,
+                            file_hashes=sha256_paths(hash_paths),
+                            extra={"gold": gold_rel, "gate": gate_rel, "multi_revision": multi_rev},
+                        )
+                        logs.append("$ " + " ".join(eqy_cmd))
+                        yield f"data: {json.dumps({'type':'log','level':'info','line':logs[-1]})}\n\n"
+                        proc = await asyncio.create_subprocess_exec(
+                            *eqy_cmd,
+                            cwd=tmp,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.STDOUT,
+                        )
+                        assert proc.stdout is not None
+                        async for raw, timed_out in _stream_with_timeout(proc, 180.0):
+                            line = raw.decode("utf-8", errors="ignore").rstrip()
+                            if line:
+                                logs.append(line)
+                                level = "error" if "error" in line.lower() else "info"
+                                yield f"data: {json.dumps({'type':'log','level':level,'line':line})}\n\n"
+                            if timed_out:
+                                logs.append("eqy timed out")
+                                break
+                        rc = await proc.wait()
+                        stats = parse_eqy_log("\n".join(logs))
+                        stats.update(parse_yosys_log("\n".join(logs)))
+                        stats["engine"] = "eqy"
+                        status = "done" if rc == 0 and stats.get("equivalence") != "fail" and not stats.get("errors") else "error"
+                        # also export synth artifacts from the gate netlist step
+                        for art_name in ("synth.json", "synth_netlist.v"):
+                            art_path = os.path.join(tmp, art_name)
+                            if os.path.isfile(art_path):
+                                with open(art_path, encoding="utf-8", errors="ignore") as fh:
+                                    text = fh.read()
+                                saved = await _persist_project_text_file(
+                                    project_id=inp.project_id,
+                                    filename=art_name,
+                                    content=text,
+                                    kind="artifact",
+                                    content_type="application/json" if art_name.endswith(".json") else "text/plain",
+                                )
+                                artifact_ids.append(saved["id"])
+                                yield f"data: {json.dumps({'type':'artifact','file_id': saved['id'], 'filename': saved['original_filename']})}\n\n"
+                        await db.synth_runs.update_one(
+                            {"id": run_id},
+                            {"$set": {
+                                "manifest": manifest,
+                                "stats": stats,
+                                "top_module": top,
+                                "artifact_ids": artifact_ids,
+                                "note": note,
+                            }},
+                        )
+                        yield f"data: {json.dumps({'type':'stats','stats':stats, 'note': note})}\n\n"
+                    else:
+                        # synth or equiv (including eqy fallback)
+                        script = (
+                            synth_script(top, basenames)
+                            if effective_mode == "synth"
+                            else equiv_script(top, basenames)
+                        )
+                        ys = os.path.join(tmp, "chipsutra.ys")
+                        with open(ys, "w", encoding="utf-8") as fh:
+                            fh.write(script)
+                        cmd = [YOSYS_BIN, "-s", os.path.basename(ys)]
+                        manifest = build_manifest(
+                            engine="yosys",
+                            mode=effective_mode,
+                            command=cmd,
+                            top_module=top,
+                            file_hashes=sha256_paths(written),
+                            extra={"requested_mode": inp.mode, "note": note} if note else {"requested_mode": inp.mode},
+                        )
+                        logs.append("$ " + " ".join(cmd))
+                        yield f"data: {json.dumps({'type':'log','level':'info','line':logs[-1]})}\n\n"
+                        proc = await asyncio.create_subprocess_exec(
+                            *cmd,
+                            cwd=tmp,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.STDOUT,
+                        )
+                        assert proc.stdout is not None
+                        async for raw, timed_out in _stream_with_timeout(proc, 90.0):
+                            line = raw.decode("utf-8", errors="ignore").rstrip()
+                            if line:
+                                logs.append(line)
+                                level = "error" if "error:" in line.lower() else "info"
+                                yield f"data: {json.dumps({'type':'log','level':level,'line':line})}\n\n"
+                            if timed_out:
+                                logs.append("Yosys timed out")
+                                break
+                        rc = await proc.wait()
+                        stats = parse_yosys_log("\n".join(logs))
+                        if note:
+                            stats["note"] = note
+                            stats["fallback"] = "yosys-equiv"
+                        status = "done" if rc == 0 and not stats.get("errors") else "error"
+                        if effective_mode == "synth" or inp.mode == "eqy":
+                            for art_name in ("synth.json", "synth_netlist.v"):
+                                art_path = os.path.join(tmp, art_name)
+                                if not os.path.isfile(art_path):
+                                    continue
+                                with open(art_path, encoding="utf-8", errors="ignore") as fh:
+                                    text = fh.read()
+                                saved = await _persist_project_text_file(
+                                    project_id=inp.project_id,
+                                    filename=art_name,
+                                    content=text,
+                                    kind="artifact",
+                                    content_type="application/json" if art_name.endswith(".json") else "text/plain",
+                                )
+                                artifact_ids.append(saved["id"])
+                                yield f"data: {json.dumps({'type':'artifact','file_id': saved['id'], 'filename': saved['original_filename']})}\n\n"
+                        await db.synth_runs.update_one(
+                            {"id": run_id},
+                            {"$set": {
+                                "manifest": manifest,
+                                "stats": stats,
+                                "top_module": top,
+                                "artifact_ids": artifact_ids,
+                                "note": note,
+                            }},
+                        )
+                        yield f"data: {json.dumps({'type':'stats','stats':stats, 'note': note})}\n\n"
                 except Exception as e:
                     logs.append(str(e))
                     yield f"data: {json.dumps({'type':'log','level':'error','line':str(e)})}\n\n"
@@ -2275,10 +2895,12 @@ async def synth_stream(inp: SynthIn, user=Depends(get_current_user)):
                 "status": status,
                 "log": "\n".join(logs),
                 "stats": stats,
+                "artifact_ids": artifact_ids,
+                "note": note,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }},
         )
-        yield f"data: {json.dumps({'type':'done','status':status,'synth_id':run_id,'stats':stats})}\n\n"
+        yield f"data: {json.dumps({'type':'done','status':status,'synth_id':run_id,'stats':stats,'artifact_ids':artifact_ids,'note':note})}\n\n"
 
     return StreamingResponse(
         evgen(),
@@ -2314,29 +2936,438 @@ async def scaffold_cocotb(pid: str, inp: CocotbScaffoldIn, user=Depends(get_curr
     generated = render_cocotb_scaffold(top, rtl["original_filename"])
     docs = []
     for name, content in generated.items():
-        file_id = str(uuid.uuid4())
-        doc = {
-            "id": file_id,
-            "project_id": pid,
-            "original_filename": name,
-            "ext": name.rsplit(".", 1)[-1].lower() if "." in name else "",
-            "kind": "tb",
-            "size": len(content.encode("utf-8")),
-            "content_type": "text/plain",
-            "storage_path": None,
-            "inline_content": content,
-            "is_deleted": False,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        await db.files.insert_one(doc)
-        docs.append({k: v for k, v in doc.items() if k not in ("inline_content", "_id")})
+        saved = await _persist_project_text_file(
+            project_id=pid,
+            filename=name,
+            content=content,
+            kind="tb" if name.endswith(".py") or name == "Makefile" else "doc",
+        )
+        docs.append(saved)
     return {"top_module": top, "files": docs, "runner": "scaffold-only", "command": "make SIM=verilator"}
 
 
-# ---- CDC / RDC heuristic analyzer (experimental) ----
+class CocotbStreamIn(BaseModel):
+    project_id: str
+    top_module: Optional[str] = None
+    sim: str = "verilator"
+
+
+@api.post("/cocotb/stream")
+async def cocotb_stream(inp: CocotbStreamIn, user=Depends(get_current_user)):
+    await require_project(inp.project_id, user["id"], "editor")
+    files = await db.files.find(
+        {"project_id": inp.project_id, "is_deleted": {"$ne": True}},
+        {"_id": 0},
+    ).to_list(200)
+    makefile, test_py, rtl = pick_scaffold_files(files)
+    if not makefile or not test_py:
+        raise HTTPException(
+            400,
+            "No cocotb scaffold found. Use Project → cocotb to generate Makefile + test_*.py first.",
+        )
+    if not rtl:
+        raise HTTPException(400, "No RTL (.v/.sv) files found in project")
+    run_id = str(uuid.uuid4())
+    await db.cocotb_runs.insert_one(
+        {
+            "id": run_id,
+            "project_id": inp.project_id,
+            "user_id": user["id"],
+            "status": "streaming",
+            "sim": inp.sim,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    async def evgen():
+        logs: List[str] = []
+        status = "error"
+        stats: dict = {}
+        has_make = bool(shutil.which("make") or shutil.which("mingw32-make"))
+        has_v = bool(VERILATOR_BIN)
+        has_c = cocotb_available()
+        engine = "cocotb" if (has_make and has_v and has_c) else "mock"
+        yield f"data: {json.dumps({'type':'meta','cocotb_run_id': run_id, 'engine': engine})}\n\n"
+
+        if not has_c or not has_make or not has_v:
+            missing = []
+            if not has_c:
+                missing.append("cocotb-config")
+            if not has_make:
+                missing.append("make")
+            if not has_v:
+                missing.append("verilator")
+            msg = (
+                f"[mock] Missing tools for cocotb run: {', '.join(missing)}. "
+                "Install cocotb + Verilator + make (or use OSS CAD Suite / Docker), "
+                "then re-run. Scaffold files remain in the project."
+            )
+            logs.append(msg)
+            yield f"data: {json.dumps({'type':'log','level':'warn','line':msg})}\n\n"
+            status = "mock"
+            stats = {"missing": missing, "status_hint": "mock"}
+        else:
+            with tempfile.TemporaryDirectory(prefix="chipsutra_cocotb_") as tmp:
+                try:
+                    write_docs = [makefile, test_py] + list(rtl)
+                    written_paths = []
+                    for f in write_docs:
+                        content = _get_file_text(f)
+                        if content is None:
+                            continue
+                        local_name = re.sub(r"[^A-Za-z0-9_.\-]", "_", f["original_filename"])
+                        if local_name.lower() == "makefile":
+                            local_name = "Makefile"
+                        p = os.path.join(tmp, local_name)
+                        with open(p, "w", encoding="utf-8") as fh:
+                            fh.write(content)
+                        written_paths.append(p)
+                    try:
+                        cmd = build_make_cmd(inp.sim or "verilator")
+                    except RuntimeError as e:
+                        raise RuntimeError(str(e))
+                    manifest = build_manifest(
+                        engine="cocotb",
+                        mode="make",
+                        command=cmd,
+                        top_module=inp.top_module,
+                        file_hashes=sha256_paths(written_paths),
+                        extra={"makefile": makefile.get("original_filename"), "test": test_py.get("original_filename")},
+                    )
+                    logs.append("$ " + " ".join(cmd))
+                    yield f"data: {json.dumps({'type':'log','level':'info','line':logs[-1]})}\n\n"
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        cwd=tmp,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                        env={**os.environ},
+                    )
+                    assert proc.stdout is not None
+                    async for raw, timed_out in _stream_with_timeout(proc, 180.0):
+                        line = raw.decode("utf-8", errors="ignore").rstrip()
+                        if line:
+                            logs.append(line)
+                            level = "error" if "error" in line.lower() or "fail" in line.lower() else "info"
+                            yield f"data: {json.dumps({'type':'log','level':level,'line':line})}\n\n"
+                        if timed_out:
+                            logs.append("cocotb make timed out")
+                            break
+                    rc = await proc.wait()
+                    stats = parse_cocotb_log("\n".join(logs))
+                    status = "done" if rc == 0 else "error"
+                    await db.cocotb_runs.update_one(
+                        {"id": run_id},
+                        {"$set": {"manifest": manifest, "stats": stats}},
+                    )
+                except Exception as e:
+                    logs.append(str(e))
+                    yield f"data: {json.dumps({'type':'log','level':'error','line':str(e)})}\n\n"
+
+        await db.cocotb_runs.update_one(
+            {"id": run_id},
+            {"$set": {
+                "status": status,
+                "log": "\n".join(logs),
+                "stats": stats,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        yield f"data: {json.dumps({'type':'done','status':status,'cocotb_run_id':run_id,'stats':stats})}\n\n"
+
+    return StreamingResponse(
+        evgen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@api.get("/projects/{pid}/cocotb-runs")
+async def list_cocotb_runs(pid: str, user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "viewer")
+    return await db.cocotb_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(30)
+
+
+class OpenStaScaffoldIn(BaseModel):
+    rtl_file_id: Optional[str] = None
+    top_module: Optional[str] = None
+    clock_name: str = "clk"
+    period_ns: float = 10.0
+    netlist_filename: str = "synth_netlist.v"
+
+
+@api.post("/projects/{pid}/scaffold/opensta")
+async def scaffold_opensta(pid: str, inp: OpenStaScaffoldIn, user=Depends(get_current_user)):
+    """Generate chipsutra.sdc + opensta.tcl scaffold (not a full STA run — liberty required)."""
+    await require_project(pid, user["id"], "editor")
+    top = inp.top_module
+    netlist_name = inp.netlist_filename
+    if inp.rtl_file_id:
+        rtl = await db.files.find_one(
+            {"id": inp.rtl_file_id, "project_id": pid, "is_deleted": {"$ne": True}},
+            {"_id": 0},
+        )
+        if not rtl:
+            raise HTTPException(404, "RTL file not found")
+        if not top:
+            top = _extract_top_module(_get_file_text(rtl) or "")
+        # Prefer a project synth_netlist.v artifact if present
+        arts = await db.files.find(
+            {
+                "project_id": pid,
+                "is_deleted": {"$ne": True},
+                "original_filename": {"$regex": r"^synth_netlist"},
+            },
+            {"_id": 0},
+        ).sort("created_at", -1).to_list(1)
+        if arts:
+            netlist_name = arts[0]["original_filename"]
+    sdc = default_sdc_stub(inp.clock_name or "clk", float(inp.period_ns or 10.0))
+    tcl = build_sta_tcl(
+        netlist=netlist_name,
+        liberty=None,
+        sdc="chipsutra.sdc",
+        top=top,
+    )
+    note = (
+        "OpenSTA scaffold only — full timing needs a liberty (.lib) file. "
+        "Install `sta`/`opensta`, place liberty beside the TCL, then run: sta opensta.tcl"
+    )
+    docs = []
+    for name, content, kind in (
+        ("chipsutra.sdc", sdc, "constraint"),
+        ("opensta.tcl", tcl, "script"),
+    ):
+        saved = await _persist_project_text_file(project_id=pid, filename=name, content=content, kind=kind)
+        docs.append(saved)
+    return {
+        "files": docs,
+        "top_module": top,
+        "netlist": netlist_name,
+        "note": note,
+        "opensta_available": bool(sta_bin()),
+        "runner": "scaffold-only",
+    }
+
+
+class StaRunIn(BaseModel):
+    project_id: str
+    netlist_file_id: Optional[str] = None
+    liberty_file_id: Optional[str] = None
+    sdc_file_id: Optional[str] = None
+    top_module: Optional[str] = None
+    clock_name: str = "clk"
+    period_ns: float = 10.0
+    max_paths: int = 10
+
+
+async def _sta_pick_netlist(pid: str, file_id: Optional[str]) -> Optional[dict]:
+    """Explicit netlist file, else the newest synth_netlist* artifact in the project."""
+    if file_id:
+        return await db.files.find_one(
+            {"id": file_id, "project_id": pid, "is_deleted": {"$ne": True}},
+            {"_id": 0},
+        )
+    docs = await db.files.find(
+        {
+            "project_id": pid,
+            "is_deleted": {"$ne": True},
+            "original_filename": {"$regex": r"^synth_netlist"},
+        },
+        {"_id": 0},
+    ).sort("created_at", -1).to_list(1)
+    return docs[0] if docs else None
+
+
+def _sta_local_name(fdoc: dict, fallback: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9_.\-]", "_", fdoc.get("original_filename") or "")
+    return name or fallback
+
+
+@api.post("/sta/stream")
+async def sta_stream(inp: StaRunIn, user=Depends(get_current_user)):
+    """Full OpenSTA timing run (SSE). Falls back to a mock run when sta or a liberty is missing."""
+    await require_project(inp.project_id, user["id"], "editor")
+    netlist_doc = await _sta_pick_netlist(inp.project_id, inp.netlist_file_id)
+    if not netlist_doc:
+        raise HTTPException(
+            404,
+            "No netlist found. Run Synthesis first (it saves synth_netlist.v) or pass netlist_file_id.",
+        )
+    liberty_doc = None
+    if inp.liberty_file_id:
+        liberty_doc = await db.files.find_one(
+            {"id": inp.liberty_file_id, "project_id": inp.project_id, "is_deleted": {"$ne": True}},
+            {"_id": 0},
+        )
+        if not liberty_doc:
+            raise HTTPException(404, "Liberty file not found")
+    sdc_doc = None
+    if inp.sdc_file_id:
+        sdc_doc = await db.files.find_one(
+            {"id": inp.sdc_file_id, "project_id": inp.project_id, "is_deleted": {"$ne": True}},
+            {"_id": 0},
+        )
+        if not sdc_doc:
+            raise HTTPException(404, "SDC file not found")
+
+    run_id = str(uuid.uuid4())
+    await db.sta_runs.insert_one(
+        {
+            "id": run_id,
+            "project_id": inp.project_id,
+            "user_id": user["id"],
+            "status": "streaming",
+            "netlist_file_id": netlist_doc["id"],
+            "liberty_file_id": (liberty_doc or {}).get("id"),
+            "sdc_file_id": (sdc_doc or {}).get("id"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    async def evgen():
+        logs: List[str] = []
+        status = "error"
+        stats: dict = {}
+        note: Optional[str] = None
+        binary = sta_bin()
+        engine = "opensta" if (binary and liberty_doc) else "mock"
+        top = inp.top_module or _extract_top_module(_get_file_text(netlist_doc))
+        yield f"data: {json.dumps({'type':'meta','sta_id': run_id,'engine': engine,'top_module': top})}\n\n"
+
+        if engine == "mock":
+            missing = []
+            if not binary:
+                missing.append("sta/opensta binary")
+            if not liberty_doc:
+                missing.append("liberty (.lib) file")
+            note = (
+                f"[mock] Timing not run — missing: {', '.join(missing)}. "
+                "Install OpenSTA (`sta`) via OSS CAD Suite / Docker and upload a liberty (.lib) "
+                "for your target library, then re-run. Netlist and SDC are ready."
+            )
+            logs.append(note)
+            yield f"data: {json.dumps({'type':'log','level':'warn','line':note})}\n\n"
+            status = "mock"
+            stats = {"missing": missing, "status_hint": "mock", "engine": "opensta"}
+        else:
+            with tempfile.TemporaryDirectory(prefix="chipsutra_sta_") as tmp:
+                try:
+                    netlist_name = _sta_local_name(netlist_doc, "netlist.v")
+                    netlist_path = os.path.join(tmp, netlist_name)
+                    with open(netlist_path, "w", encoding="utf-8") as fh:
+                        fh.write(_get_file_text(netlist_doc))
+                    written = [netlist_path]
+
+                    liberty_name = _sta_local_name(liberty_doc, "library.lib")
+                    liberty_text = _get_file_text(liberty_doc)
+                    liberty_path = os.path.join(tmp, liberty_name)
+                    with open(liberty_path, "w", encoding="utf-8") as fh:
+                        fh.write(liberty_text)
+                    written.append(liberty_path)
+                    if not liberty_is_plausible(liberty_text):
+                        warn = (
+                            f"[sta] {liberty_name} does not look like a liberty file "
+                            "(no library/cell sections) — link_design will probably fail"
+                        )
+                        logs.append(warn)
+                        yield f"data: {json.dumps({'type':'log','level':'warn','line':warn})}\n\n"
+
+                    if sdc_doc:
+                        sdc_name = _sta_local_name(sdc_doc, "chipsutra.sdc")
+                        sdc_text = _get_file_text(sdc_doc)
+                    else:
+                        sdc_name = "chipsutra.sdc"
+                        sdc_text = default_sdc_stub(inp.clock_name or "clk", float(inp.period_ns or 10.0))
+                        msg = f"[sta] No SDC supplied — generated a default stub ({inp.clock_name} @ {inp.period_ns}ns)"
+                        logs.append(msg)
+                        yield f"data: {json.dumps({'type':'log','level':'info','line':msg})}\n\n"
+                    sdc_path = os.path.join(tmp, sdc_name)
+                    with open(sdc_path, "w", encoding="utf-8") as fh:
+                        fh.write(sdc_text)
+                    written.append(sdc_path)
+
+                    tcl = build_sta_tcl(
+                        netlist=netlist_name,
+                        liberty=liberty_name,
+                        sdc=sdc_name,
+                        top=top,
+                        max_paths=max(1, int(inp.max_paths or 10)),
+                    )
+                    tcl_name = "chipsutra_sta.tcl"
+                    with open(os.path.join(tmp, tcl_name), "w", encoding="utf-8") as fh:
+                        fh.write(tcl)
+                    cmd = sta_command(tcl_name)
+                    manifest = build_manifest(
+                        engine="opensta",
+                        mode="sta",
+                        command=cmd,
+                        top_module=top,
+                        file_hashes=sha256_paths(written),
+                        extra={"netlist": netlist_name, "liberty": liberty_name, "sdc": sdc_name},
+                    )
+                    logs.append("$ " + " ".join(cmd))
+                    yield f"data: {json.dumps({'type':'log','level':'info','line':logs[-1]})}\n\n"
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        cwd=tmp,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.STDOUT,
+                    )
+                    assert proc.stdout is not None
+                    async for raw, timed_out in _stream_with_timeout(proc, 300.0):
+                        line = raw.decode("utf-8", errors="ignore").rstrip()
+                        if line:
+                            logs.append(line)
+                            level = "error" if "error" in line.lower() else "info"
+                            yield f"data: {json.dumps({'type':'log','level':level,'line':line})}\n\n"
+                        if timed_out:
+                            logs.append("OpenSTA timed out after 300s")
+                            break
+                    rc = await proc.wait()
+                    stats = parse_sta_log("\n".join(logs))
+                    status = "done" if rc == 0 and not stats.get("errors") else "error"
+                    await db.sta_runs.update_one(
+                        {"id": run_id},
+                        {"$set": {"manifest": manifest, "stats": stats, "top_module": top}},
+                    )
+                except Exception as e:
+                    logs.append(str(e))
+                    yield f"data: {json.dumps({'type':'log','level':'error','line':str(e)})}\n\n"
+
+        yield f"data: {json.dumps({'type':'stats','stats':stats,'note':note})}\n\n"
+        await db.sta_runs.update_one(
+            {"id": run_id},
+            {"$set": {
+                "status": status,
+                "log": "\n".join(logs),
+                "stats": stats,
+                "top_module": top,
+                "note": note,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            }},
+        )
+        yield f"data: {json.dumps({'type':'done','status':status,'sta_id':run_id,'stats':stats,'note':note})}\n\n"
+
+    return StreamingResponse(
+        evgen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@api.get("/projects/{pid}/sta-runs")
+async def list_sta_runs(pid: str, user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "viewer")
+    return await db.sta_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(30)
+
+
+# ---- CDC / RDC analyzer (heuristic + optional Yosys JSON) ----
 class CdcIn(BaseModel):
     project_id: str
-    rtl_file_ids: List[str] = []
+    rtl_file_ids: List[str] = Field(default_factory=list)
+    engine: str = "auto"  # auto | heuristic | yosys-json | deep
+    top_module: Optional[str] = None
 
 
 @api.post("/cdc/analyze")
@@ -2344,6 +3375,8 @@ async def cdc_analyze(inp: CdcIn, user=Depends(get_current_user)):
     await require_project(inp.project_id, user["id"], "editor")
     if not inp.rtl_file_ids:
         raise HTTPException(400, "Provide at least one RTL file")
+    if inp.engine not in ("auto", "heuristic", "yosys-json", "deep"):
+        raise HTTPException(400, "engine must be auto, heuristic, yosys-json, or deep")
     fdocs = await db.files.find(
         {"id": {"$in": inp.rtl_file_ids}, "project_id": inp.project_id, "is_deleted": {"$ne": True}},
         {"_id": 0},
@@ -2353,7 +3386,92 @@ async def cdc_analyze(inp: CdcIn, user=Depends(get_current_user)):
         text = _get_file_text(f)
         if text:
             files.append((f.get("original_filename") or f["id"], text))
-    result = analyze_rtl_texts(files)
+    heuristic = analyze_rtl_texts(files)
+    structural = None
+    note = None
+    used_engine = "heuristic"
+
+    deep = None
+    if inp.engine in ("auto", "deep") and files:
+        try:
+            deep = analyze_deep(files)
+        except Exception as e:
+            deep = None
+            note = f"Deep CDC engine failed ({e}); using heuristic findings only"
+
+    want_yosys = inp.engine in ("auto", "yosys-json")
+    if want_yosys and YOSYS_BIN and files:
+        try:
+            with tempfile.TemporaryDirectory(prefix="chipsutra_cdc_") as tmp:
+                written = await _write_files_to_dir(inp.rtl_file_ids, inp.project_id, tmp)
+                if not written:
+                    raise RuntimeError("No readable RTL for Yosys CDC")
+                top = inp.top_module
+                if not top:
+                    with open(written[0], encoding="utf-8", errors="ignore") as fh:
+                        top = _extract_top_module(fh.read())
+                if not top:
+                    raise RuntimeError("top module not detected for Yosys CDC")
+                basenames = [os.path.basename(p) for p in written]
+                script = synth_script(top, basenames, write_verilog=False)
+                ys = os.path.join(tmp, "cdc.ys")
+                with open(ys, "w", encoding="utf-8") as fh:
+                    fh.write(script)
+                proc = await asyncio.create_subprocess_exec(
+                    YOSYS_BIN, "-s", "cdc.ys",
+                    cwd=tmp,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+                assert proc.stdout is not None
+                out_lines = []
+                async for raw, timed_out in _stream_with_timeout(proc, 90.0):
+                    if timed_out:
+                        raise RuntimeError("Yosys CDC synth timed out")
+                    if raw:
+                        out_lines.append(raw.decode("utf-8", errors="ignore"))
+                rc = await proc.wait()
+                json_path = os.path.join(tmp, "synth.json")
+                if rc != 0 or not os.path.isfile(json_path):
+                    raise RuntimeError("Yosys did not produce synth.json for CDC")
+                with open(json_path, encoding="utf-8", errors="ignore") as fh:
+                    structural = analyze_yosys_json(fh.read(), filename="synth.json")
+                used_engine = "yosys-json"
+        except Exception as e:
+            note = f"Yosys-JSON CDC unavailable ({e}); using heuristic only"
+            structural = None
+            used_engine = "heuristic"
+            if inp.engine == "yosys-json":
+                # still return heuristic with clear fallback rather than hard-fail
+                note = f"Requested yosys-json failed: {e}. Fell back to heuristic."
+    elif want_yosys and not YOSYS_BIN:
+        note = "Yosys not on PATH — CDC used heuristic engine only"
+        if inp.engine == "yosys-json":
+            note = "Yosys not on PATH; fell back to heuristic CDC"
+
+    if inp.engine == "heuristic":
+        result = heuristic
+        used_engine = "heuristic"
+    elif structural and inp.engine == "yosys-json":
+        result = structural
+        used_engine = "yosys-json"
+    elif structural:
+        result = merge_cdc_results(heuristic, structural)
+        used_engine = "merged"
+    else:
+        result = heuristic
+        used_engine = "heuristic"
+
+    if deep is not None:
+        result = merge_deep(result, deep)
+        used_engine = "deep" if used_engine == "heuristic" else f"{used_engine}+deep"
+
+    result = dict(result)
+    result["requested_engine"] = inp.engine
+    result["engine_used"] = used_engine
+    if note:
+        result["note"] = note
+
     run_id = str(uuid.uuid4())
     doc = {
         "id": run_id,

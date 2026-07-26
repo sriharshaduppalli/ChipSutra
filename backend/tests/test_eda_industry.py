@@ -1,8 +1,11 @@
 """Unit tests for coverage/formal/CDC helpers (no Verilator required)."""
-from coverage_parse import parse_text_report, parse_lcov_info
+from coverage_parse import parse_text_report, parse_lcov_info, trend_points, merge_metric_lists
 from formal_parse import parse_sby_log
 from cdc import analyze_rtl_texts
-from eda_tools import build_manifest
+from cdc_netlist import analyze_yosys_json
+from eda_tools import build_manifest, tool_versions
+from opensta_flow import parse_sta_log
+from yosys_flow import eqy_config, parse_eqy_log
 
 
 def test_parse_text_coverage_report():
@@ -70,3 +73,24 @@ def test_build_manifest_shape():
     assert m["engine"] == "verilator"
     assert "tool_versions" in m
     assert "created_at" in m
+    versions = tool_versions()
+    assert "eqy" in versions and "opensta" in versions and "cocotb" in versions
+
+
+def test_eqy_and_coverage_helpers_smoke():
+    cfg = eqy_config("dut", ["a.sv"], ["b.v"])
+    assert "[strategy simple]" in cfg
+    assert parse_eqy_log("equivalent")["equivalence"] == "pass"
+    tr = trend_points([{"id": "1", "overall": 70.0, "created_at": "t"}], limit=5)
+    assert tr["latest"] == 70.0
+    merged = merge_metric_lists([
+        {"metrics": [{"name": "Line", "pct": 70}]},
+        {"metrics": [{"name": "Line", "pct": 90}]},
+    ])
+    assert merged["overall"] == 80.0
+
+
+def test_opensta_log_and_cdc_json_smoke():
+    assert parse_sta_log("worst slack = 0.25")["wns"] == 0.25
+    empty = analyze_yosys_json({"modules": {}})
+    assert empty["findings"] == []
