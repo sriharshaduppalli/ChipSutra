@@ -15,10 +15,12 @@ See [docs/LLM_SYNC.md](./LLM_SYNC.md).
 | Approach | Owner repo | Status |
 |----------|------------|--------|
 | Protocol/debug prompt appendix (v1.1) | ChipSutra-VLSI-LLM | Shipped in Modelfiles |
-| Curated protocol markdown for RAG | ChipSutra backend | Planned |
-| RTL port parsing before generate | ChipSutra backend | [ENHANCEMENTS.md](./ENHANCEMENTS.md) |
+| **Keyword RAG** on `backend/knowledge/` | ChipSutra `rag.py` | **Shipped** — `/api/health` → `rag` |
+| RTL port parsing before generate | ChipSutra backend | Planned |
 | LoRA fine-tune on golden JSONL | ChipSutra-VLSI-LLM | [FINE_TUNING.md](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM/blob/master/docs/FINE_TUNING.md) |
-| Golden DUT regression suite | ChipSutra tests | Planned |
+| Golden DUT regression suite | ChipSutra tests | **Started** — `test_rag_and_golden.py`, `knowledge/golden/counter.sv` |
+
+Disable RAG: `RAG_ENABLED=false` in `backend/.env`.
 
 Full strategy (knowledge graphs vs RAG vs training):  
 **[ACCURACY_AND_KNOWLEDGE.md](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM/blob/master/docs/ACCURACY_AND_KNOWLEDGE.md)** in the LLM repo.

@@ -1,0 +1,30 @@
+# Synced from ChipSutra-VLSI-LLM prompts/vlsi_protocols_compact.txt via scripts/sync-vlsi-llm.sh
+
+## Bus / interface cheat-sheet (verify against user RTL — do not invent signals)
+- AXI4/AXI4-Lite: valid/ready handshakes; AW/W/B read/write channels; AR/R; xVALID must not depend on xREADY; reset quiescence.
+- APB: PSEL, PENABLE two-phase; setup then access; PREADY stretches; PSLVERR for errors.
+- AHB: HTRANS, HREADY, HRESP; wait states; burst types HBURST.
+- AXI-Stream: TVALID/TREADY, TLAST, TKEEP; backpressure on ready.
+- PCIe: TLP types (MRd/MWr/Cfg); completion timeout; DLLP/PLP — usually higher-level VIP, not gate-level in TB.
+- CAN / CAN-FD: frame (SOF, ID, DLC, CRC, ACK); bit stuffing; error states (bus-off); ISO 11898 timing from user spec.
+- I2C: START/STOP, SDA/SCL, ACK/NACK; clock stretching.
+- SPI: CPOL/CPHA modes; CS active; full-duplex shift.
+- UART: start bit, data, parity optional, stop; baud-derived sampling.
+- Ethernet MAC/PHY (MII/GMII/RGMII): frame, preamble, FCS — check user PHY interface.
+- DDR/LPDDR: training, refresh, banks — use memory controller docs; do not guess timing.
+
+## UVM structure (when asked for UVM)
+- env: agent(s), scoreboard, coverage, virtual sequencer; connect analysis ports in connect_phase.
+- sequences on sequencer; config_db for virtual interfaces; objections in run_phase.
+- Full UVM may not compile on Verilator — offer SV testbench subset when user targets open-source sim.
+
+## Simulation & debug (when analyzing logs)
+- X propagation, reset deassertion, clock domain crossing metastability (sync stages).
+- UVM_ERROR/UVM_FATAL, assertion failures, timeout, handshake deadlock (valid without ready).
+- Coverage holes: cross bins, unreachable states, wrong reset defaults.
+
+## Formal / lint hints
+- SVA: reset property in disable iff; cover for reachability; assume for environment constraints.
+- Lint: comb loops, latch inference, width mismatch, undriven nets.
+
+Use the user's spec for exact signal names, widths, and protocol variant.

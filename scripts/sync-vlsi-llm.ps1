@@ -20,6 +20,13 @@ if (-not (Test-Path $SrcModelfiles)) { throw "Missing $SrcModelfiles" }
 Copy-Item -Force (Join-Path $SrcModelfiles 'Modelfile.*') $Dest
 $ver = Join-Path $SourceRepo 'VERSION'
 if (Test-Path $ver) { Copy-Item -Force $ver (Join-Path $Dest 'VERSION') }
+$know = Join-Path $Root 'backend\knowledge'
+New-Item -ItemType Directory -Force -Path $know | Out-Null
+$proto = Join-Path $SourceRepo 'prompts\vlsi_protocols_compact.txt'
+if (Test-Path $proto) {
+  Copy-Item -Force $proto (Join-Path $know 'vlsi_protocols_compact.txt')
+  Write-Host "[sync] updated backend/knowledge/vlsi_protocols_compact.txt"
+}
 
 Write-Host "[sync] updated $Dest"
 Write-Host "[sync] VERSION=$((Get-Content (Join-Path $Dest 'VERSION') -ErrorAction SilentlyContinue))"

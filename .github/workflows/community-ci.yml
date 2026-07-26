@@ -27,11 +27,11 @@ jobs:
       - name: Install OSS backend deps
         run: pip install -r backend/requirements-oss.txt
 
-      - name: Offline backend checks (Ollama / compose / env)
+      - name: Offline backend checks (Ollama / compose / env / RAG)
         run: |
           cd backend
-          pytest tests/test_iteration_5.py -n 0 \
-            -k "docker_compose or env_example or requirements or readme or available_providers or stream_chat"
+          pytest tests/test_iteration_5.py tests/test_rag_and_golden.py -n 0 \
+            -k "docker_compose or env_example or requirements or readme or available_providers or stream_chat or rag or golden"
 
       - name: Modelfiles present
         run: test -f models/chipsutra-vlsi/Modelfile.3b

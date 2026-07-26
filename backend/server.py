@@ -24,6 +24,7 @@ from pydantic import BaseModel, EmailStr, Field
 
 # ChipSutra provider abstractions (auto-fall-back Emergent → standalone)
 from llm_provider import stream_chat as llm_stream_chat, available_providers as llm_available_providers, ollama_status as llm_ollama_status
+from rag import augment_generation_context, rag_status as llm_rag_status
 from storage_provider import init_storage as storage_init, put_object as put_object_impl, get_object as get_object_impl, storage_mode
 from google_auth import google_mode, resolve_emergent_session, build_google_auth_url, exchange_code as google_exchange_code
 
@@ -299,6 +300,7 @@ async def health():
         "sby": bool(_sh.which("sby")),
         "llm_providers": providers,
         "ollama": llm_ollama_status(),
+        "rag": llm_rag_status(),
         "google_auth": google_mode(),
     }
 
@@ -668,9 +670,11 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
 
     # Gather file contexts
     file_context = ""
+    file_names: List[str] = []
     if inp.file_ids:
         fdocs = await db.files.find({"id": {"$in": inp.file_ids}, "project_id": inp.project_id}, {"_id": 0}).to_list(50)
         for f in fdocs:
+            file_names.append(f.get("original_filename") or "")
             text = _get_file_text(f)
             if text:
                 file_context += f"\n\n--- FILE: {f['original_filename']} (kind={f.get('kind','')}) ---\n{text[:20000]}\n"
@@ -678,6 +682,16 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
     lang = inp.language or proj.get("language", "systemverilog")
     system_msg = MODULE_PROMPTS[inp.module].format(language=lang)
     system_msg += "\n\nYou are ChipSutra, an EDA verification assistant. Be concise, precise, and technical."
+    rag_block = augment_generation_context(
+        module=inp.module,
+        prompt=(inp.prompt or "") + " " + file_context[:2000],
+        filenames=file_names,
+    )
+    if rag_block:
+        system_msg += (
+            "\n\n--- Domain knowledge (reference only; user RTL/spec/files override if conflict) ---\n"
+            + rag_block
+        )
 
     user_text = (inp.prompt or "").strip()
     if not user_text:

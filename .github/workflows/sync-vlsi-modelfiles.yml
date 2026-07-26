@@ -23,10 +23,12 @@ jobs:
           git clone --depth 1 --branch "${{ inputs.upstream_ref }}" \
             https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM.git /tmp/vlsi-llm
 
-      - name: Copy modelfiles + VERSION
+      - name: Copy modelfiles + VERSION + RAG knowledge
         run: |
           cp /tmp/vlsi-llm/modelfiles/Modelfile.* models/chipsutra-vlsi/
           cp /tmp/vlsi-llm/VERSION models/chipsutra-vlsi/VERSION
+          mkdir -p backend/knowledge
+          cp /tmp/vlsi-llm/prompts/vlsi_protocols_compact.txt backend/knowledge/vlsi_protocols_compact.txt
           chmod +x models/chipsutra-vlsi/ollama-bootstrap.sh
 
       - name: Create PR if changed
