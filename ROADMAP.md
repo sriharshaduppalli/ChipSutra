@@ -26,7 +26,7 @@ ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement
 
 ## In progress (Community — next 90 days)
 
-- [ ] Pre-built GHCR Docker images (no local build)
+- [ ] Pre-built GHCR Docker images (`docker publish` on git tag `v*`) — see `.github/workflows/docker-publish.yml`
 - [ ] Closed-loop: coverage upload → `coverage_holes` → re-sim suggestion
 - [ ] UCIS / industry coverage format adapters (beyond regex `.rpt`)
 - [ ] Yosys ≥ 0.35 in default Docker image

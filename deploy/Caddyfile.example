@@ -1,0 +1,16 @@
+# Copy to deploy/Caddyfile and replace domains + email.
+# cp deploy/Caddyfile.example deploy/Caddyfile
+
+{
+	email ops@chipsutra.ai
+}
+
+chipsutra.org, www.chipsutra.org {
+	encode gzip
+	reverse_proxy frontend:80
+}
+
+api.chipsutra.org {
+	encode gzip
+	reverse_proxy backend:8001
+}

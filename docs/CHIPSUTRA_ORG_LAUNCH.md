@@ -166,9 +166,14 @@ frontend:
 3. **Atlas** — follow [MONGODB_ATLAS_SETUP.md](./MONGODB_ATLAS_SETUP.md); use **production** cluster tier when you outgrow M0.
 
 4. **Start stack** (Atlas, no local Mongo pull):
+
    ```bash
-   docker compose -f docker-compose.atlas.yml up -d --build
+   cp backend/.env.production.example backend/.env   # edit on server
+   cp deploy/env.prod.example deploy/.env.prod
+   docker compose -f docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
    ```
+
+   See **[deploy/README.md](../deploy/README.md)** and **[docs/PRODUCTION.md](./PRODUCTION.md)**.
 
 5. **Reverse proxy (Caddy example sketch)**
    - `chipsutra.org` → `localhost:3000` (frontend container)

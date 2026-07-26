@@ -1,0 +1,16 @@
+# Default production routing — edit domains before go-live.
+# See deploy/Caddyfile.example for documentation.
+
+{
+	email ops@chipsutra.ai
+}
+
+chipsutra.org, www.chipsutra.org {
+	encode gzip
+	reverse_proxy frontend:80
+}
+
+api.chipsutra.org {
+	encode gzip
+	reverse_proxy backend:8001
+}

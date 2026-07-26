@@ -1,0 +1,130 @@
+# Production stack: Atlas Mongo (backend/.env) + Ollama + Verilator + Caddy TLS
+#
+# Prerequisites:
+#   1. cp backend/.env.production.example backend/.env  (edit secrets + MONGO_URL)
+#   2. cp deploy/env.prod.example deploy/.env.prod      (edit PUBLIC_* URLs)
+#   3. cp deploy/Caddyfile.example deploy/Caddyfile      (edit domains + ACME email)
+#   4. DNS A/AAAA for app + api domains → this host
+#
+# Start (from repo root):
+#   docker compose -f docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
+#
+# Smoke: ./scripts/prod-smoke.sh https://api.chipsutra.org
+
+name: chipsutra-prod
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - chipsutra
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list > /dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    volumes:
+      - ollama_data:/root/.ollama
+    networks:
+      - chipsutra
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "OLLAMA_HOST=http://ollama:11434 ollama pull ${OLLAMA_BASE_MODEL:-qwen2.5-coder:3b} &&
+       echo '[chipsutra] base model pulled successfully'"
+    restart: "no"
+
+  ollama-create:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./models/chipsutra-vlsi:/modelfiles:ro
+    networks:
+      - chipsutra
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "OLLAMA_HOST=http://ollama:11434 ollama show ${OLLAMA_MODEL:-chipsutra-vlsi:3b} >/dev/null 2>&1 ||
+       ollama create ${OLLAMA_MODEL:-chipsutra-vlsi:3b} -f /modelfiles/Modelfile.3b;
+       echo '[chipsutra] Ollama model ready'"
+    restart: "no"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: ${BACKEND_IMAGE:-chipsutra-backend:prod}
+    restart: unless-stopped
+    depends_on:
+      ollama-create:
+        condition: service_completed_successfully
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      STORAGE_MODE: local
+      STORAGE_LOCAL_PATH: /app/storage
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-chipsutra-vlsi:3b}
+    volumes:
+      - chipsutra_storage:/app/storage
+    networks:
+      - chipsutra
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8001/api/health | grep -q healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_BACKEND_URL: ${PUBLIC_API_URL:-https://api.chipsutra.org}
+    image: ${FRONTEND_IMAGE:-chipsutra-frontend:prod}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - chipsutra
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - chipsutra
+
+networks:
+  chipsutra:
+    driver: bridge
+
+volumes:
+  ollama_data:
+  chipsutra_storage:
+  caddy_data:
+  caddy_config:

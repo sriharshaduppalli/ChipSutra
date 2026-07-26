@@ -4,18 +4,26 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "[1/4] docker compose syntax..."
+echo "[1/5] docker compose syntax..."
 docker compose config --quiet
+docker compose -f docker-compose.atlas.yml config --quiet
+docker compose -f docker-compose.backend-verilator.yml config --quiet
+docker compose -f docker-compose.prod.yml --env-file deploy/env.prod.example config --quiet
 
-echo "[2/4] backend OSS requirements install..."
+echo "[2/5] backend OSS requirements install..."
 pip install -q -r backend/requirements-oss.txt
 
-echo "[3/4] pytest offline (compose, env, llm_provider)..."
+echo "[3/5] pytest offline (compose, env, llm_provider)..."
 cd backend
 pytest tests/test_iteration_5.py -n 0 \
   -k "docker_compose or env_example or requirements or readme or available_providers or stream_chat"
 
-echo "[4/4] modelfiles..."
+echo "[4/5] modelfiles..."
 test -f ../models/chipsutra-vlsi/Modelfile.3b
+
+echo "[5/5] production templates..."
+test -f ../docker-compose.prod.yml
+test -f ../backend/.env.production.example
+test -f ../deploy/Caddyfile
 
 echo "OK — community validation passed."

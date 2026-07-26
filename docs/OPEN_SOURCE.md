@@ -30,7 +30,10 @@ ChipSutra Community Edition is **MIT licensed** (with UI attribution). Anyone ca
 
 ```bash
 ./scripts/validate-community.sh
+./scripts/prod-smoke.sh https://api.your-domain.example   # after TLS is live
 ```
+
+Production compose: **`docker-compose.prod.yml`** — [docs/PRODUCTION.md](./PRODUCTION.md).
 
 See also **[docs/AUTOMATED_SETUP.md](./docs/AUTOMATED_SETUP.md)** (what Git installs vs one-time OS tools).
 
