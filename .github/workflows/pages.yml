@@ -1,0 +1,87 @@
+name: Deploy portal to GitHub Pages
+
+# Publishes the static portal straight from this repo. The API is NOT hosted
+# here — anything behind the login still needs api.chipsutra.org.
+#
+# Set the repo variable PAGES_CUSTOM_DOMAIN to chipsutra.org once DNS points at
+# GitHub Pages; until then the site builds for the github.io project URL so it
+# can be previewed without touching production DNS.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: yarn
+          cache-dependency-path: frontend/yarn.lock
+
+      - name: Resolve base path
+        id: base
+        env:
+          CUSTOM_DOMAIN: ${{ vars.PAGES_CUSTOM_DOMAIN }}
+        run: |
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            echo "public_url=" >> "$GITHUB_OUTPUT"
+          else
+            echo "public_url=/${{ github.event.repository.name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build portal
+        working-directory: frontend
+        env:
+          CI: "true"
+          PUBLIC_URL: ${{ steps.base.outputs.public_url }}
+          REACT_APP_BACKEND_URL: ${{ vars.PUBLIC_API_URL || 'https://api.chipsutra.org' }}
+        run: |
+          corepack enable
+          yarn install --frozen-lockfile
+          yarn build
+
+      - name: SPA fallback and custom domain
+        working-directory: frontend
+        env:
+          CUSTOM_DOMAIN: ${{ vars.PAGES_CUSTOM_DOMAIN }}
+        run: |
+          # Pages serves 404.html for unknown paths; a client-routed SPA needs
+          # that to be the app itself or deep links break.
+          cp build/index.html build/404.html
+          # Jekyll would otherwise drop files and dirs starting with an underscore.
+          touch build/.nojekyll
+          if [ -n "$CUSTOM_DOMAIN" ]; then
+            echo "$CUSTOM_DOMAIN" > build/CNAME
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/build
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

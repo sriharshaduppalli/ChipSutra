@@ -54,7 +54,9 @@ function AppRouter() {
 function App() {
   return (
     <AuthProvider>
-      <BrowserRouter>
+      {/* PUBLIC_URL is "" on the custom domain and "/ChipSutra" on the
+          github.io project URL, so routing works from either origin. */}
+      <BrowserRouter basename={process.env.PUBLIC_URL || undefined}>
         <Toaster theme="dark" position="bottom-right" toastOptions={{ style: { background: "#121721", border: "1px solid #1E293B", color: "#F8FAFC", fontFamily: "JetBrains Mono, monospace" } }} />
         <AppRouter />
       </BrowserRouter>
