@@ -1,13 +1,13 @@
 # ChipSutra Community Edition — public PyPI only (Docker Compose / self-host).
 # For Emergent-hosted deployments with private wheels, use requirements-emergent.txt instead.
 
-fastapi==0.110.1
-uvicorn==0.25.0
+fastapi==0.140.0
+uvicorn==0.51.0
 starlette==0.37.2
-motor==3.3.1
-pymongo==4.6.3
+motor==3.7.1
+pymongo==4.17.0
 pydantic==2.13.4
-pydantic_core==2.46.4
+pydantic_core==2.47.0
 email-validator==2.3.0
 python-multipart==0.0.32
 python-dotenv==1.2.2
@@ -35,7 +35,7 @@ anthropic==0.120.0
 openai==1.99.9
 PyYAML==6.0.3
 typing_extensions==4.16.0
-annotated-types==0.7.0
+annotated-types==0.8.0
 dnspython==2.8.0
 click==8.4.2
 
