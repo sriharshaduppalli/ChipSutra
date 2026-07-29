@@ -9,10 +9,9 @@ ChipSutra is an **AI verification copilot** with a growing OSS EDA engine layer 
 | AI generation (UVM/SVA/debug) | ✅ Differentiator | Emerging (Verisium / Synopsys.ai) |
 | Lint / cycle sim | ✅ Verilator | VCS / Xcelium / Questa |
 | Formal | 🧪 SymbiYosys (+ Yosys via OSS CAD Suite in Docker) | Jasper / VC Formal / Questa Formal |
-| Coverage | ✅ Upload parser + 🧪 Verilator `--coverage` persist | IMC / URG / UCIS |
-| CDC / RDC | 🧪 Heuristic + optional Yosys JSON | Spyglass CDC / Questa CDC |
-| Waveform | ✅ VCD hierarchy/search/zoom/cursor | Verdi / DVE / Surfer |
-| Synthesis / LEC / STA | 🧪 Yosys synth + equiv + eqy LEC (fallback); OpenSTA scaffold only | DC / Genus / Formality / PT |
+| Synthesis / LEC / STA | 🧪 Yosys synth + equiv + eqy LEC; OpenSTA with liberty (mock otherwise) | DC / Genus / Formality / PT |
+| Coverage | ✅ Parser + UCIS/IMC/URG + Verilator persist + closure loop UX | IMC / URG / UCIS |
+| Waveform | ✅ VCD + FST (via fst2vcd) | Verdi / DVE / Surfer |
 | Vendor adapters / farm / SSO | ❌ Enterprise | Native |
 
 ## Shipped toward industry credibility (this wave)
@@ -28,16 +27,19 @@ ChipSutra is an **AI verification copilot** with a growing OSS EDA engine layer 
 - Yosys **synthesis + equivalence** + **eqy LEC** (RTL vs auto-synth netlist; falls back to internal equiv) + artifact export
 - VCD **hierarchy/search/zoom/cursor** and direct project-file loading
 - **cocotb scaffold** + **one-click runner** (`POST /api/cocotb/stream`; mock if tools missing)
-- Coverage **trends/merge** endpoints; OpenSTA **SDC/TCL scaffold** (not full STA without liberty)
+- Coverage **trends/merge** endpoints; OpenSTA **run path** (liberty upload; mock without `sta`)
+- **FST** via `fst2vcd`; **UCIS/IMC/URG/CSV** coverage adapters
+- **Closed-loop UX**: Generate hole tests + Apply seeds → Regression; sim log **auto-attach** to `tool_log`
+- Optional **Redis** rate limiter (`REDIS_URL`, compose `--profile redis`)
 
 ## Still missing (priority)
 
-1. **FST** ingestion and deeper waveform debug
-2. Full OpenSTA timing **with liberty** (scaffold only today)
-3. UCIS / industry coverage format adapters
-4. Closed-loop coverage → holes → re-sim
-5. Richer regression dashboard UX beyond SSE + trend summary
-6. Multi-revision LEC (UI currently compares RTL vs auto-synth netlist)
+1. Default self-host path that pulls GHCR images (skip local rebuild)
+2. Demo liberty / sky130 path so STA smoke is non-mock by default
+3. Ollama pre-warm + optional sentence-transformers packaging
+4. CI webhook worker: PR diff → lint → optional AI review
+5. Multi-revision LEC (UI currently compares RTL vs auto-synth netlist)
+6. Richer first-project wizard / screen recording
 
 ## Enterprise-only (by design)
 

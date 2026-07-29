@@ -57,11 +57,18 @@ def test_rag_has_expanded_knowledge():
         "uvm_patterns.txt",
         "sva_patterns.txt",
         "sim_debug_playbook.txt",
+        "covergroup_patterns.txt",
         "vlsi_protocols_compact.txt",
         "vlsi_soc_dft_power.txt",
         "vlsi_verification_glossary.txt",
     ):
         assert src in st["sources"]
+
+
+def test_rag_retrieves_covergroup_for_coverage_holes():
+    chunks = retrieve("close coverage holes covergroup bins cross", module="coverage_holes")
+    blob = " ".join(c["title"] + c["body"] for c in chunks).lower()
+    assert "cover" in blob or "bin" in blob or "hole" in blob
 
 
 def test_rag_retrieves_sva_for_assertions():

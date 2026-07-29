@@ -26,9 +26,9 @@ MODULE_HINTS: dict[str, tuple[str, ...]] = {
     "testbench": ("uvm", "sequence", "driver", "monitor", "scoreboard", "agent", "verilator"),
     "assertions": ("sva", "assert", "property", "formal", "handshake"),
     "checkers": ("checker", "scoreboard", "protocol"),
-    "covergroups": ("coverage", "bin", "cross", "covergroup"),
+    "covergroups": ("coverage", "bin", "cross", "covergroup", "illegal_bins", "ignore_bins"),
     "debug": ("uvm_error", "simulation", "debug", "log", "timeout", "x propagation", "verilator"),
-    "coverage_holes": ("coverage", "bin", "cross", "hole", "sequence"),
+    "coverage_holes": ("coverage", "bin", "cross", "hole", "sequence", "covergroup", "directed", "closure"),
     "formal_hints": ("sva", "assume", "cover", "formal"),
 }
 

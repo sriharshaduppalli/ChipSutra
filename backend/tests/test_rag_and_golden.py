@@ -18,6 +18,7 @@ def test_rag_status_has_protocol_chunks():
     assert "vlsi_protocols_compact.txt" in st["sources"]
     assert "vlsi_soc_dft_power.txt" in st["sources"]
     assert "vlsi_verification_glossary.txt" in st["sources"]
+    assert "covergroup_patterns.txt" in st["sources"]
 
 
 def test_rag_retrieves_can_for_can_ip_prompt():

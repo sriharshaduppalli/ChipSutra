@@ -10,7 +10,7 @@ function rtlFileIds(project) {
     .map((f) => f.id);
 }
 
-export default function SimulationPanel({ project, selectedFileIds, onClose, onVcdCreated }) {
+export default function SimulationPanel({ project, selectedFileIds, onClose, onVcdCreated, onLogReady }) {
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState([]);
   const [topModule, setTopModule] = useState("");
@@ -57,6 +57,8 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
       return;
     }
     setLogs([]); setStatus(null); setEngine(null); setVcdFileId(null); setCoverageSummary(null); setLintReport(null); setRunning(true);
+    const logLines = [];
+    let finalStatus = null;
     try {
       const res = await fetch(`${API}/simulate/stream`, {
         method: "POST",
@@ -93,15 +95,28 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
           try {
             const j = JSON.parse(line.slice(5).trim());
             if (j.type === "meta") setEngine(j.engine);
-            else if (j.type === "log") setLogs(prev => [...prev, { level: j.level || "info", line: j.line }]);
+            else if (j.type === "log") {
+              logLines.push(j.line);
+              setLogs(prev => [...prev, { level: j.level || "info", line: j.line }]);
+            }
             else if (j.type === "coverage") setCoverageSummary(j);
             else if (j.type === "lint_report") setLintReport(j);
-            else if (j.type === "done") { setStatus(j.status); if (j.vcd_file_id) { setVcdFileId(j.vcd_file_id); onVcdCreated && onVcdCreated(); } }
+            else if (j.type === "done") {
+              finalStatus = j.status;
+              setStatus(j.status);
+              if (j.vcd_file_id) { setVcdFileId(j.vcd_file_id); onVcdCreated && onVcdCreated(); }
+            }
           } catch {}
         }
       }
+      if (onLogReady && logLines.length) {
+        onLogReady(logLines.join("\n"), { status: finalStatus, mode });
+      }
     } catch (e) {
       toast.error(e.message || "Simulation failed");
+      if (onLogReady && logLines.length) {
+        onLogReady(logLines.join("\n"), { status: "error", mode });
+      }
     }
     setRunning(false);
   };

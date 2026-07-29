@@ -1,6 +1,6 @@
 # Public roadmap — ChipSutra
 
-Last updated: 2026-07-26
+Last updated: 2026-07-29
 
 ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement). This roadmap splits **Community (open source)** from **Enterprise (commercial, future)**.
 
@@ -22,30 +22,32 @@ ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement
 - [x] SymbiYosys formal (best-effort; Yosys version notes)
 - [x] Coverage report parser + waveform (VCD) viewer
 - [x] Workspaces, roles, notifications, templates, CI template
-- [x] **ChipSutra-VLSI** custom Ollama model (default in Docker) — **v1.2.0** protocol index
-- [x] Keyword RAG (`backend/knowledge/`) + RTL port injection + lint/sim fix-loop (`tool_log`)
+- [x] **ChipSutra-VLSI** custom Ollama model (default in Docker) — **v1.2.x** protocol index
+- [x] Keyword + hybrid vector RAG (`backend/knowledge/`) + RTL port injection + lint/sim fix-loop (`tool_log`)
 - [x] Verilator coverage persist + run manifests + formal CEX/property table
-- [x] CDC/RDC heuristic analyzer (experimental)
+- [x] CDC/RDC heuristic analyzer (experimental) + optional Yosys JSON merge
 - [x] Seeded multi-test regression matrix (parallel workers 1–4, coverage, trends)
 - [x] Project lint policy + owned/reasoned waivers (`chipsutra.lint.json`)
 - [x] Yosys synthesis + equivalence sanity + **eqy LEC** (fallback to internal equiv) + synth artifacts
-- [x] VCD hierarchy/search/zoom/cursor + direct sim/formal links
+- [x] VCD hierarchy/search/zoom/cursor + **FST** via `fst2vcd` when available
 - [x] cocotb project scaffold + **one-click runner** (mock if tools missing)
-- [x] Coverage merge/trends endpoints; regression panel trend summary
-- [x] CDC heuristic + optional **Yosys JSON** structural merge (experimental)
-- [x] OpenSTA **scaffold** (SDC + TCL; liberty still required for real STA)
+- [x] Coverage merge/trends; **UCIS / IMC / URG / CSV** adapters; closure plan + delta compare
+- [x] **Closed-loop UX**: Generate hole tests + Apply seeds → Regression from Coverage page
+- [x] **Auto-attach** Verilator/sim log into Generate `tool_log` after Simulate finishes
+- [x] OpenSTA run path (SDC + TCL + liberty upload; mock if `sta`/liberty missing)
+- [x] Golden DUT suite: `counter`, `fifo`, `axi_lite_slave` (+ TBs)
+- [x] Optional **Redis** rate limiter (`REDIS_URL` + compose `--profile redis`)
+- [x] GHCR publish workflow on `main` / `v*` tags (see `.github/workflows/docker-publish.yml`)
 
 ## In progress (Community — next 90 days)
 
-- [ ] Pre-built GHCR Docker images (`docker publish` on git tag `v*`) — see `.github/workflows/docker-publish.yml`
-- [ ] Closed-loop: coverage upload → `coverage_holes` → re-sim suggestion
-- [ ] Auto-attach Verilator output from Simulation panel into `tool_log`
-- [ ] FST waveform ingestion
-- [ ] Embedding / vector RAG for larger libraries
-- [ ] UCIS / industry coverage format adapters (beyond regex `.rpt`)
-- [ ] Redis rate limiter for multi-replica deploys
-- [ ] Golden DUT suite beyond `counter.sv` (FIFO, AXI-lite slave)
-- [ ] Full OpenSTA run with liberty upload (scaffold shipped)
+- [ ] Default self-host docs/compose to pull GHCR `:edge` / release tags (skip local rebuild)
+- [ ] Demo liberty fixture or documented sky130 path for non-mock STA smoke
+- [ ] Ollama model pre-warm on backend startup (cut first-token latency)
+- [ ] Embedding / `sentence-transformers` optional extra + index warm at boot
+- [ ] UCIS fixture corpus in CI for vendor dialect drift
+- [ ] CI webhook worker: PR diff → lint → optional AI review comment
+- [ ] Screen recording / first-project wizard polish
 
 Industry gap matrix: **[docs/INDUSTRY_EDA_GAPS.md](./docs/INDUSTRY_EDA_GAPS.md)**.
 

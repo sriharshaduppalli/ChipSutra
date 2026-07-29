@@ -40,10 +40,12 @@ Prioritized for an India-first open-source EDA verification startup.
 | No regression matrix | ✅ Parallel workers 1–4 + coverage + trend summary |
 | No synthesis sanity | ✅ Yosys synth/equiv + eqy LEC (fallback) + OpenSTA scaffold |
 | Weak lint governance | ✅ Project policy + owned waivers |
-| Basic waveform | ✅ VCD hierarchy/search/zoom/cursor; FST next |
+| Basic waveform | ✅ VCD hierarchy/search/zoom/cursor; FST via fst2vcd when available |
 | Python TB path | ✅ cocotb scaffold + one-click runner (mock without tools) |
 | CI webhook stub | Worker: PR diff → lint → optional AI comment |
-| Closed-loop coverage | Upload → holes → auto `coverage_holes` → suggest re-run |
+| Closed-loop coverage | ✅ Plan + one-click Generate hole tests + Apply seeds → Regression |
+| Auto-attach sim → `tool_log` | ✅ SimulationPanel fills Generate fix-loop on run complete |
+| Redis multi-replica limits | ✅ Optional `redis` dep + compose `--profile redis` + `REDIS_URL` |
 
 ## P2 — README & onboarding
 

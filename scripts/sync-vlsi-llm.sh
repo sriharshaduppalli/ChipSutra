@@ -29,7 +29,7 @@ if [ -f "$SRC/VERSION" ]; then
 fi
 KNOW="$ROOT/backend/knowledge"
 mkdir -p "$KNOW"
-for f in vlsi_protocols_compact.txt vlsi_soc_dft_power.txt vlsi_verification_glossary.txt; do
+for f in vlsi_protocols_compact.txt vlsi_soc_dft_power.txt vlsi_verification_glossary.txt covergroup_patterns.txt; do
   if [ -f "$SRC/prompts/$f" ]; then
     cp "$SRC/prompts/$f" "$KNOW/$f"
     echo "[sync] updated $KNOW/$f"

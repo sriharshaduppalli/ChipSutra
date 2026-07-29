@@ -18,7 +18,7 @@
    - Compose `ollama-bootstrap` recreates when `VERSION` changes (or set `OLLAMA_FORCE_RECREATE=1`)
    - Native: `ollama create chipsutra-vlsi:3b -f models/chipsutra-vlsi/Modelfile.3b`
 
-Synced RAG files: `vlsi_protocols_compact.txt`, `vlsi_soc_dft_power.txt`, `vlsi_verification_glossary.txt`.
+Synced RAG files: `vlsi_protocols_compact.txt`, `vlsi_soc_dft_power.txt`, `vlsi_verification_glossary.txt`, `covergroup_patterns.txt`.
 
 ## Compose
 

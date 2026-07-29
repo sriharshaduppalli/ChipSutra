@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useLocation, useNavigate } from "react-router-dom";
 import { api, API, getToken } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -37,6 +37,8 @@ const langMap = { v: "verilog", sv: "systemverilog", vhd: "vhdl", vhdl: "vhdl", 
 
 export default function ProjectDetail() {
   const { pid } = useParams();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { user } = useAuth();
   const [project, setProject] = useState(null);
   const [selectedFileIds, setSelectedFileIds] = useState([]);
@@ -58,8 +60,12 @@ export default function ProjectDetail() {
   const [showRegression, setShowRegression] = useState(false);
   const [showCocotb, setShowCocotb] = useState(false);
   const [showSta, setShowSta] = useState(false);
+  const [regressionSeeds, setRegressionSeeds] = useState(null);
+  const [regressionCoverage, setRegressionCoverage] = useState(null);
+  const [pendingAutoGenerate, setPendingAutoGenerate] = useState(false);
   const [currentGenId, setCurrentGenId] = useState(null);
   const outputRef = useRef(null);
+  const generateRef = useRef(null);
 
   const load = useCallback(async () => {
     const { data } = await api.get(`/projects/${pid}`);
@@ -81,7 +87,66 @@ export default function ProjectDetail() {
     }
     setAttachingLog(false);
   }, [pid]);
+
+  const onSimLogReady = useCallback((logText, meta = {}) => {
+    if (!logText?.trim()) return;
+    setToolLog(logText);
+    const failed = meta.status && meta.status !== "done";
+    toast.success(
+      failed
+        ? "Sim log auto-attached for fix-loop regenerate"
+        : "Sim log auto-attached to Generate fix-loop",
+    );
+  }, []);
+
   useEffect(() => { load(); }, [load]);
+
+  const pendingHandoffRef = useRef(null);
+
+  // Handoff from Coverage closure loop: prompt + optional auto-generate / open regression
+  useEffect(() => {
+    const st = location.state;
+    if (!st || typeof st !== "object") return;
+    if (st.module) setModule(st.module);
+    if (typeof st.prompt === "string" && st.prompt) setPrompt(st.prompt);
+    if (Array.isArray(st.fileIds) && st.fileIds.length) setSelectedFileIds(st.fileIds);
+    if (st.autoGenerate) {
+      pendingHandoffRef.current = {
+        module: st.module || "coverage_holes",
+        prompt: typeof st.prompt === "string" ? st.prompt : "",
+        fileIds: Array.isArray(st.fileIds) ? st.fileIds : null,
+      };
+      setPendingAutoGenerate(true);
+    }
+    if (st.openRegression) {
+      if (Array.isArray(st.seeds) && st.seeds.length) {
+        setRegressionSeeds(st.seeds.map(String).join(","));
+      }
+      if (typeof st.coverage === "boolean") setRegressionCoverage(st.coverage);
+      setShowRegression(true);
+    }
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state, location.pathname, navigate]);
+
+  useEffect(() => {
+    if (!pendingAutoGenerate || !project || streaming) return;
+    setPendingAutoGenerate(false);
+    const handoff = pendingHandoffRef.current;
+    pendingHandoffRef.current = null;
+    toast.info("Starting coverage-hole generation from closure plan…");
+    const t = setTimeout(() => {
+      if (handoff) {
+        generateRef.current?.({
+          moduleOverride: handoff.module,
+          promptOverride: handoff.prompt,
+          fileIdsOverride: handoff.fileIds,
+        });
+      } else {
+        generateRef.current?.();
+      }
+    }, 50);
+    return () => clearTimeout(t);
+  }, [pendingAutoGenerate, project, streaming]);
 
   useEffect(() => {
     fetch(`${API}/health`)
@@ -159,12 +224,18 @@ export default function ProjectDetail() {
     setSelectedFileIds((prev) => prev.includes(fid) ? prev.filter(x => x !== fid) : [...prev, fid]);
   };
 
-  const generate = async () => {
+  const generate = async (overrides = {}) => {
     if (streaming) return;
     setOutput("");
     setCurrentGenId(null);
     setStreaming(true);
     const m = models[modelIdx] || DEFAULT_MODELS[0];
+    const moduleToUse = overrides.moduleOverride || module;
+    const promptToUse = overrides.promptOverride != null ? overrides.promptOverride : prompt;
+    const fileIdsToUse = overrides.fileIdsOverride || selectedFileIds;
+    if (overrides.moduleOverride) setModule(overrides.moduleOverride);
+    if (overrides.promptOverride != null) setPrompt(overrides.promptOverride);
+    if (overrides.fileIdsOverride) setSelectedFileIds(overrides.fileIdsOverride);
     try {
       const res = await fetch(`${API}/generate/stream`, {
         method: "POST",
@@ -174,11 +245,11 @@ export default function ProjectDetail() {
         },
         body: JSON.stringify({
           project_id: pid,
-          module,
+          module: moduleToUse,
           model_provider: m.provider,
           model_name: m.model,
-          prompt,
-          file_ids: selectedFileIds,
+          prompt: promptToUse,
+          file_ids: fileIdsToUse,
           language: project?.language || "systemverilog",
           ...(toolLog.trim()
             ? { tool_log: toolLog.trim(), prior_output: output || undefined }
@@ -214,6 +285,7 @@ export default function ProjectDetail() {
       load();
     }
   };
+  generateRef.current = generate;
 
   const downloadOutput = () => {
     const ext = ["testbench", "assertions", "checkers", "covergroups", "spec2rtl", "coverage_holes"].includes(module) ? "sv" : "md";
@@ -350,10 +422,11 @@ export default function ProjectDetail() {
                   rows={3}
                   value={toolLog}
                   onChange={(e) => setToolLog(e.target.value)}
-                  placeholder="Paste Verilator / UVM / assert errors to regenerate a fix (sends prior output too)"
+                  placeholder="Paste Verilator / UVM / assert errors to regenerate a fix — or run Simulate (auto-attaches)"
                   className="w-full bg-[#0B0E14] border border-[#1E293B] px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 resize-none"
                   data-testid="tool-log-input"
                 />
+                <div className="font-mono text-[10px] text-slate-500 mt-1">Simulate auto-fills this field when a run finishes.</div>
               </div>
               <button onClick={generate} disabled={streaming} className="btn-neon w-full inline-flex items-center justify-center gap-2" data-testid="generate-btn">
                 {streaming ? <><Loader2 size={14} className="animate-spin" /> Generating...</> : <><Cpu size={14} /> Generate ({selectedFileIds.length} files)</>}
@@ -410,11 +483,27 @@ export default function ProjectDetail() {
       </div>
 
       {showShare && <ShareModal project={project} onClose={() => setShowShare(false)} onUpdate={load} />}
-      {showSim && <SimulationPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowSim(false)} onVcdCreated={load} />}
+      {showSim && (
+        <SimulationPanel
+          project={project}
+          selectedFileIds={selectedFileIds}
+          onClose={() => setShowSim(false)}
+          onVcdCreated={load}
+          onLogReady={onSimLogReady}
+        />
+      )}
       {showFormal && <FormalPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowFormal(false)} />}
       {showCdc && <CdcPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowCdc(false)} />}
       {showSynth && <SynthPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowSynth(false)} onArtifacts={load} />}
-      {showRegression && <RegressionPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowRegression(false)} />}
+      {showRegression && (
+        <RegressionPanel
+          project={project}
+          selectedFileIds={selectedFileIds}
+          onClose={() => { setShowRegression(false); setRegressionSeeds(null); setRegressionCoverage(null); }}
+          initialSeeds={regressionSeeds}
+          initialCoverage={regressionCoverage}
+        />
+      )}
       {showCocotb && <CocotbPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowCocotb(false)} onUpdate={load} />}
       {showSta && <StaPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowSta(false)} />}
 

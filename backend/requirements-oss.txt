@@ -39,6 +39,9 @@ annotated-types==0.7.0
 dnspython==2.8.0
 click==8.4.2
 
+# Optional multi-worker rate limiting (used only when REDIS_URL is set)
+redis==5.2.1
+
 # Dev / CI (small image impact; used by pytest in CI)
 pytest==9.1.1
 pytest-xdist==3.8.0

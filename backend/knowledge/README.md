@@ -10,6 +10,7 @@ Text files here are chunked by `##` headings and injected into **Generate** prom
 | `uvm_patterns.txt` | ChipSutra — UVM / SV TB patterns |
 | `sva_patterns.txt` | ChipSutra — SVA patterns |
 | `sim_debug_playbook.txt` | ChipSutra — sim triage |
+| `covergroup_patterns.txt` | ChipSutra-VLSI-LLM `prompts/` (synced) — bins/cross/closure |
 
 `vlsi_system.txt` (if present) is **ignored by RAG** — SYSTEM text lives inline in Modelfiles.
 

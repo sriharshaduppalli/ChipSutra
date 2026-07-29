@@ -1,0 +1,34 @@
+# Covergroup / coverage-closure patterns (RAG). Prefer user RTL ports and real bins over invented ones.
+
+## Covergroup basics
+- Define covergroup near the monitor or a dedicated cov collector; sample on transaction or clock edge.
+- `coverpoint` for discrete enums/opcodes; `bins` for legal values; `illegal_bins` / `ignore_bins` for reserved.
+- `cross` only when both coverpoints are meaningful together (opcode × status, addr_range × burst).
+- Name covergroups after the protocol or DUT feature (`cg_axi_aw`, `cg_fifo_depth`).
+- Prefer `option.per_instance = 1` when multiple agents share a type.
+
+## Binning strategies
+- Enum / one-hot: one bin per legal encoding; illegal_bins for reserved encodings.
+- Counters / FIFO depth: `{0}`, `{[1:almost_full]}`, `{full}`, transition bins empty→full and full→empty.
+- Addresses: low/mid/high ranges matching DUT map; align bins to word/byte boundaries the DUT uses.
+- Data patterns: all0, all1, walking1, walking0, random — only if scoreboard/DUT cares.
+- Handshake timing: single-cycle ready, multi-cycle backpressure, zero-latency ready-before-valid when legal.
+
+## Protocol-oriented coverpoints (use only signals present in RTL)
+- AXI/AXI-Lite: AW/AR len/size/burst (if present), WSTRB patterns, BRESP/RRESP OKAY vs SLVERR/DECERR, idle vs back-to-back.
+- APB: PSEL/PENABLE phases, PWRITE, PREADY wait states, PSLVERR.
+- AXI-Stream: TVALID/TREADY stall patterns, TLAST alignment, TKEEP sparse vs contiguous.
+- FIFO: push when full (reject), pop when empty (reject), simultaneous push/pop, fill watermark crosses.
+- Interrupts / status: sticky vs pulse, clear-on-read, mask enable/disable.
+
+## Closing coverage holes
+- Rank holes worst-first; write one directed sequence/task per high-priority hole named after the hole.
+- Add a matching coverpoint/bin that proves the hole is now hittable; keep illegal_bins honest.
+- Medium/low holes: constrained-random with explicit `constraint` blocks targeting the missing bins.
+- After new tests, re-sim with deterministic seeds derived from hole names; compare before/after overall %.
+- Never invent ports or timing; if RTL lacks a signal, skip that coverpoint.
+
+## Verilator / OSS-friendly notes
+- Functional covergroups in SV TB compile under Verilator when sampled in TB (not all vendor UCIS features).
+- For Verilator coverage reports, also exercise statement/toggle via directed stimulus even without UVM covergroups.
+- Export or parse tool reports (UCIS/IMC/URG/.rpt) in ChipSutra Coverage page, then use Coverage-Hole Tests module.

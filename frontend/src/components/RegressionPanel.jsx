@@ -3,11 +3,19 @@ import { API, api, getToken } from "@/lib/api";
 import { Grid3X3, Loader2, Play, X } from "lucide-react";
 import { toast } from "sonner";
 
-export default function RegressionPanel({ project, selectedFileIds, onClose }) {
+export default function RegressionPanel({ project, selectedFileIds, onClose, initialSeeds, initialCoverage }) {
   const [running, setRunning] = useState(false);
-  const [seeds, setSeeds] = useState("1,2,3");
+  const [seeds, setSeeds] = useState(
+    typeof initialSeeds === "string" && initialSeeds.trim()
+      ? initialSeeds
+      : Array.isArray(initialSeeds) && initialSeeds.length
+        ? initialSeeds.join(",")
+        : "1,2,3",
+  );
   const [maxWorkers, setMaxWorkers] = useState(1);
-  const [coverage, setCoverage] = useState(false);
+  const [coverage, setCoverage] = useState(
+    typeof initialCoverage === "boolean" ? initialCoverage : false,
+  );
   const [results, setResults] = useState([]);
   const [summary, setSummary] = useState(null);
   const [trends, setTrends] = useState(null);

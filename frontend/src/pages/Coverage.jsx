@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { API, api, getToken } from "@/lib/api";
-import { Upload, Activity, Loader2, Target, GitCompare } from "lucide-react";
+import { Upload, Activity, Loader2, Target, GitCompare, Zap, Play } from "lucide-react";
 import { toast } from "sonner";
 
 export default function Coverage() {
+  const navigate = useNavigate();
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [projects, setProjects] = useState([]);
@@ -128,6 +130,29 @@ export default function Coverage() {
     }
   };
 
+  const goGenerateHoleTests = () => {
+    if (!projectId || !plan?.prompt) return toast.error("Build a closure plan first");
+    navigate(`/app/projects/${projectId}`, {
+      state: {
+        module: "coverage_holes",
+        prompt: plan.prompt,
+        fileIds: rtlFileIds,
+        autoGenerate: true,
+      },
+    });
+  };
+
+  const goApplyResimSeeds = () => {
+    if (!projectId || !plan?.resim?.seeds?.length) return toast.error("Build a closure plan first");
+    navigate(`/app/projects/${projectId}`, {
+      state: {
+        openRegression: true,
+        seeds: plan.resim.seeds,
+        coverage: plan.resim.coverage !== false,
+      },
+    });
+  };
+
   const heatColor = (p) => {
     if (p >= 95) return "bg-emerald-500";
     if (p >= 80) return "bg-emerald-500/60";
@@ -238,9 +263,27 @@ export default function Coverage() {
                   <div className="font-mono text-[10px] text-slate-400">focus: {(plan.resim?.focus || []).join(", ") || "—"}</div>
                   <div className="font-mono text-[10px] text-slate-500">{plan.resim?.rationale}</div>
                   {plan.rtl_names?.length > 0 && <div className="font-mono text-[10px] text-slate-500">rtl: {plan.rtl_names.join(", ")}</div>}
+                  <div className="flex flex-wrap gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={goGenerateHoleTests}
+                      className="btn-neon text-xs inline-flex items-center gap-1"
+                      data-testid="closure-generate-btn"
+                    >
+                      <Zap size={12} /> Generate hole tests
+                    </button>
+                    <button
+                      type="button"
+                      onClick={goApplyResimSeeds}
+                      className="btn-outline-neon text-xs inline-flex items-center gap-1"
+                      data-testid="closure-resim-btn"
+                    >
+                      <Play size={12} /> Apply seeds → Regression
+                    </button>
+                  </div>
                   <div className="font-mono text-[10px] uppercase tracking-widest text-slate-400 pt-2">Directed-test prompt</div>
                   <pre className="bg-[#0B0E14] border border-[#1E293B] p-3 font-mono text-[10px] text-slate-300 max-h-[200px] overflow-auto whitespace-pre-wrap">{plan.prompt}</pre>
-                  <div className="font-mono text-[10px] text-slate-500">Paste this into the project's "Coverage-Hole Tests" module, then re-run the regression matrix with the seeds above.</div>
+                  <div className="font-mono text-[10px] text-slate-500">One-click generate opens the project on Coverage-Hole Tests with this prompt. Apply seeds opens the regression matrix prefilled.</div>
                 </div>
               ) : (
                 <div className="font-mono text-[10px] text-slate-500">Generate a plan to get deterministic seeds derived from the worst holes plus a directed-test prompt.</div>

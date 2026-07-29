@@ -72,8 +72,24 @@ services:
       STORAGE_LOCAL_PATH: /app/storage
       OLLAMA_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-chipsutra-vlsi:3b}
+      # Optional shared rate-limit store: docker compose --profile redis up
+      # REDIS_URL: redis://redis:6379/0
     volumes:
       - chipsutra_storage:/app/storage
+
+  # Optional: shared rate limiter for multi-replica backends
+  #   docker compose --profile redis up --build
+  redis:
+    profiles: ["redis"]
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   # React SPA served via nginx
   frontend:

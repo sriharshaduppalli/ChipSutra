@@ -26,7 +26,8 @@ $prompts = Join-Path $SourceRepo 'prompts'
 $ragFiles = @(
   'vlsi_protocols_compact.txt',
   'vlsi_soc_dft_power.txt',
-  'vlsi_verification_glossary.txt'
+  'vlsi_verification_glossary.txt',
+  'covergroup_patterns.txt'
 )
 foreach ($name in $ragFiles) {
   $src = Join-Path $prompts $name
