@@ -27,7 +27,13 @@ from pydantic import BaseModel, EmailStr, Field
 # ChipSutra provider abstractions (auto-fall-back Emergent → standalone)
 from llm_provider import stream_chat as llm_stream_chat, available_providers as llm_available_providers, ollama_status as llm_ollama_status
 from rag import augment_generation_context, rag_status as llm_rag_status
-from rtl_ports import extract_port_context_from_texts, rtl_ports_status
+from rtl_ports import extract_port_context_from_texts, rtl_ports_status, extract_modules
+from generation_rules import (
+    rules_for_module,
+    default_user_prompt,
+    num_predict_for_module,
+    tb_golden_hint_from_ports,
+)
 from lint_feedback import format_lint_feedback, lint_feedback_status
 from coverage_parse import parse_text_report, summarize_coverage_dat, trend_points
 from coverage_merge import merge_summary_points
@@ -50,6 +56,9 @@ from yosys_flow import (
 )
 from cocotb_scaffold import render_cocotb_scaffold
 from cocotb_runner import cocotb_available, pick_scaffold_files, build_make_cmd, parse_cocotb_log
+from tb_skeleton import should_use_tb_skeleton, render_randomized_tb
+from tb_lint import choose_testbench_output, lint_testbench, extract_sv
+from kg_rating import auto_score_testbench, combine_with_feedback, aggregate_learning_report
 from opensta_flow import (
     sta_bin,
     sta_command,
@@ -244,12 +253,33 @@ class GenerateIn(BaseModel):
     # Closed-loop: paste Verilator/sim log (+ optional prior code) to regenerate/fix
     tool_log: Optional[str] = None
     prior_output: Optional[str] = None
+    # testbench path: auto (skeleton-first) | skeleton | llm
+    gen_mode: Optional[str] = "auto"
 
 MODULE_PROMPTS = {
-    "testbench": "You are an expert VLSI verification engineer. Generate a scalable, reusable UVM-style testbench for the provided RTL/spec in {language}. Include: interfaces, transactions, driver, monitor, scoreboard, sequences, and error injection hooks. Output only code with brief inline comments.",
-    "assertions": "You are an expert in SystemVerilog Assertions (SVA). Generate comprehensive assertions for the provided RTL in {language}. Cover: protocol correctness, safety properties, liveness, and edge cases. Output only SVA code with brief comments.",
-    "checkers": "You are an expert verification engineer. Generate reusable checker modules for the provided RTL/spec in {language}. Include: reference model comparisons, protocol checkers, and functional checkers. Output only code.",
-    "covergroups": "You are a coverage expert. Generate covergroups in {language} for the provided RTL/spec. Include: bins, cross coverage, illegal_bins, and comments explaining each coverage point. Output only code.",
+    "testbench": (
+        "You are an expert VLSI verification engineer. Generate a **compact Verilator-friendly** "
+        "SystemVerilog testbench for the provided RTL in {language} (pure SV by default; "
+        "full UVM only if the user explicitly requests UVM). "
+        "Use **randomized stimulus** ($urandom_range) + a golden reference in ONE loop — "
+        "do not hardcode long directed testcase lists. "
+        "Must: exact DUT port map; $dumpfile/$dumpvars; $finish. "
+        "Never invent ports. Output ONLY SystemVerilog (~50–70 lines)."
+    ),
+    "assertions": (
+        "You are an expert in SystemVerilog Assertions (SVA). Generate comprehensive assertions "
+        "for the provided RTL in {language}. Cover: protocol correctness, safety properties, "
+        "liveness, and edge cases using ONLY real DUT ports. Output only SVA code with brief comments."
+    ),
+    "checkers": (
+        "You are an expert verification engineer. Generate reusable checker / reference-model "
+        "modules for the provided RTL in {language} using ONLY real DUT ports and behavior. "
+        "Output only code."
+    ),
+    "covergroups": (
+        "You are a coverage expert. Generate covergroups in {language} for the provided RTL. "
+        "Include bins/crosses matching real ports and DUT behavior. Output only code."
+    ),
     "spec2rtl": "You are an expert RTL designer. Given the specification below, generate synthesizable RTL code in {language}. Output only code with brief comments.",
     "rtl2spec": "You are a technical writer + verification expert. Given the RTL below, produce a detailed specification document in Markdown covering: overview, interface signals, functional behavior, timing, corner cases, and verification hints.",
     "testplan": "You are a verification lead. Given the RTL/spec below, produce a comprehensive testplan in Markdown covering: features, scenarios, corner cases, coverage goals, and assertion goals. Structure with sections and tables.",
@@ -704,7 +734,13 @@ async def upload_file(pid: str, file: UploadFile = File(...), kind: str = Form("
         "size": len(data),
         "content_type": file.content_type or "application/octet-stream",
         "storage_path": storage_path,
-        "inline_content": data.decode("utf-8", errors="ignore") if storage_path is None and ext in ("v","sv","vhd","vhdl","txt","md","vcd","log","rpt","csv","json","lib","sdc","xml") else None,
+        # Always keep text RTL/spec inline so Generate works even if local storage
+        # paths differ between Docker and native hosts.
+        "inline_content": (
+            data.decode("utf-8", errors="ignore")
+            if ext in ("v", "sv", "vhd", "vhdl", "txt", "md", "vcd", "log", "rpt", "csv", "json", "lib", "sdc", "xml")
+            else None
+        ),
         "is_deleted": False,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -739,13 +775,21 @@ async def delete_file(pid: str, file_id: str, user=Depends(get_current_user)):
 # AI Generation
 # =========================
 def _get_file_text(fdoc: dict) -> str:
-    if fdoc.get("inline_content"):
-        return fdoc["inline_content"]
-    if fdoc.get("storage_path"):
+    inline = fdoc.get("inline_content")
+    if inline:
+        return inline
+    path = fdoc.get("storage_path")
+    if path:
         try:
-            data, _ = get_object(fdoc["storage_path"])
+            data, _ = get_object(path)
             return data.decode("utf-8", errors="ignore")
-        except Exception:
+        except Exception as e:
+            logger.warning(
+                "Cannot read file %s from storage_path=%s: %s",
+                fdoc.get("original_filename") or fdoc.get("id"),
+                path,
+                e,
+            )
             return ""
     return ""
 
@@ -789,22 +833,56 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
     file_context = ""
     file_names: List[str] = []
     file_bodies: List[str] = []
+    missing_content: List[str] = []
+    fdocs: List[dict] = []
     if inp.file_ids:
-        fdocs = await db.files.find({"id": {"$in": inp.file_ids}, "project_id": inp.project_id}, {"_id": 0}).to_list(50)
-        for f in fdocs:
-            file_names.append(f.get("original_filename") or "")
-            text = _get_file_text(f)
-            if text:
-                file_bodies.append(text)
-                file_context += f"\n\n--- FILE: {f['original_filename']} (kind={f.get('kind','')}) ---\n{text[:20000]}\n"
+        fdocs = await db.files.find(
+            {"id": {"$in": inp.file_ids}, "project_id": inp.project_id, "is_deleted": {"$ne": True}},
+            {"_id": 0},
+        ).to_list(50)
+        found_ids = {f.get("id") for f in fdocs}
+        for fid in inp.file_ids:
+            if fid not in found_ids:
+                missing_content.append(f"unknown-id:{fid}")
+
+    # Stale UI selections (deleted/re-uploaded files) → fall back to project RTL.
+    if inp.module in ("testbench", "assertions", "covergroups", "checkers", "spec2rtl", "formal_hints") and not fdocs:
+        fdocs = await db.files.find(
+            {
+                "project_id": inp.project_id,
+                "is_deleted": {"$ne": True},
+                "$or": [
+                    {"ext": {"$in": ["v", "sv", "vhd", "vhdl"]}},
+                    {"original_filename": {"$regex": r"\.(v|sv|vhd|vhdl)$", "$options": "i"}},
+                ],
+            },
+            {"_id": 0},
+        ).to_list(20)
+        if fdocs:
+            missing_content = []
+            logger.info(
+                "generate: selected file_ids missing; falling back to %d project RTL file(s)",
+                len(fdocs),
+            )
+
+    for f in fdocs:
+        file_names.append(f.get("original_filename") or "")
+        text = _get_file_text(f)
+        if text:
+            file_bodies.append(text)
+            file_context += f"\n\n--- FILE: {f['original_filename']} (kind={f.get('kind','')}) ---\n{text[:20000]}\n"
+        else:
+            missing_content.append(f.get("original_filename") or f.get("id") or "file")
 
     lang = inp.language or proj.get("language", "systemverilog")
     system_msg = MODULE_PROMPTS[inp.module].format(language=lang)
     system_msg += "\n\nYou are ChipSutra, an EDA verification assistant. Be concise, precise, and technical."
     rag_block = augment_generation_context(
         module=inp.module,
-        prompt=(inp.prompt or "") + " " + file_context[:2000],
+        prompt=(inp.prompt or "") + " " + file_context[:1200],
         filenames=file_names,
+        # Keep RAG short for local 3B latency (especially testbench).
+        top_k=2 if inp.module in ("testbench", "assertions", "covergroups", "checkers") else 4,
     )
     if rag_block:
         system_msg += (
@@ -816,13 +894,91 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
     if port_block:
         system_msg += "\n\n--- Parsed RTL interfaces ---\n" + port_block
 
+    extra_rules = rules_for_module(inp.module, has_ports=bool(port_block))
+    if extra_rules:
+        system_msg += "\n\n" + extra_rules
+
+    dut_hint = None
+    parsed_modules: List[dict] = []
+    if file_bodies:
+        for body in file_bodies:
+            parsed_modules.extend(extract_modules(body))
+        if parsed_modules:
+            dut_hint = f"module {parsed_modules[0]['name']}"
+
+    # Never let the LLM invent a fake DUT (e.g. ChipSutra / data_in) when no RTL was attached.
+    if inp.module == "testbench":
+        if not file_bodies:
+            if not inp.file_ids and not fdocs:
+                raise HTTPException(
+                    400,
+                    "Select at least one RTL file (.v/.sv) in the project before generating a testbench.",
+                )
+            names = ", ".join(missing_content[:5]) or "selected file(s)"
+            raise HTTPException(
+                400,
+                f"Could not read RTL content for: {names}. "
+                "Re-upload the .v/.sv file, then select it and Generate again.",
+            )
+        if not any((m.get("ports") or []) for m in parsed_modules):
+            raise HTTPException(
+                400,
+                "Could not parse DUT ports from the selected files. Open the RTL and confirm it has a module (...) port list.",
+            )
+
     user_text = (inp.prompt or "").strip()
     if not user_text:
-        user_text = "Please generate the requested artifact based on the attached files."
+        user_text = default_user_prompt(inp.module, dut_hint=dut_hint)
     if file_context:
         user_text += "\n\n" + file_context
     if inp.tool_log:
         user_text += "\n\n" + format_lint_feedback(inp.tool_log, prior_code=inp.prior_output)
+
+    use_skeleton = should_use_tb_skeleton(
+        module=inp.module,
+        prompt=inp.prompt or "",
+        modules=parsed_modules,
+        gen_mode=inp.gen_mode or "auto",
+        tool_log=inp.tool_log,
+    )
+    skeleton_sv = ""
+    ref_tb = ""
+    if parsed_modules and parsed_modules[0].get("ports") and inp.module == "testbench":
+        cycles = 48
+        seed = 1
+        m_cyc = re.search(r"\bcycles\s*=\s*(\d+)\b", inp.prompt or "", re.I)
+        m_seed = re.search(r"\bseed\s*=\s*(\d+)\b", inp.prompt or "", re.I)
+        if m_cyc:
+            cycles = int(m_cyc.group(1))
+        if m_seed:
+            seed = int(m_seed.group(1))
+        ref_tb = render_randomized_tb(parsed_modules[0], cycles=cycles, seed=seed)
+
+    if use_skeleton and ref_tb:
+        skeleton_sv = ref_tb
+    elif inp.module == "testbench" and (inp.gen_mode or "auto").lower() in ("auto", "skeleton", "fast", "template"):
+        if (
+            ref_tb
+            and not (inp.tool_log or "").strip()
+            and not re.search(r"\b(uvm|agent|sequencer)\b", inp.prompt or "", re.I)
+        ):
+            skeleton_sv = ref_tb
+
+    # LLM path: feed the known-good TB as a mandatory structural reference (3B models
+    # otherwise invent broken clocks / circular goldens like exp=count+1).
+    if not skeleton_sv and ref_tb and inp.module == "testbench":
+        port_names = [
+            p.get("name") for p in (parsed_modules[0].get("ports") or []) if p.get("name")
+        ] if parsed_modules else []
+        hint = tb_golden_hint_from_ports(port_names)
+        user_text = (
+            "MANDATORY reference testbench (copy this structure; keep exact ports; "
+            "do not break the clock or golden model; output ONLY SystemVerilog, no essay):\n"
+            f"{ref_tb}\n\n"
+            f"Golden hint: {hint}\n\n"
+            "User request:\n"
+            + user_text
+        )
 
     session_id = str(uuid.uuid4())
     gen_id = str(uuid.uuid4())
@@ -831,32 +987,96 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
         "project_id": inp.project_id,
         "user_id": user["id"],
         "module": inp.module,
-        "provider": inp.model_provider,
-        "model": inp.model_name,
+        "provider": "skeleton" if skeleton_sv else inp.model_provider,
+        "model": "tb_skeleton" if skeleton_sv else inp.model_name,
         "prompt": inp.prompt or "",
         "file_ids": inp.file_ids or [],
         "output": "",
         "status": "streaming",
+        "engine": "skeleton" if skeleton_sv else "llm",
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.generations.insert_one(gen_doc)
 
     async def event_gen():
-        yield f"data: {json.dumps({'type': 'meta', 'generation_id': gen_id})}\n\n"
+        yield f"data: {json.dumps({'type': 'meta', 'generation_id': gen_id, 'engine': 'skeleton' if skeleton_sv else 'llm'})}\n\n"
         accumulated = []
         try:
-            async for delta in llm_stream_chat(
-                provider=inp.model_provider,
-                model=inp.model_name,
-                system=system_msg,
-                user_text=user_text,
-                session_id=session_id,
-            ):
-                accumulated.append(delta)
-                yield f"data: {json.dumps({'type': 'delta', 'content': delta})}\n\n"
+            if skeleton_sv:
+                # Stream in small chunks so the UI feels live without waiting on Ollama.
+                chunk = 120
+                for i in range(0, len(skeleton_sv), chunk):
+                    delta = skeleton_sv[i : i + chunk]
+                    accumulated.append(delta)
+                    yield f"data: {json.dumps({'type': 'delta', 'content': delta})}\n\n"
+                    await asyncio.sleep(0)
+            else:
+                # Buffer LLM tokens, then quality-gate before showing the user.
+                raw_chunks: List[str] = []
+                async for delta in llm_stream_chat(
+                    provider=inp.model_provider,
+                    model=inp.model_name,
+                    system=system_msg,
+                    user_text=user_text,
+                    session_id=session_id,
+                    num_predict=num_predict_for_module(inp.module),
+                ):
+                    raw_chunks.append(delta)
+                raw = "".join(raw_chunks)
+                final = raw
+                engine_tag = "llm"
+                if inp.module == "testbench" and ref_tb:
+                    ports = [p.get("name") for p in (parsed_modules[0].get("ports") or []) if p.get("name")]
+                    force_uvm = bool(re.search(r"\b(uvm|agent|sequencer)\b", inp.prompt or "", re.I))
+                    final, engine_tag, issues = choose_testbench_output(
+                        raw,
+                        skeleton=ref_tb,
+                        dut_name=(parsed_modules[0].get("name") if parsed_modules else None),
+                        required_ports=ports,
+                        force_uvm=force_uvm,
+                    )
+                    if issues:
+                        logger.info("TB lint issues=%s engine=%s", issues, engine_tag)
+                gen_doc_engine = engine_tag
+                accumulated = [final]
+                # Single replace event — avoid double-append with deltas.
+                yield f"data: {json.dumps({'type': 'replace', 'content': final, 'engine': engine_tag})}\n\n"
             full = "".join(accumulated)
-            await db.generations.update_one({"id": gen_id}, {"$set": {"output": full, "status": "done", "completed_at": datetime.now(timezone.utc).isoformat()}})
-            yield f"data: {json.dumps({'type': 'done', 'generation_id': gen_id})}\n\n"
+            done_engine = "skeleton" if skeleton_sv else locals().get("gen_doc_engine", "llm")
+            learning: dict = {"engine": done_engine}
+            if inp.module == "testbench":
+                ports = []
+                dut_name = None
+                if parsed_modules:
+                    dut_name = parsed_modules[0].get("name")
+                    ports = [p.get("name") for p in (parsed_modules[0].get("ports") or []) if p.get("name")]
+                lint_ok, lint_issues = lint_testbench(
+                    extract_sv(full) or full,
+                    dut_name=dut_name,
+                    required_ports=ports or None,
+                )
+                auto = auto_score_testbench(full, done_engine, lint_ok, lint_issues)
+                learning.update(
+                    {
+                        "lint_ok": lint_ok,
+                        "lint_issues": lint_issues,
+                        **auto,
+                        "final_score": auto["auto_score"],
+                    }
+                )
+            await db.generations.update_one(
+                {"id": gen_id},
+                {
+                    "$set": {
+                        "output": full,
+                        "status": "done",
+                        "engine": done_engine,
+                        "learning": learning,
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                    }
+                },
+            )
+            yield f"data: {json.dumps({'type': 'done', 'generation_id': gen_id, 'engine': done_engine, 'learning': learning})}\n\n"
         except Exception as e:
             logger.exception("Generation error")
             err = str(e)
@@ -879,6 +1099,72 @@ async def list_generations(pid: str, user=Depends(get_current_user)):
     await require_project(pid, user["id"], "viewer")
     docs = await db.generations.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(200)
     return docs
+
+
+class GenerationFeedbackIn(BaseModel):
+    rating: int  # 1 = thumbs up, -1 = thumbs down
+    note: Optional[str] = ""
+
+
+@api.post("/generations/{gen_id}/feedback")
+async def generation_feedback(gen_id: str, inp: GenerationFeedbackIn, user=Depends(get_current_user)):
+    if inp.rating not in (-1, 1):
+        raise HTTPException(400, "rating must be 1 (up) or -1 (down)")
+    gen = await db.generations.find_one({"id": gen_id}, {"_id": 0})
+    if not gen:
+        raise HTTPException(404, "Generation not found")
+    await require_project(gen["project_id"], user["id"], "editor")
+    learn = dict(gen.get("learning") or {})
+    auto = float(learn.get("auto_score") or 50.0)
+    final = combine_with_feedback(auto, inp.rating)
+    learn.update(
+        {
+            "user_rating": inp.rating,
+            "user_note": (inp.note or "")[:500],
+            "final_score": final,
+            "rated_by": user["id"],
+            "rated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    await db.generations.update_one({"id": gen_id}, {"$set": {"learning": learn}})
+    await db.kg_feedback.insert_one(
+        {
+            "id": str(uuid.uuid4()),
+            "generation_id": gen_id,
+            "project_id": gen["project_id"],
+            "user_id": user["id"],
+            "module": gen.get("module"),
+            "rating": inp.rating,
+            "note": (inp.note or "")[:500],
+            "auto_score": auto,
+            "final_score": final,
+            "engine": gen.get("engine"),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    return {"ok": True, "learning": learn}
+
+
+@api.get("/kg/learning-score")
+async def kg_learning_score(
+    user=Depends(get_current_user),
+    project_id: Optional[str] = None,
+    limit: int = Query(50, ge=5, le=200),
+):
+    """Rate whether KG learning is improving from recent generations + feedback."""
+    q: dict = {"status": "done", "module": "testbench"}
+    if project_id:
+        await require_project(project_id, user["id"], "viewer")
+        q["project_id"] = project_id
+    else:
+        # All projects the user can access: owned + collab is heavy; scope to user's gens
+        q["user_id"] = user["id"]
+    docs = await db.generations.find(q, {"_id": 0, "learning": 1, "engine": 1, "created_at": 1, "module": 1}).sort(
+        "created_at", -1
+    ).to_list(limit)
+    report = aggregate_learning_report(docs)
+    report["scope"] = {"project_id": project_id, "user_id": user["id"], "limit": limit}
+    return report
 
 # =========================
 # Coverage parser (simple)

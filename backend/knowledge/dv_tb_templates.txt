@@ -1,0 +1,101 @@
+# Design Verification TB templates (RAG)
+# Universal patterns for a solid testbench on any RTL DUT. Prefer exact user ports.
+
+## Universal DV goal
+Every solid TB must: (1) drive clocks/resets correctly, (2) apply legal stimulus,
+(3) check DUT outputs vs an independent reference, (4) dump waves, (5) finish cleanly.
+ChipSutra default for local sim: Verilator-friendly pure SV + $urandom loop.
+Use full UVM only when the user asks for UVM/agents.
+
+## Template A - Smoke TB (any synchronous DUT)
+Structure (always):
+1. `timescale; module <dut>_tb;`
+2. Declare clk/rst + all DUT ports with correct widths (from parsed RTL).
+3. Instantiate DUT with **named** port map only.
+4. `always #PERIOD/2 clk = ~clk;`
+5. Reset: assert active level for N cycles, then deassert.
+6. Directed smoke: a few legal transactions (idle, one write/read or enable pulse).
+7. `$dumpfile/$dumpvars; $finish;`
+Pass criteria: no X on checked outputs after reset; no $error.
+
+## Template B - Randomized self-check TB (default ChipSutra)
+1. Same harness as Template A.
+2. Seed: `void'($urandom(SEED));` log seed in $display.
+3. ONE loop of N cycles (32..128): randomize non-clock/reset inputs with $urandom/_range.
+4. Maintain independent `expected` / scoreboard state updated from stimulus (never from DUT outs).
+5. After @(posedge clk) + #1, compare DUT outs; `$error` + error counter on mismatch.
+6. End: PASS/FAIL $display + $finish.
+Best for counters, simple FSMs, FIFOs with a modelable API.
+
+## Template C - Constrained-random class TB (no UVM)
+1. `class txn; rand ...; constraint legal_c { ... }; endclass`
+2. Fields mirror DUT-relevant inputs only (exact names/widths).
+3. Loop: `assert(t.randomize());` drive; update golden; check.
+4. Soft constraints for rare resets/errors; dist for bias.
+5. Plusargs: +SEED=, +N_TXN= for regression reuse.
+Reusable: same txn class across smoke/extended tests via constraint mode.
+
+## Template D - Layered SV TB (scalable without UVM)
+Layers:
+- interface / clocking block (optional) for synchronous drive/sample
+- driver task: drive txn on interface
+- monitor task: sample + push to queue
+- scoreboard: pop expected vs actual
+- test: call sequences of driver tasks
+Reuse: swap test tasks; keep driver/monitor/scoreboard.
+
+## Template E - Minimal UVM env (when user asks UVM)
+Components:
+- `uvm_sequence_item` with rand fields = DUT inputs/fields
+- agent: driver + monitor + sequencer
+- env: agent + scoreboard (+ coverage)
+- test: build env; start sequence on sequencer
+Rules: config_db for vif; start_item/finish_item; get_next_item/item_done.
+Forbidden: .put(), .configure(vif), cast(rhs), driver.start(this).
+Note: full UVM may not Verilate; offer Template B for OSS local runs.
+
+## Template F - Extended / corner regression set
+Build on Template B/C library:
+- reset during traffic
+- back-to-back max-rate
+- idle / bubble cycles
+- boundary values (0, all-1s, wrap)
+- illegal (only if DUT has error response - don't invent)
+Run matrix: same TB binary x seed list (+ntb_random_seed / void'($urandom)).
+
+## Checklist - solid TB for ANY design
+- [ ] Exact DUT module name and ports (no invented signals)
+- [ ] Correct reset polarity and width
+- [ ] Free-running clock (`always #n clk=~clk`)
+- [ ] Independent reference / scoreboard
+- [ ] Randomized legal stimulus (not only one directed path)
+- [ ] $dumpfile/$dumpvars and $finish
+- [ ] Seed printed for reproduce
+- [ ] Errors counted; non-zero => FAIL
+- [ ] Under ~100 lines for block smoke unless UVM requested
+
+## Mapping DUT class -> starting template
+- Counter / accumulator / simple FSM: Template B
+- FIFO / pipe / skid: Template B or C with queue golden
+- CSR / MMIO: Template C or E + RAL if map given
+- Bus protocol (AXI/APB): Template D/E + protocol VIP or BFMs from user
+- Unknown / first bring-up: Template A then promote to B
+
+## Template G - Sync FIFO queue scoreboard (ChipSutra Fast-random)
+Ports: wr_en, wr_data, rd_en, rd_data, full, empty [, count]. Params: WIDTH, DEPTH.
+Golden: `logic [W-1:0] q[$];` independent of DUT outs.
+Each cycle: randomize wr/rd (clamp when full/empty); avoid simultaneous push+pop at size==1 for simple FWFT models; @(posedge clk); #1;
+Update model: if do_read pop_front; if do_write push_back; then check empty/full/count/rd_data vs q.
+Pass WIDTH/DEPTH into DUT instance. Never invent data_in when ports are wr_*/rd_*.
+
+## Template H - Byte parity checker
+Ports: valid, data[W-1:0], parity [, valid_out].
+Golden: when valid, expect `parity === ^data` (and valid_out==1 if present).
+Randomize valid/data in one loop; seed + dump + $finish.
+
+## Template I - AXI4-Lite slave smoke (4-reg aperture)
+Clock/reset: aclk / aresetn. Channels: AW/W/B + AR/R with s_axi_* names.
+Golden: `logic [31:0] model_reg[0:3];` keyed by addr[3:2].
+Per txn: assert AW+W together; wait awready&&wready; update model; wait bvalid OKAY;
+then AR handshake; wait rvalid; check rdata===model_reg[sel] and rresp OKAY.
+Timeouts on handshakes; wstrb=4'hF for smoke. Promote to VIP/UVM when user asks.

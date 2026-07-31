@@ -17,7 +17,7 @@ import StaPanel from "@/components/StaPanel";
 import GoldenDutImport from "@/components/GoldenDutImport";
 
 const MODULES = [
-  { id: "testbench", label: "UVM Testbench", desc: "Scalable, reusable testbench with driver/monitor/scoreboard/sequences" },
+  { id: "testbench", label: "SV / UVM Testbench", desc: "Fast randomized SV TB from DUT ports (instant); LLM/UVM if you ask" },
   { id: "assertions", label: "SVA Assertions", desc: "SystemVerilog assertions for protocol/safety/liveness" },
   { id: "checkers", label: "Checkers", desc: "Reference model + protocol checkers" },
   { id: "covergroups", label: "Covergroups", desc: "Covergroups with bins, cross coverage, illegal_bins" },
@@ -43,6 +43,7 @@ export default function ProjectDetail() {
   const [project, setProject] = useState(null);
   const [selectedFileIds, setSelectedFileIds] = useState([]);
   const [module, setModule] = useState("testbench");
+  const [genMode, setGenMode] = useState("skeleton"); // auto | skeleton | llm — default fast randomized TB
   const [models, setModels] = useState(DEFAULT_MODELS);
   const [modelIdx, setModelIdx] = useState(0);
   const [prompt, setPrompt] = useState("");
@@ -64,6 +65,9 @@ export default function ProjectDetail() {
   const [regressionCoverage, setRegressionCoverage] = useState(null);
   const [pendingAutoGenerate, setPendingAutoGenerate] = useState(false);
   const [currentGenId, setCurrentGenId] = useState(null);
+  const [learningInfo, setLearningInfo] = useState(null);
+  const [kgScore, setKgScore] = useState(null);
+  const [ratingBusy, setRatingBusy] = useState(false);
   const outputRef = useRef(null);
   const generateRef = useRef(null);
 
@@ -100,6 +104,16 @@ export default function ProjectDetail() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  // Drop stale selections after project reload (deleted / re-uploaded files get new ids).
+  useEffect(() => {
+    if (!project?.files) return;
+    const known = new Set(project.files.map((f) => f.id));
+    setSelectedFileIds((prev) => {
+      const next = prev.filter((id) => known.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [project]);
 
   const pendingHandoffRef = useRef(null);
 
@@ -228,14 +242,38 @@ export default function ProjectDetail() {
     if (streaming) return;
     setOutput("");
     setCurrentGenId(null);
+    setLearningInfo(null);
     setStreaming(true);
     const m = models[modelIdx] || DEFAULT_MODELS[0];
     const moduleToUse = overrides.moduleOverride || module;
     const promptToUse = overrides.promptOverride != null ? overrides.promptOverride : prompt;
-    const fileIdsToUse = overrides.fileIdsOverride || selectedFileIds;
+    let fileIdsToUse = overrides.fileIdsOverride || selectedFileIds;
     if (overrides.moduleOverride) setModule(overrides.moduleOverride);
     if (overrides.promptOverride != null) setPrompt(overrides.promptOverride);
     if (overrides.fileIdsOverride) setSelectedFileIds(overrides.fileIdsOverride);
+
+    const knownIds = new Set((project?.files || []).map((f) => f.id));
+    fileIdsToUse = (fileIdsToUse || []).filter((id) => knownIds.has(id));
+
+    const rtlFiles = (project?.files || []).filter((f) =>
+      /\.(v|sv|vh|svh)$/i.test(f.original_filename || f.filename || ""),
+    );
+
+    // Testbench must have RTL selected — otherwise the LLM invents fake ports (e.g. data_in).
+    if (moduleToUse === "testbench" && fileIdsToUse.length === 0) {
+      if (rtlFiles.length) {
+        fileIdsToUse = [rtlFiles[0].id];
+        setSelectedFileIds(fileIdsToUse);
+        toast.info(`Auto-selected RTL: ${rtlFiles[0].original_filename || rtlFiles[0].filename}`);
+      } else {
+        toast.error("Upload and select an RTL file (.v/.sv) before generating a testbench");
+        setStreaming(false);
+        return;
+      }
+    } else if (moduleToUse === "testbench" && fileIdsToUse.length) {
+      setSelectedFileIds(fileIdsToUse);
+    }
+
     try {
       const res = await fetch(`${API}/generate/stream`, {
         method: "POST",
@@ -251,15 +289,25 @@ export default function ProjectDetail() {
           prompt: promptToUse,
           file_ids: fileIdsToUse,
           language: project?.language || "systemverilog",
+          gen_mode: moduleToUse === "testbench" ? genMode : "llm",
           ...(toolLog.trim()
             ? { tool_log: toolLog.trim(), prior_output: output || undefined }
             : {}),
         }),
       });
-      if (!res.ok || !res.body) throw new Error("Stream failed");
+      if (!res.ok) {
+        let detail = "Stream failed";
+        try {
+          const errBody = await res.json();
+          detail = errBody.detail || detail;
+        } catch {}
+        throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+      }
+      if (!res.body) throw new Error("Stream failed");
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let engineUsed = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -271,21 +319,62 @@ export default function ProjectDetail() {
           if (!line.startsWith("data:")) continue;
           try {
             const j = JSON.parse(line.slice(5).trim());
-            if (j.type === "meta") setCurrentGenId(j.generation_id);
-            else if (j.type === "delta") setOutput((prev) => prev + j.content);
+            if (j.type === "meta") {
+              setCurrentGenId(j.generation_id);
+              if (j.engine) engineUsed = j.engine;
+            } else if (j.type === "replace") {
+              setOutput(j.content || "");
+              if (j.engine) engineUsed = j.engine;
+            } else if (j.type === "delta") setOutput((prev) => prev + j.content);
             else if (j.type === "error") { toast.error(j.error); }
-            else if (j.type === "done") { toast.success("Generation complete"); }
+            else if (j.type === "done") {
+              if (j.engine) engineUsed = j.engine;
+              if (j.learning) setLearningInfo(j.learning);
+              toast.success(
+                engineUsed === "skeleton" || engineUsed === "skeleton_fallback"
+                  ? "Verified randomized TB ready"
+                  : "Generation complete",
+              );
+              // Refresh KG learning score after each TB generation
+              if (moduleToUse === "testbench") {
+                api.get(`/kg/learning-score`, { params: { project_id: pid, limit: 40 } })
+                  .then(({ data }) => setKgScore(data))
+                  .catch(() => {});
+              }
+            }
           } catch {}
         }
       }
     } catch (e) {
-      toast.error("Generation failed");
+      toast.error(e?.message || "Generation failed");
     } finally {
       setStreaming(false);
       load();
     }
   };
   generateRef.current = generate;
+
+  const rateGeneration = async (rating) => {
+    if (!currentGenId || ratingBusy) return;
+    setRatingBusy(true);
+    try {
+      const { data } = await api.post(`/generations/${currentGenId}/feedback`, { rating });
+      setLearningInfo(data.learning || null);
+      toast.success(rating > 0 ? "Thanks — marked helpful" : "Thanks — we'll improve from this");
+      const { data: score } = await api.get(`/kg/learning-score`, { params: { project_id: pid, limit: 40 } });
+      setKgScore(score);
+    } catch {
+      toast.error("Could not save feedback");
+    }
+    setRatingBusy(false);
+  };
+
+  useEffect(() => {
+    if (!pid) return;
+    api.get(`/kg/learning-score`, { params: { project_id: pid, limit: 40 } })
+      .then(({ data }) => setKgScore(data))
+      .catch(() => {});
+  }, [pid]);
 
   const downloadOutput = () => {
     const ext = ["testbench", "assertions", "checkers", "covergroups", "spec2rtl", "coverage_holes"].includes(module) ? "sv" : "md";
@@ -404,7 +493,46 @@ export default function ProjectDetail() {
               </div>
               <div>
                 <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2">Prompt (optional)</div>
-                <textarea rows={4} value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="e.g., focus on backpressure and AXI4 protocol violations" className="w-full bg-[#0B0E14] border border-[#1E293B] px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 resize-none" data-testid="prompt-input" />
+                {module === "testbench" && (
+                  <div className="mb-2 grid grid-cols-3 gap-1" data-testid="tb-gen-mode">
+                    {[
+                      { id: "auto", label: "Auto" },
+                      { id: "skeleton", label: "Fast random" },
+                      { id: "llm", label: "UVM (LLM)" },
+                    ].map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setGenMode(opt.id)}
+                        className={`p-1.5 border text-[10px] font-mono uppercase tracking-wide ${
+                          genMode === opt.id
+                            ? "border-emerald-500/60 text-emerald-400 bg-emerald-500/5"
+                            : "border-[#1E293B] text-slate-400"
+                        }`}
+                        data-testid={`gen-mode-${opt.id}`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <textarea
+                  rows={4}
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder={
+                    module === "testbench"
+                      ? "Fast random = verified template (best smoke). UVM (LLM) = local model + lint gate (falls back to template if weak)"
+                      : "e.g., focus on backpressure and AXI4 protocol violations"
+                  }
+                  className="w-full bg-[#0B0E14] border border-[#1E293B] px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 resize-none"
+                  data-testid="prompt-input"
+                />
+                {module === "testbench" && (
+                  <div className="font-mono text-[10px] text-slate-500 mt-1">
+                    Pure SV TBs use the verified template (3B LLM is gated). UVM/agents still use the LLM + lint fallback.
+                  </div>
+                )}
               </div>
               <div>
                 <div className="flex items-center justify-between mb-2">
@@ -444,12 +572,53 @@ export default function ProjectDetail() {
                 <div className="font-mono text-xs uppercase tracking-widest text-slate-300">Output · {module}</div>
                 {streaming && <span className="font-mono text-[10px] text-emerald-400 animate-pulse">streaming...</span>}
               </div>
-              {output && (
-                <button onClick={downloadOutput} className="text-xs font-mono text-emerald-400 hover:underline inline-flex items-center gap-1" data-testid="download-output">
-                  <Download size={12} /> download
-                </button>
-              )}
+              <div className="flex items-center gap-3">
+                {currentGenId && output && module === "testbench" && (
+                  <div className="flex items-center gap-1" data-testid="gen-feedback">
+                    <button
+                      type="button"
+                      disabled={ratingBusy}
+                      onClick={() => rateGeneration(1)}
+                      className="font-mono text-[10px] px-2 py-1 border border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10"
+                      title="Helpful output"
+                    >
+                      + useful
+                    </button>
+                    <button
+                      type="button"
+                      disabled={ratingBusy}
+                      onClick={() => rateGeneration(-1)}
+                      className="font-mono text-[10px] px-2 py-1 border border-slate-600 text-slate-400 hover:bg-slate-800"
+                      title="Needs improvement"
+                    >
+                      - weak
+                    </button>
+                  </div>
+                )}
+                {output && (
+                  <button onClick={downloadOutput} className="text-xs font-mono text-emerald-400 hover:underline inline-flex items-center gap-1" data-testid="download-output">
+                    <Download size={12} /> download
+                  </button>
+                )}
+              </div>
             </div>
+            {(learningInfo || kgScore) && module === "testbench" && (
+              <div className="border-b border-[#1E293B] px-4 py-2 font-mono text-[10px] text-slate-400 flex flex-wrap gap-x-4 gap-y-1" data-testid="kg-learning-bar">
+                {learningInfo?.final_score != null && (
+                  <span>Output score: <span className="text-emerald-400">{learningInfo.final_score}</span>/100{learningInfo.engine ? ` · ${learningInfo.engine}` : ""}</span>
+                )}
+                {kgScore?.kg_learning_score != null && (
+                  <span>
+                    KG learning: <span className="text-emerald-400">{kgScore.kg_learning_score}</span>/100
+                    {kgScore.grade ? ` (${kgScore.grade})` : ""}
+                    {kgScore.trend ? ` · ${kgScore.trend}` : ""}
+                  </span>
+                )}
+                {kgScore?.interpretation && (
+                  <span className="text-slate-500 w-full">{kgScore.interpretation}</span>
+                )}
+              </div>
+            )}
             <div ref={outputRef} className="flex-1 overflow-auto bg-[#0B0E14]">
               {output ? (
                 <Editor

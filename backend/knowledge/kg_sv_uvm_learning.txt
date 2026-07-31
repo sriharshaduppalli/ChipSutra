@@ -1,0 +1,136 @@
+# ChipSutra SV / UVM Knowledge Graph (RAG)
+# Chunked by ## for continuous LLM learning. Prefer user RTL over examples.
+
+## KG overview — verification learning spine
+ChipSutra verification knowledge is a directed graph: SV language → OOP/random → UVM → reuse/scalability → testcase strategy → inbuilt functions/constructs.
+Learning order (L1→L4): syntax → stimulus/check → architecture → closure/scale.
+Always: exact DUT ports; Verilator-friendly SV by default; UVM only when asked; independent golden models (never exp=count+1).
+
+## L1 — Standard SystemVerilog syntax (must know)
+- Modules, ports (input/output/inout), parameters/localparams, generate, packages, imports.
+- Data types: logic, bit, reg, wire, int, integer, enum, struct, union, packed/unpacked arrays, queues ($), associative arrays.
+- Procedural: always_ff / always_comb / always_latch; initial; forever; fork/join(_any|_none).
+- Timing: #delay, ##cycle (SVA), @(posedge/negedge), wait, event.
+- Operators: logical/bitwise/reduction/concat/replicate; ===/!== vs ==/!=; inside; streaming.
+- Interfaces + modports; virtual interfaces in TB/UVM.
+- Tasks/functions (automatic); void'(); $cast; type().
+Forbidden in TB codegen: inventing ports; chat prose after endmodule; broken clocks (use always #period clk=~clk).
+
+## L1 — SV constructs for testbenches
+- Timescale `timescale 1ns/1ps; clock gen; reset sequences (active-low _n).
+- DUT instance with named port map only.
+- Stimulus drivers vs monitors; scoreboard/reference model; checkers.
+- Assertions: immediate assert; concurrent assert/assume/cover property; bind.
+- Coverage: covergroup/coverpoint/bins/cross/illegal_bins/ignore_bins.
+- VCD: $dumpfile/$dumpvars; end with $finish/$stop.
+- Random: $urandom, $urandom_range, std::randomize, rand/randc, constraint, soft, unique, solve before.
+
+## L1 — Inbuilt functions and system tasks (TB-critical)
+- Random: $urandom, $urandom_range, $random (legacy), srandom/process::self.srandom for seeds.
+- Display: $display/$write/$sformatf/$time/$realtime; $error/$warning/$info/$fatal.
+- Dump: $dumpfile/$dumpvars/$dumpon/$dumpoff.
+- Array/queue: size, push_back/pop_front, delete, shuffle, sort, rsort, reverse, unique, sum, product, and/or/xor methods.
+- String: len, substr, atoi, atobin/atohex, toupper.
+- Misc: $bits, $clog2, $signed/$unsigned, $cast, $typeof, $isunknown, $onehot, $countones.
+- File: $fopen/$fwrite/$fclose (logs); DPI-C when needed (advanced).
+
+## L2 — Randomization techniques
+- Directed-random: few directed resets/corners + random legal traffic (high value / low lines).
+- Constrained-random: class with rand fields + constraints mirroring DUT legal space.
+- Inline: std::randomize(a,b) with { a inside {[0:3]}; b < a; }.
+- Distribution: dist { 0:=1, 1:=3 }; soft constraints for overridable knobs.
+- Stability: seed via +ntb_random_seed / void'($urandom(seed)); log seed in TB.
+- Coverage-driven: randomize until coverpoints hit; avoid unrolled Testcase 1..N walls.
+- Counter pattern: enable=$urandom_range(0,1); expected independent; check count===expected each cycle.
+
+## L2 — Reusable techniques (block → IP)
+- Layer TB: clock/reset IF → driver → monitor → scoreboard → sequence library.
+- Package shared types/enums/constraints; typedef transaction items once.
+- Parameterize WIDTH/DEPTH/AGENT_KIND; avoid hard-coded magic numbers.
+- Virtual interface + config_db (or simple SV handles) for connection.
+- Callbacks/hooks for scoreboard predict/check; factory overrides for variants.
+- Separate stimulus policy from checking (so sequences reuse across DUTs).
+- Golden/reference model as pure function or class predict(txn) → expected.
+
+## L2 — Reusable testcases vs extended testcases
+- Base smoke: reset, idle, one legal transaction, dump, $finish (always keep green).
+- Reusable library: reset_seq, random_traffic_seq, backpressure_seq, error_inject_seq.
+- Extended tests: inherit/compose base sequences; add corners (full/empty, wrap, X, reset-during-traffic).
+- Regression: seed list + plusargs (+SEED=, +N_TXN=, +TEST=); same binary, many seeds.
+- ChipSutra mapping: Fast-random template = reusable smoke; LLM/UVM = extended agent/env when asked.
+
+## L3 — UVM syntax and architecture
+- Hierarchy: uvm_test → uvm_env → agents (sequencer/driver/monitor) → scoreboard/coverage.
+- Objects: uvm_object / uvm_sequence_item; components: uvm_component with phases.
+- Phases: build → connect → end_of_elaboration → start_of_simulation → run → extract → check → report.
+- Config: uvm_config_db#(virtual if)::set/get; uvm_resource_db sparingly.
+- Factory: type_id::create; set_type_override / set_inst_override for reuse.
+- Sequences: uvm_sequence#(item); start on sequencer; start_item/finish_item; get_next_item/item_done on driver.
+- TLM: analysis_port/export/imp/fifo for monitor→scoreboard.
+- RAL: uvm_reg_block / reg / field; frontdoor/backdoor; predict/mirror.
+Forbidden fake APIs: .put() as UVM, .configure(vif), cast(rhs), driver.start(this).
+
+## L3 — UVM scalability techniques
+- Multi-agent env with agent arrays; virtual sequencers for coordination.
+- Layered sequences (bus → protocol → application).
+- Scoreboard with associative arrays / queues keyed by ID/tag; out-of-order compare.
+- Parallel tests via seeds + plusargs; split long tests into short reusable sequences.
+- Register tests: hw_reset, bit_bash, mem_walk from RAL sequences (when CSR map exists).
+- Vertical reuse: block agent reused in subsystem env; chiplet VIP stubs at boundaries.
+- Performance: narrow logging (`UVM_LOW`), selective recording, disable heavy cover when smoke.
+
+## L3 — UVM randomization and constraints
+- rand/randc on sequence_item fields matching DUT ports/fields.
+- constraint legal_c { addr[1:0]==0; len inside {[0:15]}; }.
+- pre_randomize/post_randomize for derived fields; soft for defaults.
+- uvm_sequence_item::randomize() or `assert(item.randomize())`.
+- Constraint mode on/off for directed overlays; inline constraints in sequences.
+- Seed control: +ntb_random_seed / uvm_cmdline; print seed in test.
+
+## L4 — Scalability beyond single DUT
+- Block → IP → SoC: same agent, richer virtual sequences; clock/reset domains.
+- CDC-aware stimulus: don't assume same-cycle paths across async FIFOs.
+- Power/DFT awareness: retention/isolation as constraints when UPF given (don't invent).
+- Chiplet/D2D: treat links as VIP unless RTL ports given (UCIe/BoW concepts only).
+- Coverage closure: hole → new constrained sequence → re-sim → merge coverage (ChipSutra coverage loop).
+
+## L4 — Quality gates for generated TB (ChipSutra)
+- Exact DUT instance and port map from parsed RTL.
+- Good clock: always #N clk=~clk; dump + $finish present.
+- Golden independent of DUT outputs; randomized stimulus present.
+- No invented ports; no essay after endmodule.
+- Fail lint → fall back to verified skeleton template.
+
+## Learning edges — how topics connect
+- SV_types -> TB_constructs -> Randomization -> Reusable_sequences -> UVM_items -> UVM_env -> Coverage_closure.
+- Inbuilt_functions support Randomization and Scoreboard_compare.
+- Reusable_testcase extends Base_smoke; Extended_testcase specializes Reusable_testcase.
+- UVM_factory enables Scalability; RAL specializes CSR_access sequences.
+- SVA_checkers and Covergroups attach to Monitor analysis paths.
+
+## Continuous improvement loop (for ChipSutra-VLSI)
+1. Add ## sections here when a new pattern is proven (golden DUT + TB).
+2. Sync into Modelfile few-shot MESSAGE pairs for high-value patterns (counter, FIFO, AXI-lite).
+3. Keep RAG top_k small for TB (latency); prefer skeleton for pure SV.
+4. Run lint on LLM TB output; log failure modes -> new ## "anti-patterns" section.
+5. Promote repeated fix-loop lessons from sim logs into sim_debug_playbook.txt.
+6. Version knowledge with ChipSutra-VLSI-LLM VERSION bumps.
+7. Check status anytime: `python scripts/kg_learning_status.py` from `backend/`.
+
+## Anti-patterns catalog (lint + RAG)
+- Invented ports (`data_in`/`data_out`) when DUT has enable/count -> reject.
+- Circular golden `exp = count + 1` -> reject; use independent `expected`.
+- Broken clock `clk=~clk; forever @(posedge clk)` -> use `always #5 clk=~clk`.
+- Unrolled Testcase 1..N assert walls -> one `$urandom` loop instead.
+- Fake UVM APIs (`.put()`, `.configure(vif)`, `driver.start(this)`) -> real TLM only.
+- Markdown essay after `endmodule` -> strip / regenerate.
+- FIFO TB that only toggles wr_en without a queue model -> incomplete; add q[$] scoreboard.
+- AXI TB that randomizes all s_axi_* every cycle without handshakes -> illegal; use AW+W then B, AR then R.
+- Ignoring WIDTH/DEPTH parameters (hardcoding depth=16 on DEPTH=8 DUT) -> mismatch full/empty.
+
+## Protocol goldens — competitive block smoke
+- Counter: independent `expected` += enable (or +1 free-run); never expected=count+1.
+- Sync FIFO (FWFT): queue mirror; clamp stimulus on full/empty; check empty/full/count/rd_data.
+- Parity: `parity === ^data` when valid.
+- AXI4-Lite slave (small aperture): model_reg[addr[3:2]]; complete B before next write; check RDATA.
+- Prefer Fast-random skeleton for these patterns; use LLM/UVM for agents, virtual sequences, RAL.

@@ -1,25 +1,44 @@
 # UVM / SV testbench patterns (RAG). Prefer user RTL ports over invented names.
 
-## UVM agent skeleton
-- agent = driver + monitor + sequencer; active/passive via is_active.
-- driver: get_next_item → drive pins → item_done; never invent ports — use virtual interface from config_db.
-- monitor: sample DUT pins → analysis_port.write(txn); no drive.
-- sequencer: default_sequence or start(seq) from test; virtual sequencer for multi-agent.
+## Verilator-friendly randomized SV TB (DEFAULT)
+- Prefer pure SystemVerilog over full UVM for local Verilator runs.
+- Exact DUT port map: `dut_name dut ( .clk(clk), .rst_n(rst_n), ... );`
+- Prefer **one random loop** with a golden model — not hardcoded Testcase 1..N lists.
+- Driven TB signals: `reg`/`logic`. Include `$dumpfile`/`$dumpvars`/`$finish`.
+- Clock MUST be: `always #5 clk = ~clk;`
+- Golden MUST be independent (`expected`), never `exp = count + 1`.
+- Keep ~45–70 lines. Forbidden: invented ports; chatty preamble; unrolled assert walls.
 
-## UVM env & scoreboard
-- env builds agents, scoreboard, coverage; connect_phase: mon.ap.connect(sb.analysis_export).
-- scoreboard: expected vs actual; uvm_tlm_analysis_fifo or write() with compare.
-- Objections in test/run_phase; raise/drop around sequences.
-- config_db#(virtual if)::set(null, "uvm_test_top.*", "vif", vif) before run_test.
+## Counter enable example (copy structure)
+```systemverilog
+`timescale 1ns / 1ps
+module counter_rtl_tb;
+  logic clk, rst_n, enable;
+  logic [3:0] count;
+  logic [3:0] expected;
+  integer i, errors;
+  counter_rtl dut (.clk(clk), .rst_n(rst_n), .enable(enable), .count(count));
+  always #5 clk = ~clk;
+  initial begin
+    $dumpfile("counter_rtl_tb.vcd"); $dumpvars(0, counter_rtl_tb);
+    errors = 0; void'($urandom(1));
+    clk = 0; rst_n = 0; enable = 0;
+    repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+    expected = '0;
+    for (i = 0; i < 48; i = i + 1) begin
+      enable = $urandom_range(0, 1);
+      @(posedge clk); #1;
+      if (enable) expected = expected + 1'b1;
+      if (count !== expected) begin
+        $error("mismatch"); errors = errors + 1;
+      end
+    end
+    $finish;
+  end
+endmodule
+```
 
-## SV testbench without full UVM (Verilator-friendly)
-- Clock/reset block; DUT instance with exact port map from RTL.
-- Stimulus tasks/functions; $display/$error on check fail; $finish.
-- Avoid uvm_* if user targets Verilator-only; provide pure SV TB when asked for OSS sim.
-- Interface + clocking block optional; keep signals matching RTL widths.
-
-## Sequences & coverage
-- sequence_item fields mirror protocol fields (id, data, ctrl) from user spec.
-- body(): `start_item` / `finish_item` or `uvm_do` macros sparingly.
-- covergroup in monitor or separate cov collector; sample on transaction.
-- Cross coverage: opcode × status, addr range × burst length — match DUT capabilities.
+## UVM (only when user asks)
+- Real APIs only: config_db, get_next_item/item_done, start_item/finish_item.
+- Forbidden: `.put()`, `.configure(vif)`, `cast(rhs)`, `driver.start(this)`.
+- Randomize sequence_item fields that mirror DUT ports; constrain legal ranges.

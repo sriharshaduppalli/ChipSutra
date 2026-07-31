@@ -1,0 +1,63 @@
+# SV language core (expanded RAG for ChipSutra-VLSI training)
+# Compact reference - prefer user RTL. No invented timings.
+
+## SV syntax - modules and hierarchy
+- `module name #(parameter W=8)(input logic clk, input logic rst_n, ...); endmodule`
+- ANSI ports preferred; match direction/width exactly in TB.
+- `generate for/if` for replicated structure; `genvar`.
+- `package` / `import pkg::*;` for shared types/functions.
+- Nested modules rare in modern SV; prefer instances + packages.
+
+## SV syntax - types and declarations
+- 4-state: logic, reg, integer, time; 2-state: bit, byte, int, longint, shortint.
+- Prefer `logic` in TB/RTL; `wire` for nets driven by assigns/multiple drivers.
+- packed structs/unions for protocols; unpacked arrays/queues for TB scoreboards.
+- `enum` / `typedef`; `string`; associative arrays `int aa[string]`.
+- Signedness: `logic signed`; `$signed/$unsigned` casts.
+
+## SV syntax - procedural and timing
+- `always_ff @(posedge clk or negedge rst_n)` for flops; `always_comb` for combo.
+- TB: `initial`, `forever`, `fork...join/join_any/join_none`.
+- Edge control: `@(posedge clk)`, `@(negedge rst_n)`, `wait(expr)`.
+- Delay: `#5`; cycle delay in SVA `##2`.
+- Blocking `=` in combo/TB helpers; NBA `<=` in clocked DUT models when modeling RTL.
+
+## SV syntax - operators and usefulness
+- Arithmetic/logical/bitwise/reduction/concat `{a,b}` / replicate `{4{1'b1}}`.
+- Case equality `===` `!==` (X/Z aware) vs `==` `!=`.
+- `inside {[0:3], 8}`; `dist`; streaming operators for packing.
+- `$bits`, `$clog2`, `$countones`, `$onehot`, `$isunknown`.
+
+## SV syntax - interfaces and modports
+- `interface bus_if(input logic clk); logic valid, ready; modport mst(...); endinterface`
+- TB/UVM use `virtual interface`; bind clocking blocks for sync drive/sample.
+- Never invent interface signals not in user RTL/spec.
+
+## SV syntax - assertions and coverage (compact)
+- Immediate: `assert (expr) else $error(...);`
+- Concurrent: `assert property (@(posedge clk) disable iff (!rst_n) req |-> ##1 ack);`
+- `assume` for formal env; `cover property` for reachability.
+- `covergroup cg @(posedge clk); coverpoint x { bins ... } cross ... endgroup`
+
+## UVM syntax - core classes
+- `uvm_object` / `uvm_sequence_item`: transactions; `uvm_component`: hierarchy.
+- Macros: `uvm_component_utils`, `uvm_object_utils`, field macros sparingly.
+- Create via factory: `type_id::create("name", parent)`.
+- Phases: build_phase, connect_phase, run_phase (time-consuming), report_phase.
+
+## UVM syntax - sequences and driver contract
+- Sequence: `start_item(item); finish_item(item);` after randomize.
+- Driver: `seq_item_port.get_next_item(item);` drive; `item_done();`
+- Sequencer default `uvm_sequencer#(item_t)`.
+- Virtual sequences coordinate multiple sequencers.
+
+## UVM syntax - TLM and config
+- Monitor: `uvm_analysis_port#(item_t) ap; ap.write(item);`
+- Scoreboard: `uvm_analysis_imp` or fifo exports.
+- `uvm_config_db#(virtual my_if)::set(null, "path", "vif", vif);` / `get`.
+- Overrides: `set_type_override_by_type` for reusable variants.
+
+## UVM syntax - RAL essentials
+- `uvm_reg_block` contains `uvm_reg` / `uvm_reg_field` / maps.
+- Access: `reg.write(status, val); reg.read(...);` predict/mirror.
+- Only build RAL when user provides register map; do not invent addresses.

@@ -11,6 +11,13 @@ Text files here are chunked by `##` headings and injected into **Generate** prom
 | `sva_patterns.txt` | ChipSutra — SVA patterns |
 | `sim_debug_playbook.txt` | ChipSutra — sim triage |
 | `covergroup_patterns.txt` | ChipSutra-VLSI-LLM `prompts/` (synced) — bins/cross/closure |
+| `kg_sv_uvm_learning.txt` | **Knowledge graph curriculum** — SV/UVM syntax, reuse, random, scale (L1–L4) |
+| `sv_uvm_syntax_core.txt` | Expanded SV/UVM syntax reference for RAG “training” |
+| `dv_tb_templates.txt` | Universal solid TB templates (smoke / random / CRV / layered / UVM) |
+
+Machine-readable graph + learning cadence: [`kg/sv_uvm_knowledge_graph.json`](kg/sv_uvm_knowledge_graph.json), [`kg/LEARNING_CURRICULUM.md`](kg/LEARNING_CURRICULUM.md).
+
+**Learning score API:** `GET /api/kg/learning-score` · feedback `POST /api/generations/{id}/feedback` with `{ "rating": 1|-1 }`.
 
 `vlsi_system.txt` (if present) is **ignored by RAG** — SYSTEM text lives inline in Modelfiles.
 

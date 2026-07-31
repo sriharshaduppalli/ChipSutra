@@ -23,7 +23,22 @@ _SKIP_KNOWLEDGE_FILES = frozenset({"vlsi_system.txt", "readme.txt"})
 
 # Boost retrieval when module or filenames hint at a domain
 MODULE_HINTS: dict[str, tuple[str, ...]] = {
-    "testbench": ("uvm", "sequence", "driver", "monitor", "scoreboard", "agent", "verilator"),
+    "testbench": (
+        "verilator",
+        "randomized",
+        "urandom",
+        "golden",
+        "expected",
+        "scoreboard",
+        "fifo",
+        "axi-lite",
+        "template",
+        "uvm",
+        "sequence",
+        "driver",
+        "monitor",
+        "agent",
+    ),
     "assertions": ("sva", "assert", "property", "formal", "handshake"),
     "checkers": ("checker", "scoreboard", "protocol"),
     "covergroups": ("coverage", "bin", "cross", "covergroup", "illegal_bins", "ignore_bins"),

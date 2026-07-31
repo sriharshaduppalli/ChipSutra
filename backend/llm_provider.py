@@ -75,7 +75,15 @@ def ollama_status() -> dict:
     return out
 
 
-async def stream_chat(provider: str, model: str, system: str, user_text: str, session_id: Optional[str] = None) -> AsyncIterator[str]:
+async def stream_chat(
+    provider: str,
+    model: str,
+    system: str,
+    user_text: str,
+    session_id: Optional[str] = None,
+    *,
+    num_predict: Optional[int] = None,
+) -> AsyncIterator[str]:
     """Yield text deltas from the chosen LLM provider.
     Provider precedence: emergent → anthropic (if provider=='anthropic') → openai (if provider=='openai') → ollama (fallback).
     """
@@ -119,6 +127,9 @@ async def stream_chat(provider: str, model: str, system: str, user_text: str, se
 
     # OLLAMA — zero-key local ChipSutra-VLSI (default for Community Edition)
     if OLLAMA_URL:
+        # Cap tokens so small models stay fast and don't unroll endless directed cases.
+        if num_predict is None:
+            num_predict = int(os.environ.get("OLLAMA_NUM_PREDICT", "700"))
         payload = {
             "model": OLLAMA_MODEL,
             "messages": [
@@ -126,8 +137,17 @@ async def stream_chat(provider: str, model: str, system: str, user_text: str, se
                 {"role": "user", "content": user_text},
             ],
             "stream": True,
+            "options": {
+                # Align with Modelfile.3b (lower temp = less invented ports / circular goldens)
+                "temperature": float(os.environ.get("OLLAMA_TEMPERATURE", "0.08")),
+                "num_predict": int(num_predict),
+                "repeat_penalty": float(os.environ.get("OLLAMA_REPEAT_PENALTY", "1.18")),
+                "top_p": float(os.environ.get("OLLAMA_TOP_P", "0.85")),
+            },
         }
-        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=15.0)) as client:
+        # Long read timeout: CPU Ollama can take minutes for first token under load.
+        ollama_timeout = float(os.environ.get("OLLAMA_HTTP_TIMEOUT", "300"))
+        async with httpx.AsyncClient(timeout=httpx.Timeout(ollama_timeout, connect=20.0)) as client:
             async with client.stream("POST", f"{OLLAMA_URL}/api/chat", json=payload) as resp:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode("utf-8", errors="ignore")[:500]
