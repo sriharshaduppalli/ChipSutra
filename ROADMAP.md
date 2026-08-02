@@ -41,12 +41,25 @@ ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement
 
 ## In progress (Community — next 90 days)
 
-- [ ] Default self-host docs/compose to pull GHCR `:edge` / release tags (skip local rebuild)
+Architecture spine for advanced DV / sign-off readiness:
+**[docs/ADVANCED_DV_ARCHITECTURE.md](./docs/ADVANCED_DV_ARCHITECTURE.md)** (30/60/90).
+
+### Phase 1 (0–30) — Prove any block smoke
+- [x] DV Planner module (`backend/dv_planner.py`) + eval suite script
+- [x] Verilator verify loop on TB generate + skeleton repair fallback (`dv_verify.py`)
+- [x] Ollama pre-warm on startup + 3B/7B model router (`llm_router.py`) + Generate progress SSE
+- [ ] Spec→RTL checklist guardrails (clocks/reset/I/O)
+- [ ] Debug log classifier pack (compile / assert / timeout / X)
+- [ ] Default self-host docs/compose to pull GHCR `:edge` / release tags
 - [ ] Demo liberty fixture or documented sky130 path for non-mock STA smoke
-- [ ] Ollama model pre-warm on backend startup (cut first-token latency)
 - [ ] Embedding / `sentence-transformers` optional extra + index warm at boot
-- [ ] UCIS fixture corpus in CI for vendor dialect drift
+
+### Phase 2–3 (31–90) — Close loop + sign-off board
+- [ ] Auto-repair from sim fail; protocol packs (APB/AXIS/UART)
+- [ ] Spec IR → RTL + SVA; Sign-off dashboard + evidence ZIP
+- [ ] LoRA dataset from fail→fix; nightly DV eval in CI
 - [ ] CI webhook worker: PR diff → lint → optional AI review comment
+- [ ] UCIS fixture corpus in CI for vendor dialect drift
 - [ ] Screen recording / first-project wizard polish
 
 Industry gap matrix: **[docs/INDUSTRY_EDA_GAPS.md](./docs/INDUSTRY_EDA_GAPS.md)**.

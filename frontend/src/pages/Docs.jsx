@@ -25,7 +25,7 @@ const SECTIONS = [
       "Spec → RTL / RTL → Spec — bi-directional conversion.",
       "Testplan / Coverage-Hole Tests / Debug Analysis.",
       "Formal Hints — SVA properties for SymbiYosys proofs.",
-      "Model: ChipSutra-VLSI 3B runs locally by default; Claude and GPT appear in the switcher only if you configure API keys.",
+      "Model: ChipSutra-VLSI is the product default (local Ollama). Claude/GPT appear only if SHOW_CLOUD_MODELS=true on the API host.",
     ]
   },
   {

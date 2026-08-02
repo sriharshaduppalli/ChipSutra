@@ -227,7 +227,18 @@ curl -s https://api.chipsutra.org/api/health | jq .
 
 ## 8. Cutover from demo host
 
-If today users hit **chipsutra-verify.emergent.host**:
+If today users hit **https://chipsutra-verify.emergent.host**:
+
+That Emergent demo is an **older build** that still surfaces Claude/GPT via `EMERGENT_LLM_KEY`. It does **not** run ChipSutra-VLSI (Ollama) unless you redeploy with Ollama + latest ChipSutra.
+
+**To show ChipSutra-VLSI on the public site:**
+
+1. Redeploy latest `main` (frontend defaults to ChipSutra-VLSI; Claude/GPT only if `SHOW_CLOUD_MODELS=true`).
+2. Run **Ollama + `chipsutra-vlsi:3b`** on that host (`OLLAMA_URL`, `OLLAMA_MODEL=chipsutra-vlsi:3b`).
+3. Leave `SHOW_CLOUD_MODELS` unset/false so users do not see Claude/GPT.
+4. Prefer cutting over to **chipsutra.org** (or your cloud) with the full compose stack — see above.
+
+Until redeploy, tell users: local/self-host for ChipSutra-VLSI; Emergent demo may still show legacy cloud models.
 
 1. Deploy production stack (above) on chipsutra.org.
 2. **Migrate MongoDB** (export/import or Atlas cluster clone) if you need existing users/projects.

@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 _CLK_RE = re.compile(r"^(clk|clock|clk_i|clk_in|aclk|pclk|sclk)$", re.I)
-_RST_RE = re.compile(r"^(rst|reset|areset|aresetn|rst_n|reset_n|rstn|nreset|nrst|rst_async_n)$", re.I)
+_RST_RE = re.compile(r"^(rst|reset|areset|aresetn|rst_n|reset_n|rstn|nreset|nrst|rst_async_n|presetn|preset)$", re.I)
 _EN_RE = re.compile(r"^(en|enable|ce|cnt_en|count_en|inc)$", re.I)
 _COUNT_RE = re.compile(r"^(count|cnt|q|out|dout|data_out|value)$", re.I)
 _FORCE_LLM_RE = re.compile(
@@ -129,9 +129,57 @@ def detect_axi_lite_model(roles: Dict[str, Any]) -> Optional[dict]:
     return None
 
 
+def detect_mux_model(roles: Dict[str, Any]) -> Optional[dict]:
+    """Detect 2:1 mux: sel + a + b -> y (or out)."""
+    sel = _by_name(roles["inputs"], "sel", "select", "s")
+    a = _by_name(roles["inputs"], "a", "in0", "i0", "din0")
+    b = _by_name(roles["inputs"], "b", "in1", "i1", "din1")
+    y = _by_name(roles["outputs"], "y", "out", "dout", "q", "z")
+    if sel and a and b and y and width_bits(sel.get("width", ""), sel) == 1:
+        if width_bits(a.get("width", ""), a) == width_bits(b.get("width", ""), b):
+            return {"sel": sel, "a": a, "b": b, "y": y}
+    return None
+
+
+def detect_apb_model(roles: Dict[str, Any]) -> Optional[dict]:
+    """Detect APB slave-like ports (psel/penable/pwrite/…)."""
+    names_in = {p["name"].lower() for p in roles["inputs"]}
+    names_out = {p["name"].lower() for p in roles["outputs"]}
+    need_in = {"psel", "penable", "pwrite", "paddr", "pwdata"}
+    need_out = {"pready", "prdata"}
+    if need_in.issubset(names_in) and need_out.issubset(names_out):
+        return {"num_regs": 4, "has_pslverr": "pslverr" in names_out}
+    return None
+
+
+def detect_stream_model(roles: Dict[str, Any]) -> Optional[dict]:
+    """Detect simple valid/ready streaming data path."""
+    valid = _by_name(roles["inputs"], "valid", "tvalid", "in_valid", "s_valid")
+    ready = _by_name(roles["outputs"], "ready", "tready", "in_ready", "s_ready")
+    data = _by_name(roles["inputs"], "data", "tdata", "in_data", "s_data")
+    out_data = _by_name(roles["outputs"], "out_data", "q", "dout", "m_data", "data_out")
+    out_valid = _by_name(roles["outputs"], "out_valid", "m_valid", "valid_out")
+    if valid and ready and data and (out_data or out_valid):
+        return {
+            "valid": valid,
+            "ready": ready,
+            "data": data,
+            "out_data": out_data,
+            "out_valid": out_valid,
+        }
+    return None
+
+
 def detect_counter_model(roles: Dict[str, Any]) -> Optional[Tuple[Optional[dict], dict]]:
     """Return (enable_port_or_None, count_port) for enable or free-running counters."""
-    if detect_fifo_model(roles) or detect_axi_lite_model(roles) or detect_parity_model(roles):
+    if (
+        detect_fifo_model(roles)
+        or detect_axi_lite_model(roles)
+        or detect_parity_model(roles)
+        or detect_mux_model(roles)
+        or detect_apb_model(roles)
+        or detect_stream_model(roles)
+    ):
         return None
     count = None
     for p in roles["outputs"]:
@@ -401,26 +449,157 @@ def _emit_axi_lite_loop(clk_name: str, cycles: int) -> Tuple[List[str], List[str
     return decls, loop
 
 
-def _emit_generic_loop(roles: Dict[str, Any], clk_name: Optional[str], cycles: int) -> List[str]:
+def _emit_mux_loop(mux: dict, clk_name: Optional[str], cycles: int) -> List[str]:
+    sel, a, b, y = mux["sel"]["name"], mux["a"]["name"], mux["b"]["name"], mux["y"]["name"]
+    abits = width_bits(mux["a"].get("width", ""), mux["a"])
     lines = [
-        f"    // Randomized stimulus over {cycles} cycles (generic DUT - add protocol golden when known)",
+        "    // 2:1 mux golden: y === (sel ? b : a)  [or sel?a:b — try both common conventions]",
+        f"    for (i = 0; i < {cycles}; i = i + 1) begin",
+        f"      {sel} = $urandom_range(0, 1);",
+        f"      {a} = {abits}'($urandom());",
+        f"      {b} = {abits}'($urandom());",
+    ]
+    if clk_name:
+        lines += [f"      @(posedge {clk_name});", "      #1;"]
+    else:
+        lines.append("      #1;")
+    lines += [
+        f"      if ({y} !== ({sel} ? {b} : {a}) && {y} !== ({sel} ? {a} : {b})) begin",
+        f'        $error("[%0t] mux mismatch i=%0d sel=%b a=%0h b=%0h y=%0h", $time, i, {sel}, {a}, {b}, {y});',
+        "        errors = errors + 1;",
+        "      end",
+        "    end",
+    ]
+    return lines
+
+
+def _emit_apb_loop(clk_name: str, cycles: int, has_pslverr: bool = False) -> Tuple[List[str], List[str]]:
+    n_txn = max(4, min(cycles // 4, 12))
+    decls = [
+        "  // APB scoreboard: 4 x 32-bit regs (paddr[3:2])",
+        "  logic [31:0] apb_model [0:3];",
+        "  logic [1:0]  apb_sel;",
+        "  integer timeout;",
+    ]
+    loop = [
+        "    for (timeout = 0; timeout < 4; timeout = timeout + 1) apb_model[timeout] = 32'h0;",
+        "    psel = 1'b0; penable = 1'b0; pwrite = 1'b0; paddr = '0; pwdata = '0;",
+        f"    // APB smoke: {n_txn} write then read",
+        f"    for (i = 0; i < {n_txn}; i = i + 1) begin",
+        "      apb_sel = $urandom_range(0, 3);",
+        "      paddr = {apb_sel, 2'b00};",
+        "      pwdata = $urandom();",
+        "      // SETUP write",
+        "      psel = 1'b1; penable = 1'b0; pwrite = 1'b1;",
+        f"      @(posedge {clk_name});",
+        "      // ACCESS write",
+        "      penable = 1'b1;",
+        "      timeout = 0;",
+        f"      while (!pready && timeout < 40) begin @(posedge {clk_name}); timeout = timeout + 1; end",
+        "      if (!pready) begin $error(\"APB write ready timeout\"); errors = errors + 1; end",
+        "      else apb_model[apb_sel] = pwdata;",
+        f"      @(posedge {clk_name});",
+        "      psel = 1'b0; penable = 1'b0; pwrite = 1'b0;",
+        "      // SETUP read",
+        "      psel = 1'b1; penable = 1'b0; pwrite = 1'b0;",
+        f"      @(posedge {clk_name});",
+        "      penable = 1'b1;",
+        "      timeout = 0;",
+        f"      while (!pready && timeout < 40) begin @(posedge {clk_name}); timeout = timeout + 1; end",
+        "      if (!pready || prdata !== apb_model[apb_sel]) begin",
+        f'        $error("[%0t] APB RDATA mismatch sel=%0d got=%0h exp=%0h", $time, apb_sel, prdata, apb_model[apb_sel]);',
+        "        errors = errors + 1;",
+        "      end",
+    ]
+    if has_pslverr:
+        loop += [
+            "      if (pslverr) begin $error(\"APB PSLVERR unexpected\"); errors = errors + 1; end",
+        ]
+    loop += [
+        f"      @(posedge {clk_name});",
+        "      psel = 1'b0; penable = 1'b0;",
+        "    end",
+    ]
+    return decls, loop
+
+
+def _emit_stream_loop(st: dict, clk_name: str, cycles: int) -> List[str]:
+    valid, ready = st["valid"]["name"], st["ready"]["name"]
+    data = st["data"]["name"]
+    wbits = width_bits(st["data"].get("width", ""), st["data"])
+    out_d = st["out_data"]["name"] if st.get("out_data") else None
+    out_v = st["out_valid"]["name"] if st.get("out_valid") else None
+    lines = [
+        "    // Valid/ready stream smoke: fire when ready; check no-X on outputs",
+        f"    for (i = 0; i < {cycles}; i = i + 1) begin",
+        f"      {valid} = $urandom_range(0, 1);",
+        f"      {data} = {wbits}'($urandom());",
+        f"      @(posedge {clk_name});",
+        "      #1;",
+        f"      if ({valid} && !{ready}) begin",
+        "        // backpressure: hold (re-drive same next cycle via random)",
+        "      end",
+    ]
+    outs = [p for p in (out_d, out_v) if p]
+    for o in outs:
+        lines += [
+            f"      if ($isunknown({o})) begin",
+            f'        $error("[%0t] X on {o} i=%0d", $time, i);',
+            "        errors = errors + 1;",
+            "      end",
+        ]
+    lines.append("    end")
+    return lines
+
+
+def _emit_generic_loop(roles: Dict[str, Any], clk_name: Optional[str], cycles: int) -> List[str]:
+    """Universal harness for ANY DUT: reset settle, no-X checks, randomized traffic."""
+    lines = [
+        "    // === Universal auto-TB for unknown protocol ===",
+        "    // 1) Post-reset: outputs must not be X",
+        "    // 2) Randomized legal-ish stimulus",
+        "    // 3) Continuous no-X monitor on outputs",
+        "    // Promote to protocol golden when ports match FIFO/AXI/APB/mux/…",
+    ]
+    if roles["outputs"]:
+        lines.append("    // Post-reset X check")
+        for p in roles["outputs"]:
+            lines += [
+                f"    if ($isunknown({p['name']})) begin",
+                f'      $error("[%0t] X on {p["name"]} after reset", $time);',
+                "      errors = errors + 1;",
+                "    end",
+            ]
+    lines += [
+        f"    // Randomized stimulus over {cycles} cycles",
         f"    for (i = 0; i < {cycles}; i = i + 1) begin",
     ]
     for p in roles["inputs"]:
         bits_i = width_bits(p.get("width", ""), p)
-        lines.append(
-            f"      {p['name']} = $urandom_range(0, 1);"
-            if bits_i == 1
-            else f"      {p['name']} = {bits_i}'($urandom());"
-        )
+        # Prefer sparse 1-bit enables (mostly 0) to reduce illegal traffic
+        n = p["name"].lower()
+        if bits_i == 1 and any(k in n for k in ("en", "valid", "req", "start", "go", "wr", "rd")):
+            lines.append(f"      {p['name']} = ($urandom_range(0, 3) == 0);")
+        elif bits_i == 1:
+            lines.append(f"      {p['name']} = $urandom_range(0, 1);")
+        else:
+            lines.append(f"      {p['name']} = {bits_i}'($urandom());")
     if clk_name:
         lines.append(f"      @(posedge {clk_name});")
+        lines.append("      #1;")
     else:
         lines.append("      #10;")
+    for p in roles["outputs"]:
+        lines += [
+            f"      if ($isunknown({p['name']})) begin",
+            f'        $error("[%0t] X on {p["name"]} i=%0d", $time, i);',
+            "        errors = errors + 1;",
+            "      end",
+        ]
     if roles["outputs"]:
         outs = ", ".join("%0h" for _ in roles["outputs"])
         args = ", ".join(p["name"] for p in roles["outputs"])
-        lines.append(f'      $display("[%0t] i=%0d outs: {outs}", $time, i, {args});')
+        lines.append(f'      if (i % 8 == 0) $display("[%0t] i=%0d outs: {outs}", $time, i, {args});')
     lines.append("    end")
     return lines
 
@@ -472,15 +651,24 @@ def render_randomized_tb(
 
     fifo = detect_fifo_model(roles, parameters)
     axi = None if fifo else detect_axi_lite_model(roles)
-    parity = None if (fifo or axi) else detect_parity_model(roles)
-    counter = None if (fifo or axi or parity) else detect_counter_model(roles)
+    apb = None if (fifo or axi) else detect_apb_model(roles)
+    parity = None if (fifo or axi or apb) else detect_parity_model(roles)
+    mux = None if (fifo or axi or apb or parity) else detect_mux_model(roles)
+    stream = None if (fifo or axi or apb or parity or mux) else detect_stream_model(roles)
+    counter = None if (fifo or axi or apb or parity or mux or stream) else detect_counter_model(roles)
 
     if fifo:
         model_kind = "fifo"
     elif axi:
         model_kind = "axi_lite"
+    elif apb:
+        model_kind = "apb"
     elif parity:
         model_kind = "parity"
+    elif mux:
+        model_kind = "mux"
+    elif stream:
+        model_kind = "stream"
     elif counter:
         model_kind = "counter"
     else:
@@ -499,12 +687,18 @@ def render_randomized_tb(
             "",
         ]
     extra_decls: List[str] = []
+    fifo_loop: List[str] = []
+    axi_loop: List[str] = []
+    apb_loop: List[str] = []
     if fifo:
         fifo_decls, fifo_loop = _emit_fifo_loop(fifo, clk_name, cycles)
         extra_decls = fifo_decls
     elif axi:
         axi_decls, axi_loop = _emit_axi_lite_loop(clk_name, cycles)
         extra_decls = axi_decls
+    elif apb:
+        apb_decls, apb_loop = _emit_apb_loop(clk_name, cycles, has_pslverr=bool(apb.get("has_pslverr")))
+        extra_decls = apb_decls
     if extra_decls:
         body_lines += extra_decls + [""]
 
@@ -536,8 +730,14 @@ def render_randomized_tb(
         body_lines += fifo_loop
     elif axi:
         body_lines += axi_loop
+    elif apb:
+        body_lines += apb_loop
     elif parity:
         body_lines += _emit_parity_loop(parity, clk_name, cycles)
+    elif mux:
+        body_lines += _emit_mux_loop(mux, clk_name if clk else None, cycles)
+    elif stream:
+        body_lines += _emit_stream_loop(stream, clk_name, cycles)
     else:
         body_lines += _emit_generic_loop(roles, clk_name if clk else None, cycles)
 
@@ -555,8 +755,11 @@ def render_randomized_tb(
         "counter": "golden: independent expected count",
         "fifo": "golden: queue scoreboard for full/empty/data",
         "axi_lite": "golden: 4-reg AXI-Lite write/read smoke",
+        "apb": "golden: APB write/read scoreboard",
         "parity": "golden: XOR parity on valid",
-        "generic": "stimulus-only (add protocol golden when known)",
+        "mux": "golden: 2:1 mux select",
+        "stream": "valid/ready smoke + no-X checks",
+        "generic": "universal auto-TB: random + no-X (any DUT)",
     }[model_kind]
 
     # Parameter overrides on DUT instance when WIDTH/DEPTH known (FIFO)

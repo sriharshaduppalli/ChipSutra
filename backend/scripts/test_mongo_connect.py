@@ -64,10 +64,12 @@ def main() -> int:
         except Exception as e:
             print(f"pymongo [{label}]: {type(e).__name__}: {str(e)[:200]}")
 
-    print("\nNext steps:")
-    print("  1. Atlas -> Network Access -> Add Current IP Address (or 0.0.0.0/0 for dev)")
-    print("  2. Disable VPN; check antivirus HTTPS scanning")
-    print("  3. Dev fallback: docker compose up mongo -d  and MONGO_URL=mongodb://127.0.0.1:27017")
+    print("\nNext steps (online Atlas — required for multi-user ChipSutra):")
+    print("  1. Atlas -> Network Access -> Allow Access from Anywhere (0.0.0.0/0)")
+    print("     End users hit the API only; only the API connects to Atlas.")
+    print("  2. Wait until the entry is Active (1–2 min), then re-run this script")
+    print("  3. Disable VPN; check antivirus HTTPS scanning")
+    print("  4. Helper: powershell scripts/open_atlas_network_access.ps1")
     return 2
 
 

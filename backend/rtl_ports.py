@@ -13,14 +13,14 @@ from typing import Dict, List, Optional, Tuple
 
 _DIRECTION = r"(?:input|output|inout)"
 _NETTYPE = r"(?:wire|reg|logic|bit|integer|int|signed|unsigned|tri|wand|wor)"
-# ANSI port: input wire [7:0] foo, or input foo (also mid-line after commas)
-_ANSI_PORT = re.compile(
-    rf"(?:^|,)\s*({_DIRECTION})\s+"
+# ANSI port declaration start: input wire [7:0] foo
+_ANSI_DECL = re.compile(
+    rf"^\s*({_DIRECTION})\s+"
     rf"(?:(?:{_NETTYPE})\s+)*"
     rf"(?:(signed|unsigned)\s+)?"
     rf"(?:(\[[^\]]+\])\s*)?"
-    rf"(\w+)\s*(?=,|$)",
-    re.IGNORECASE | re.MULTILINE,
+    rf"(.+?)\s*$",
+    re.IGNORECASE,
 )
 _MODULE_HDR = re.compile(
     r"\bmodule\s+(\w+)\s*(?:#\s*\(([^;]*?)\))?\s*\((.*?)\);",
@@ -127,21 +127,39 @@ def extract_modules(rtl: str) -> List[dict]:
         params = extract_parameters(param_body)
         ports: List[dict] = []
         seen: set[str] = set()
-        for pm in _ANSI_PORT.finditer(port_body):
-            pname = pm.group(4)
-            if pname in seen:
+        # Split on direction keywords so `output logic full, empty` yields both names.
+        chunks = re.split(
+            rf"(?=(?:^|,)\s*(?:{_DIRECTION})\b)",
+            port_body,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        for chunk in chunks:
+            chunk = chunk.strip().lstrip(",").strip()
+            if not chunk:
                 continue
-            seen.add(pname)
+            pm = _ANSI_DECL.match(chunk.rstrip(",").strip())
+            if not pm:
+                continue
+            direction = pm.group(1).lower()
             raw_w = (pm.group(3) or "").strip()
             width, bits = resolve_width_expr(raw_w, params)
-            ports.append(
-                {
-                    "direction": pm.group(1).lower(),
-                    "width": width,
-                    "bits": bits,
-                    "name": pname,
-                }
-            )
+            for raw in pm.group(4).split(","):
+                pname = raw.strip().split()[-1] if raw.strip() else ""
+                if not pname or not re.match(r"^\w+$", pname):
+                    continue
+                if pname.lower() in ("input", "output", "inout"):
+                    continue
+                if pname in seen:
+                    continue
+                seen.add(pname)
+                ports.append(
+                    {
+                        "direction": direction,
+                        "width": width,
+                        "bits": bits,
+                        "name": pname,
+                    }
+                )
         if not ports:
             # Non-ANSI: names in header, decls after
             header_names = [n.strip() for n in port_body.split(",") if n.strip() and re.match(r"^\w+$", n.strip())]

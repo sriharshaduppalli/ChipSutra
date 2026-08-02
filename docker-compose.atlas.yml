@@ -3,7 +3,9 @@
 #
 # 1. Create a free M0 cluster — full steps: docs/MONGODB_ATLAS_SETUP.md
 # 2. Database Access -> user + password
-# 3. Network Access -> Add IP -> Allow access from anywhere (0.0.0.0/0) for dev
+# 3. Network Access -> Add IP -> Allow access from anywhere (0.0.0.0/0)
+#    Required for multi-user / changing ISP. Users hit ChipSutra API only;
+#    only the API connects to Atlas. See docs/MONGODB_ATLAS_SETUP.md.
 # 4. Connect -> Drivers -> copy connection string
 # 5. Put in backend/.env:
 #      MONGO_URL="mongodb+srv://USER:PASS@cluster....mongodb.net/chipsutra_db?retryWrites=true&w=majority"

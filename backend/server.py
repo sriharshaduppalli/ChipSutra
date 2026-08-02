@@ -59,6 +59,11 @@ from cocotb_runner import cocotb_available, pick_scaffold_files, build_make_cmd,
 from tb_skeleton import should_use_tb_skeleton, render_randomized_tb
 from tb_lint import choose_testbench_output, lint_testbench, extract_sv
 from kg_rating import auto_score_testbench, combine_with_feedback, aggregate_learning_report
+from dv_planner import plan_generation, plan_to_learning
+from dv_verify import verify_testbench, verify_status_for_learning, verilator_bin
+from llm_router import resolve_model, prewarm_ollama, prewarm_status
+from spec_checklist import analyze_spec, checklist_prompt_block
+from debug_classify import classify_log, debug_prompt_block
 from opensta_flow import (
     sta_bin,
     sta_command,
@@ -119,10 +124,56 @@ def _public_ipv4_for_atlas_hint() -> str:
     try:
         r = requests.get("https://api.ipify.org", timeout=4)
         if r.ok and r.text.strip():
-            return f" Add this IPv4 in Atlas Network Access: {r.text.strip()}/32 (mobile/Wi‑Fi IPs change often; dev shortcut: 0.0.0.0/0)."
+            return (
+                f" Your public IPv4 right now: {r.text.strip()}/32."
+                " For a multi-user online product (or home/ISP IP that changes), set Network Access to"
+                " Allow Access from Anywhere: 0.0.0.0/0 — end users hit ChipSutra API, only the API talks to Atlas."
+            )
     except Exception:
         pass
-    return " Check https://api.ipify.org for your IPv4 and add it in Atlas Network Access (or 0.0.0.0/0 for dev)."
+    return (
+        " Check https://api.ipify.org for your IPv4."
+        " Multi-user / dynamic IP: Atlas Network Access → 0.0.0.0/0."
+    )
+
+
+def _atlas_tls_hint(err_s: str = "") -> str:
+    py = sys.version.split()[0]
+    return (
+        " Atlas is rejecting the TLS handshake (almost always Network Access — IP not allowed),"
+        " not a bad password or missing certifi."
+        " Fix: https://cloud.mongodb.com/ → Network Access → Add IP Address →"
+        " Allow Access from Anywhere (0.0.0.0/0)."
+        " Wait 1–2 minutes after saving."
+        + _public_ipv4_for_atlas_hint()
+        + " Turn off VPN. Atlas whitelist is IPv4 — do not add only an IPv6 address."
+        f" Python {py}. Diagnose: python scripts/test_mongo_connect.py"
+    )
+
+
+async def _ping_mongo_with_retries() -> None:
+    """Retry Atlas ping so whitelist propagation / brief blips do not crash-loop immediately."""
+    attempts = max(1, int(os.environ.get("MONGO_STARTUP_RETRIES", "8")))
+    delay = float(os.environ.get("MONGO_STARTUP_RETRY_SEC", "5"))
+    last: Exception | None = None
+    for i in range(1, attempts + 1):
+        try:
+            await asyncio.wait_for(client.admin.command("ping"), timeout=12.0)
+            if i > 1:
+                logger.info("MongoDB ping OK on attempt %d/%d", i, attempts)
+            return
+        except Exception as e:
+            last = e
+            logger.warning(
+                "MongoDB ping failed (%d/%d): %s",
+                i,
+                attempts,
+                str(e)[:180],
+            )
+            if i < attempts:
+                await asyncio.sleep(delay)
+    assert last is not None
+    raise last
 
 
 client = _motor_client(MONGO_URL)
@@ -315,7 +366,7 @@ def _guard_python_for_atlas() -> None:
 async def startup():
     _guard_python_for_atlas()
     try:
-        await client.admin.command("ping")
+        await _ping_mongo_with_retries()
     except Exception as e:
         hint = ""
         err_s = str(e)
@@ -324,15 +375,8 @@ async def startup():
                 " In Docker, localhost is the container — use MongoDB Atlas "
                 "(mongodb+srv://...) in backend/.env, not mongodb://localhost:27017."
             )
-        elif "SSL" in err_s or "TLS" in err_s or "tlsv1" in err_s.lower():
-            py = sys.version.split()[0]
-            hint = (
-                " Atlas is blocking this network (TLS alert, not a bad password). "
-                "Atlas -> Network Access -> confirm an Active entry (0.0.0.0/0 for dev, or your current IP)."
-                + _public_ipv4_for_atlas_hint()
-                + " Turn off VPN. On dual-stack Wi‑Fi, Atlas uses IPv4 only — whitelist your public IPv4, not IPv6."
-                f" Python {py}. Run: python scripts/test_mongo_connect.py"
-            )
+        elif "SSL" in err_s or "TLS" in err_s or "tlsv1" in err_s.lower() or "ServerSelection" in type(e).__name__:
+            hint = _atlas_tls_hint(err_s)
         logger.error("MongoDB connection failed: %s.%s", e, hint)
         raise RuntimeError(f"MongoDB connection failed: {e}.{hint}") from e
 
@@ -370,6 +414,9 @@ async def startup():
     if os.environ.get("TELEMETRY_ENABLED", "false").lower() == "true":
         import asyncio as _asyncio
         _asyncio.create_task(_send_telemetry_ping())
+    # Cut first-token latency for ChipSutra-VLSI (background; never blocks startup)
+    if os.environ.get("OLLAMA_URL"):
+        asyncio.create_task(prewarm_ollama())
 
 async def _send_telemetry_ping():
     """Anonymous one-time startup ping. Sends only a random UUID + version. No user data."""
@@ -417,8 +464,24 @@ async def root():
 async def health():
     import shutil as _sh
     providers = llm_available_providers()
+    mongo = {"ok": False, "error": None}
+    try:
+        await asyncio.wait_for(client.admin.command("ping"), timeout=2.5)
+        mongo = {"ok": True, "error": None}
+    except Exception as e:
+        err = str(e)
+        hint = None
+        if "SSL" in err or "TLS" in err or "tlsv1" in err.lower():
+            hint = (
+                "MongoDB Atlas Network Access is blocking this host. "
+                "For multi-user online ChipSutra: allow 0.0.0.0/0 (API→Atlas only; users never connect to Mongo)."
+                + _public_ipv4_for_atlas_hint()
+            )
+        mongo = {"ok": False, "error": err[:240], "hint": hint}
+    status = "healthy" if mongo["ok"] else "degraded"
     return {
-        "status": "healthy",
+        "status": status,
+        "mongo": mongo,
         "storage": storage_mode(),
         "verilator": bool(_sh.which("verilator")),
         "yosys": bool(_sh.which("yosys")),
@@ -436,6 +499,10 @@ async def health():
         "eda_tools": tool_versions(),
         "cdc": {"engine": "chipsutra-cdc-v0|v1-yosys", "status": "experimental"},
         "google_auth": google_mode(),
+        "llm_router": {
+            "prewarm": prewarm_status(),
+            "verilator": bool(verilator_bin()),
+        },
     }
 
 # =========================
@@ -934,6 +1001,34 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
     if inp.tool_log:
         user_text += "\n\n" + format_lint_feedback(inp.tool_log, prior_code=inp.prior_output)
 
+    dv_plan = plan_generation(
+        module=inp.module,
+        prompt=inp.prompt or "",
+        tool_log=inp.tool_log or "",
+        gen_mode=inp.gen_mode or "auto",
+        modules=parsed_modules,
+        rtl_text="\n".join(file_bodies[:3]),
+    )
+
+    spec_analysis = None
+    debug_analysis = None
+    if inp.module == "spec2rtl":
+        spec_blob = (inp.prompt or "") + "\n" + file_context[:8000]
+        spec_analysis = analyze_spec(spec_blob, prompt=inp.prompt or "")
+        block = checklist_prompt_block(spec_analysis)
+        if block:
+            system_msg += "\n\n" + block
+            if not spec_analysis.get("ready"):
+                user_text += (
+                    "\n\n[ChipSutra] Spec checklist incomplete — generate exploratory RTL with "
+                    "documented // assumptions for missing clock/reset/I/O."
+                )
+    if inp.module == "debug" or (inp.tool_log or "").strip():
+        debug_analysis = classify_log(inp.tool_log or "", prior_code=inp.prior_output or "")
+        dblock = debug_prompt_block(debug_analysis)
+        if dblock and (inp.module == "debug" or (inp.tool_log or "").strip()):
+            system_msg += "\n\n" + dblock
+
     use_skeleton = should_use_tb_skeleton(
         module=inp.module,
         prompt=inp.prompt or "",
@@ -941,6 +1036,13 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
         gen_mode=inp.gen_mode or "auto",
         tool_log=inp.tool_log,
     )
+    # Align with planner when it prefers skeleton for TB smoke.
+    if inp.module == "testbench" and dv_plan.get("engine_preference") == "skeleton":
+        use_skeleton = True
+    elif inp.module == "testbench" and dv_plan.get("engine_preference") in ("llm", "hybrid"):
+        if (inp.gen_mode or "auto").lower() in ("llm", "model") or dv_plan["intent"].get("wants_uvm") or (inp.tool_log or "").strip():
+            use_skeleton = False
+
     skeleton_sv = ""
     ref_tb = ""
     if parsed_modules and parsed_modules[0].get("ports") and inp.module == "testbench":
@@ -982,27 +1084,36 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
 
     session_id = str(uuid.uuid4())
     gen_id = str(uuid.uuid4())
+    route = resolve_model(
+        provider=inp.model_provider or "ollama",
+        requested_model=inp.model_name or "",
+        model_tier=(dv_plan.get("model_tier") or "3b"),
+    )
+    resolved_provider = route.get("provider") or inp.model_provider
+    resolved_model = route.get("model") or inp.model_name
     gen_doc = {
         "id": gen_id,
         "project_id": inp.project_id,
         "user_id": user["id"],
         "module": inp.module,
-        "provider": "skeleton" if skeleton_sv else inp.model_provider,
-        "model": "tb_skeleton" if skeleton_sv else inp.model_name,
+        "provider": "skeleton" if skeleton_sv else resolved_provider,
+        "model": "tb_skeleton" if skeleton_sv else resolved_model,
         "prompt": inp.prompt or "",
         "file_ids": inp.file_ids or [],
         "output": "",
         "status": "streaming",
         "engine": "skeleton" if skeleton_sv else "llm",
+        "router": route,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.generations.insert_one(gen_doc)
 
     async def event_gen():
-        yield f"data: {json.dumps({'type': 'meta', 'generation_id': gen_id, 'engine': 'skeleton' if skeleton_sv else 'llm'})}\n\n"
+        yield f"data: {json.dumps({'type': 'meta', 'generation_id': gen_id, 'engine': 'skeleton' if skeleton_sv else 'llm', 'router': route, 'plan': plan_to_learning(dv_plan)})}\n\n"
         accumulated = []
         try:
             if skeleton_sv:
+                yield f"data: {json.dumps({'type': 'progress', 'stage': 'skeleton', 'message': 'Emitting verified Fast-random TB…'})}\n\n"
                 # Stream in small chunks so the UI feels live without waiting on Ollama.
                 chunk = 120
                 for i in range(0, len(skeleton_sv), chunk):
@@ -1011,23 +1122,29 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
                     yield f"data: {json.dumps({'type': 'delta', 'content': delta})}\n\n"
                     await asyncio.sleep(0)
             else:
+                yield f"data: {json.dumps({'type': 'progress', 'stage': 'llm', 'message': f'Calling {resolved_model}…', 'model': resolved_model})}\n\n"
                 # Buffer LLM tokens, then quality-gate before showing the user.
                 raw_chunks: List[str] = []
+                ntok = 0
                 async for delta in llm_stream_chat(
-                    provider=inp.model_provider,
-                    model=inp.model_name,
+                    provider=resolved_provider,
+                    model=resolved_model,
                     system=system_msg,
                     user_text=user_text,
                     session_id=session_id,
                     num_predict=num_predict_for_module(inp.module),
                 ):
                     raw_chunks.append(delta)
+                    ntok += 1
+                    if ntok == 1 or ntok % 24 == 0:
+                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'llm', 'message': f'Generating… ({ntok} chunks)', 'chunks': ntok})}\n\n"
                 raw = "".join(raw_chunks)
                 final = raw
                 engine_tag = "llm"
                 if inp.module == "testbench" and ref_tb:
                     ports = [p.get("name") for p in (parsed_modules[0].get("ports") or []) if p.get("name")]
                     force_uvm = bool(re.search(r"\b(uvm|agent|sequencer)\b", inp.prompt or "", re.I))
+                    yield f"data: {json.dumps({'type': 'progress', 'stage': 'lint', 'message': 'Quality-gating TB (lint)…'})}\n\n"
                     final, engine_tag, issues = choose_testbench_output(
                         raw,
                         skeleton=ref_tb,
@@ -1043,7 +1160,25 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
                 yield f"data: {json.dumps({'type': 'replace', 'content': final, 'engine': engine_tag})}\n\n"
             full = "".join(accumulated)
             done_engine = "skeleton" if skeleton_sv else locals().get("gen_doc_engine", "llm")
-            learning: dict = {"engine": done_engine}
+            learning: dict = {
+                "engine": done_engine,
+                **plan_to_learning(dv_plan),
+                "router_reason": route.get("reason"),
+                "resolved_model": None if skeleton_sv else resolved_model,
+            }
+            if spec_analysis is not None:
+                learning["spec_checklist"] = {
+                    "ready": spec_analysis.get("ready"),
+                    "grade": spec_analysis.get("grade"),
+                    "score": spec_analysis.get("score"),
+                    "gaps": (spec_analysis.get("gaps") or [])[:6],
+                }
+            if debug_analysis is not None and not debug_analysis.get("empty"):
+                learning["debug_classify"] = {
+                    "top_category": debug_analysis.get("top_category"),
+                    "summary": debug_analysis.get("summary"),
+                    "findings": (debug_analysis.get("findings") or [])[:5],
+                }
             if inp.module == "testbench":
                 ports = []
                 dut_name = None
@@ -1064,6 +1199,52 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
                         "final_score": auto["auto_score"],
                     }
                 )
+                # Verifier loop: Verilator lint-only on TB + DUT; fallback to skeleton if LLM fails compile.
+                if os.environ.get("CHIPSUTRA_VERIFY_TB", "true").lower() not in ("0", "false", "no"):
+                    yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': 'Verilator verify (lint-only)…'})}\n\n"
+                    rtl_sources = []
+                    for i, body in enumerate(file_bodies[:6]):
+                        fn = (file_names[i] if i < len(file_names) else f"dut_{i}.sv") or f"dut_{i}.sv"
+                        rtl_sources.append((fn, body))
+                    tb_top = None
+                    m_tb = re.search(r"\bmodule\s+([A-Za-z_]\w*)", full or "")
+                    if m_tb:
+                        tb_top = m_tb.group(1)
+                    vres = verify_testbench(
+                        rtl_sources,
+                        extract_sv(full) or full,
+                        tb_name=f"{(dut_name or 'dut')}_tb.sv",
+                        mode="lint",
+                    )
+                    learning.update(verify_status_for_learning(vres))
+                    if vres.get("ok") is False and not vres.get("skipped") and ref_tb and done_engine in ("llm", "llm_repaired"):
+                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify_repair', 'message': 'Verilator failed — falling back to verified template…'})}\n\n"
+                        header = (
+                            "// ChipSutra: LLM TB failed Verilator verify "
+                            f"({vres.get('reason')}); using verified randomized template.\n"
+                        )
+                        full = header + ref_tb.lstrip()
+                        done_engine = "skeleton_fallback"
+                        learning["engine"] = done_engine
+                        learning["verify_repaired"] = True
+                        yield f"data: {json.dumps({'type': 'replace', 'content': full, 'engine': done_engine})}\n\n"
+                        vres2 = verify_testbench(
+                            rtl_sources,
+                            extract_sv(full) or full,
+                            tb_name=f"{(dut_name or 'dut')}_tb.sv",
+                            mode="lint",
+                        )
+                        learning.update(verify_status_for_learning(vres2))
+                        auto2 = auto_score_testbench(full, done_engine, True, [])
+                        learning.update({**auto2, "final_score": auto2["auto_score"], "lint_ok": True})
+                    elif vres.get("skipped"):
+                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': 'Verilator not installed — skipped compile verify'})}\n\n"
+                    elif vres.get("ok"):
+                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': 'Verilator lint OK'})}\n\n"
+                    else:
+                        verr = ", ".join((vres.get("errors") or ["failed"])[:3])
+                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': f'Verilator issues: {verr}'})}\n\n"
+
             await db.generations.update_one(
                 {"id": gen_id},
                 {

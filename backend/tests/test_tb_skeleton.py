@@ -91,12 +91,82 @@ def test_free_running_counter_golden():
 
 
 def test_generic_randomized_no_fake_golden():
+    # Truly unknown protocol (ALU-ish) — universal auto-TB, no fake golden
+    rtl = """
+    module tiny_alu (
+        input wire clk,
+        input wire rst_n,
+        input wire [1:0] op,
+        input wire [7:0] a,
+        input wire [7:0] b,
+        output wire [7:0] result
+    );
+    endmodule
+    """
+    sv = render_from_rtl_texts([rtl], cycles=16, seed=1)
+    assert sv is not None
+    assert "tiny_alu dut" in sv
+    assert "Model: generic" in sv
+    assert "$isunknown" in sv
+    assert "$urandom" in sv
+    assert "data_in" not in sv
+
+
+def test_mux_golden():
     sv = render_from_rtl_texts([GENERIC], cycles=16, seed=1)
     assert sv is not None
     assert "mux2 dut" in sv
-    assert "$urandom" in sv
+    assert "Model: mux" in sv
+    assert "mux mismatch" in sv
     assert "sel = $urandom_range" in sv
-    assert "data_in" not in sv
+
+
+def test_apb_golden():
+    rtl = """
+    module apb_regs (
+        input wire pclk,
+        input wire presetn,
+        input wire psel,
+        input wire penable,
+        input wire pwrite,
+        input wire [7:0] paddr,
+        input wire [31:0] pwdata,
+        output logic pready,
+        output logic [31:0] prdata
+    );
+    endmodule
+    """
+    from tb_skeleton import detect_apb_model, classify_ports
+    mod = extract_modules(rtl)[0]
+    roles = classify_ports(mod["ports"])
+    assert detect_apb_model(roles) is not None
+    sv = render_randomized_tb(mod, cycles=24, seed=4)
+    assert "Model: apb" in sv
+    assert "apb_model" in sv
+    assert "APB RDATA mismatch" in sv
+    assert "always #5 pclk" in sv
+
+
+def test_stream_smoke():
+    rtl = """
+    module stream_pipe (
+        input wire clk,
+        input wire rst_n,
+        input wire valid,
+        input wire [7:0] data,
+        output logic ready,
+        output logic [7:0] out_data,
+        output logic out_valid
+    );
+    endmodule
+    """
+    from tb_skeleton import detect_stream_model, classify_ports
+    mod = extract_modules(rtl)[0]
+    assert detect_stream_model(classify_ports(mod["ports"])) is not None
+    sv = render_randomized_tb(mod, cycles=16, seed=2)
+    assert "Model: stream" in sv
+    assert "$isunknown" in sv
+    assert "valid = $urandom_range" in sv
 
 
 def test_should_use_skeleton_policy():

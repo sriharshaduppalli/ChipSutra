@@ -21,7 +21,15 @@ export default function Signup() {
       toast.success("Workspace created");
       nav("/app");
     } catch (err) {
-      toast.error(err.response?.data?.detail || "Signup failed");
+      const detail = err.response?.data?.detail;
+      if (detail) toast.error(typeof detail === "string" ? detail : "Signup failed");
+      else if (err.code === "ECONNABORTED" || /timeout/i.test(err.message || "")) {
+        toast.error("Signup timed out — API cannot reach MongoDB Atlas. Whitelist your IP in Atlas Network Access, then retry.");
+      } else if (!err.response) {
+        toast.error("Cannot reach API (network). Is the backend running?");
+      } else {
+        toast.error("Signup failed");
+      }
     } finally { setBusy(false); }
   };
 

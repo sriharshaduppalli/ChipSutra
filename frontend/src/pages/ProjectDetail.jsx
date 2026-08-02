@@ -66,6 +66,7 @@ export default function ProjectDetail() {
   const [pendingAutoGenerate, setPendingAutoGenerate] = useState(false);
   const [currentGenId, setCurrentGenId] = useState(null);
   const [learningInfo, setLearningInfo] = useState(null);
+  const [streamStatus, setStreamStatus] = useState("");
   const [kgScore, setKgScore] = useState(null);
   const [ratingBusy, setRatingBusy] = useState(false);
   const outputRef = useRef(null);
@@ -166,32 +167,42 @@ export default function ProjectDetail() {
     fetch(`${API}/health`)
       .then((r) => (r.ok ? r.json() : null))
       .then((h) => {
-        if (!h?.llm_providers) return;
-        const p = h.llm_providers;
-        const o = h.ollama || {};
+        const p = h?.llm_providers || {};
+        const o = h?.ollama || {};
+        const product = p.product_model || { provider: "ollama", model: "chipsutra-vlsi:3b", label: "ChipSutra-VLSI" };
+        const showCloud = p.show_cloud_models === true;
         const list = [];
-        if (p.ollama) {
-          const tag = p.ollama_model || "chipsutra-vlsi:3b";
+
+        // Always lead with ChipSutra-VLSI (local Ollama or product default).
+        if (p.ollama || !h?.llm_providers) {
+          const tag = p.ollama_model || product.model || "chipsutra-vlsi:3b";
+          let label = `ChipSutra-VLSI (${tag})`;
+          if (p.ollama && o.ready === false) label = `ChipSutra-VLSI (${tag}) — starting…`;
+          if (!p.ollama && h?.llm_providers) {
+            label = `ChipSutra-VLSI (${tag}) — not on this host`;
+          }
+          list.push({ provider: "ollama", model: tag, label });
+        } else {
           list.push({
-            provider: "ollama",
-            model: tag,
-            label: o.ready === false
-              ? `ChipSutra-VLSI (${tag}) — starting…`
-              : `ChipSutra-VLSI (${tag})`,
+            provider: product.provider || "ollama",
+            model: product.model || "chipsutra-vlsi:3b",
+            label: `${product.label || "ChipSutra-VLSI"} (default)`,
           });
         }
-        if (p.anthropic) {
+
+        if (showCloud && p.anthropic) {
           list.push({ provider: "anthropic", model: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5 (API key)" });
         }
-        if (p.openai) {
+        if (showCloud && p.openai) {
           list.push({ provider: "openai", model: "gpt-5.2", label: "GPT-5.2 (API key)" });
         }
-        if (list.length) {
-          setModels(list);
-          setModelIdx(0);
-        }
+        setModels(list.length ? list : DEFAULT_MODELS);
+        setModelIdx(0);
       })
-      .catch(() => {});
+      .catch(() => {
+        setModels(DEFAULT_MODELS);
+        setModelIdx(0);
+      });
   }, []);
 
   useEffect(() => {
@@ -243,6 +254,7 @@ export default function ProjectDetail() {
     setOutput("");
     setCurrentGenId(null);
     setLearningInfo(null);
+    setStreamStatus("");
     setStreaming(true);
     const m = models[modelIdx] || DEFAULT_MODELS[0];
     const moduleToUse = overrides.moduleOverride || module;
@@ -322,6 +334,8 @@ export default function ProjectDetail() {
             if (j.type === "meta") {
               setCurrentGenId(j.generation_id);
               if (j.engine) engineUsed = j.engine;
+            } else if (j.type === "progress") {
+              if (j.message) setStreamStatus(j.message);
             } else if (j.type === "replace") {
               setOutput(j.content || "");
               if (j.engine) engineUsed = j.engine;
@@ -330,10 +344,19 @@ export default function ProjectDetail() {
             else if (j.type === "done") {
               if (j.engine) engineUsed = j.engine;
               if (j.learning) setLearningInfo(j.learning);
+              setStreamStatus("");
+              const verifyNote =
+                j.learning?.verify_ok === true
+                  ? " · Verilator OK"
+                  : j.learning?.verify_skipped
+                    ? ""
+                    : j.learning?.verify_ok === false
+                      ? " · Verilator issues"
+                      : "";
               toast.success(
-                engineUsed === "skeleton" || engineUsed === "skeleton_fallback"
+                (engineUsed === "skeleton" || engineUsed === "skeleton_fallback"
                   ? "Verified randomized TB ready"
-                  : "Generation complete",
+                  : "Generation complete") + verifyNote,
               );
               // Refresh KG learning score after each TB generation
               if (moduleToUse === "testbench") {
@@ -349,6 +372,7 @@ export default function ProjectDetail() {
       toast.error(e?.message || "Generation failed");
     } finally {
       setStreaming(false);
+      setStreamStatus("");
       load();
     }
   };
@@ -489,7 +513,9 @@ export default function ProjectDetail() {
                     </button>
                   ))}
                 </div>
-                <div className="font-mono text-[10px] text-slate-500 mt-1">Default: ChipSutra-VLSI via Ollama (no API cost). Cloud models appear only if keys are configured.</div>
+                <div className="font-mono text-[10px] text-slate-500 mt-1">
+                  Default model: <span className="text-emerald-400/80">ChipSutra-VLSI</span> (Ollama). Claude/GPT only if the host enables cloud models.
+                </div>
               </div>
               <div>
                 <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2">Prompt (optional)</div>
@@ -570,7 +596,11 @@ export default function ProjectDetail() {
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
                 <div className="font-mono text-xs uppercase tracking-widest text-slate-300">Output · {module}</div>
-                {streaming && <span className="font-mono text-[10px] text-emerald-400 animate-pulse">streaming...</span>}
+                {streaming && (
+                  <span className="font-mono text-[10px] text-emerald-400 animate-pulse" data-testid="stream-status">
+                    {streamStatus || "streaming..."}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-3">
                 {currentGenId && output && module === "testbench" && (
@@ -605,7 +635,15 @@ export default function ProjectDetail() {
             {(learningInfo || kgScore) && module === "testbench" && (
               <div className="border-b border-[#1E293B] px-4 py-2 font-mono text-[10px] text-slate-400 flex flex-wrap gap-x-4 gap-y-1" data-testid="kg-learning-bar">
                 {learningInfo?.final_score != null && (
-                  <span>Output score: <span className="text-emerald-400">{learningInfo.final_score}</span>/100{learningInfo.engine ? ` · ${learningInfo.engine}` : ""}</span>
+                  <span>
+                    Output score: <span className="text-emerald-400">{learningInfo.final_score}</span>/100
+                    {learningInfo.engine ? ` · ${learningInfo.engine}` : ""}
+                    {learningInfo.verify_ok === true
+                      ? " · verilator✓"
+                      : learningInfo.verify_ok === false
+                        ? " · verilator✗"
+                        : ""}
+                  </span>
                 )}
                 {kgScore?.kg_learning_score != null && (
                   <span>

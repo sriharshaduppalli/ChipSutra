@@ -34,12 +34,16 @@ ChipSutra is an **AI verification copilot** with a growing OSS EDA engine layer 
 
 ## Still missing (priority)
 
-1. Default self-host path that pulls GHCR images (skip local rebuild)
-2. Demo liberty / sky130 path so STA smoke is non-mock by default
-3. Ollama pre-warm + optional sentence-transformers packaging
-4. CI webhook worker: PR diff → lint → optional AI review
-5. Multi-revision LEC (UI currently compares RTL vs auto-synth netlist)
-6. Richer first-project wizard / screen recording
+See the full 30/60/90 architecture: **[ADVANCED_DV_ARCHITECTURE.md](./ADVANCED_DV_ARCHITECTURE.md)**.
+
+1. DV Planner → Verifier (compile/sim) → Debug repair loop
+2. Spec IR + Sign-off evidence dashboard
+3. Default self-host path that pulls GHCR images (skip local rebuild)
+4. Demo liberty / sky130 path so STA smoke is non-mock by default
+5. Ollama pre-warm + optional sentence-transformers packaging
+6. CI webhook worker: PR diff → lint → optional AI review
+7. Multi-revision LEC (UI currently compares RTL vs auto-synth netlist)
+8. Richer first-project wizard / screen recording
 
 ## Enterprise-only (by design)
 

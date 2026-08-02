@@ -1,8 +1,26 @@
-# Step 1 — MongoDB Atlas (free database for ChipSutra)
+# Step 1 — MongoDB Atlas (online database for ChipSutra)
 
-Use this when you **do not run Mongo in Docker** (native Windows setup or `docker-compose.atlas.yml`).
+ChipSutra is designed for **online MongoDB Atlas**, not local Mongo, so every user can share the same backend.
 
-ChipSutra stores users, projects, and generations in MongoDB. Atlas free tier (M0) is enough for development.
+**Important:** End users never talk to MongoDB. Only the ChipSutra API does.  
+So Atlas Network Access must allow the **machine (or cloud host) running the API** — not each browser user’s IP.
+
+---
+
+## Why the API “keeps crashing”
+
+Startup **requires** a successful Atlas `ping`. If Atlas refuses the connection, uvicorn exits and Docker restart-loops.
+
+The usual error is:
+
+```text
+SSL: TLSV1_ALERT_INTERNAL_ERROR
+```
+
+On Atlas this almost always means **your public IPv4 is not in Network Access** (not a bad password, and not “broken SSL certs”).  
+Home/ISP IPs change often → yesterday’s `/32` entry stops working → API dies again until you re-whitelist.
+
+**Permanent fix for product / all users / dynamic IP:** allow **`0.0.0.0/0`** (Access from Anywhere).
 
 ---
 
@@ -26,12 +44,24 @@ Wait until the cluster status is **Available** (a few minutes).
 
 ---
 
-## 3. Network access (allow your PC)
+## 3. Network access (required for online multi-user)
 
-1. Left menu → **Network Access** → **Add IP Address**.  
-2. For local dev: **Allow access from anywhere** → `0.0.0.0/0`  
-   (Tighten this in production.)  
-3. **Confirm**.
+1. Open https://cloud.mongodb.com/ → your project → **Network Access**.  
+2. **Add IP Address**.  
+3. Choose **Allow Access from Anywhere** → CIDR **`0.0.0.0/0`** → Confirm.  
+4. Wait until the entry shows **Active** (often 1–2 minutes).
+
+| Goal | Network Access |
+|------|----------------|
+| Product / many users / home ISP changes | **`0.0.0.0/0`** |
+| Fixed cloud VM only | That host’s egress IPv4 `/32` |
+| Single laptop, IP never changes | Current IP `/32` (fragile) |
+
+Check the IPv4 Atlas sees from your API host:
+
+```powershell
+curl https://api.ipify.org
+```
 
 ---
 
@@ -46,7 +76,7 @@ mongodb+srv://myuser:<password>@cluster0.xxxxx.mongodb.net/?retryWrites=true&w=m
 ```
 
 4. Replace `<password>` with your real password.  
-5. Add a database name before `?` or in the path, e.g. `chipsutra_db`:
+5. Prefer a database name in the path:
 
 ```text
 mongodb+srv://myuser:MyEncodedPass@cluster0.xxxxx.mongodb.net/chipsutra_db?retryWrites=true&w=majority
@@ -57,16 +87,9 @@ https://www.mongodb.com/docs/atlas/troubleshoot-connection/
 
 ---
 
-## 5. Put it in ChipSutra (Windows — edit file, not PowerShell)
+## 5. Put it in ChipSutra
 
-PowerShell does **not** use `MONGO_URL=...` on the command line. Edit the file:
-
-```powershell
-cd C:\Users\sriha\Desktop\chipsutra_clone_test\ChipSutra
-notepad backend\.env
-```
-
-Set (with your real string):
+Edit `backend/.env` (not PowerShell `$env:` for long-term config):
 
 ```env
 MONGO_URL="mongodb+srv://myuser:YOUR_ENCODED_PASSWORD@cluster0.xxxxx.mongodb.net/chipsutra_db?retryWrites=true&w=majority"
@@ -75,108 +98,82 @@ OLLAMA_URL=http://127.0.0.1:11434
 OLLAMA_MODEL=chipsutra-vlsi:3b
 ```
 
-Save and close.
+Optional startup resilience (default: 8 tries × 5s) while Atlas whitelist propagates:
+
+```env
+MONGO_STARTUP_RETRIES=8
+MONGO_STARTUP_RETRY_SEC=5
+```
 
 ---
 
-## 6. Verify (after backend is running)
+## 6. Verify
 
 ```powershell
 cd backend
-python -m uvicorn server:app --host 0.0.0.0 --port 8001
+.\.venv\Scripts\python.exe scripts\test_mongo_connect.py
 ```
 
-If MongoDB is wrong, startup will log a connection error. Fix `MONGO_URL` and try again.
+Expect `raw TLS OK` and `pymongo [certifi]: OK`.
 
-Browser: http://localhost:8001/api/health — should return `"status": "healthy"`.
+Then start the API:
+
+```powershell
+.\run-backend.ps1
+```
+
+Browser: http://localhost:8001/api/health — `"mongo":{"ok":true}` and `"status":"healthy"`.
+
+Frontend: `REACT_APP_BACKEND_URL=http://localhost:8001`.
 
 ---
 
 ## SSL handshake errors (`TLSV1_ALERT_INTERNAL_ERROR`)
 
-If startup fails with **SSL handshake failed** to `*.mongodb.net`:
+### 1. Network Access (most common) — do this first
 
-### 1. Atlas Network Access (most common)
+1. Atlas → **Network Access** → ensure an **Active** `0.0.0.0/0` entry (or your current IPv4 `/32`).  
+2. Wait 1–2 minutes.  
+3. Re-run `python scripts/test_mongo_connect.py`.
 
-Atlas often returns **`TLSV1_ALERT_INTERNAL_ERROR`** when your **IP is not allowed** — not because Python or certificates are wrong.
-
-1. Open [MongoDB Atlas](https://cloud.mongodb.com/) → your project → **Network Access**.
-2. **Add IP Address** → **Add Current IP Address**, or for local dev only: **Allow Access from Anywhere** (`0.0.0.0/0`).
-3. Wait **1–2 minutes**, then retry.
-
-Check your public IPv4 (Atlas whitelist is usually IPv4):
-
-```powershell
-curl -4 https://ifconfig.me/ip
-```
-
-Add that address as `/32` in Network Access if you do not use `0.0.0.0/0`.
-
-Diagnostic (does not print your password):
-
-```powershell
-cd backend
-.\.venv\Scripts\Activate.ps1
-python scripts/test_mongo_connect.py
-```
-
-If **raw TLS** to the shard host fails with the same alert, whitelist/VPN is the fix — not certifi.
+If **raw TLS** to `*.mongodb.net:27017` fails with the same alert, whitelist/VPN is the cause — not Python certifi.
 
 ### 2. Connection string
 
-Use the Atlas **Drivers** string and include the database name:
+Use the Atlas **Drivers** string; URL-encode the password; set `DB_NAME` to match.
 
-```env
-MONGO_URL="mongodb+srv://USER:PASS@cluster....mongodb.net/chipsutra_db?retryWrites=true&w=majority"
-DB_NAME=chipsutra_db
-```
+### 3. Python version (Windows native)
 
-URL-encode special characters in the password.
-
-### 3. Python version (Windows)
-
-Use **Python 3.11 or 3.12** for the backend. **Python 3.14** can also fail TLS with Atlas on Windows.
-
-```powershell
-cd ChipSutra\backend
-py -3.12 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements-oss.txt
-python -m uvicorn server:app --host 0.0.0.0 --port 8001
-```
+Use **Python 3.11 or 3.12** (`.\run-backend.ps1`). Avoid **3.14** for Atlas on Windows.
 
 ### 4. VPN / antivirus
 
-Disable VPN or “HTTPS scanning” temporarily and retry.
+Disable VPN or HTTPS scanning temporarily and retry.
 
-### 5. Dev fallback — local MongoDB in Docker
-
-If Atlas is blocked on your network, run Mongo locally and point the backend at it:
+### 5. Docker backend + Atlas
 
 ```powershell
-cd ChipSutra
-docker compose up mongo -d
+docker compose -f docker-compose.atlas.yml up --build
 ```
 
-In `backend/.env`:
+with Atlas `MONGO_URL` in `backend/.env`. Same Network Access rule applies to the **Docker host egress IP** (still use `0.0.0.0/0` if unsure).
 
-```env
-MONGO_URL=mongodb://127.0.0.1:27017
-DB_NAME=chipsutra_db
+ChipSutra sets `tlsCAFile` via **certifi** for `mongodb+srv://` automatically and retries Mongo on startup.
+
+---
+
+## Architecture reminder
+
+```text
+[Users anywhere] → ChipSutra API (:8001) → MongoDB Atlas
 ```
 
-Then start uvicorn again. (Data is separate from Atlas.)
-
-### 6. Docker backend + Atlas
-
-Run the API in Linux container: `docker compose -f docker-compose.atlas.yml up --build` with Atlas `MONGO_URL` in `backend/.env`.
-
-ChipSutra sets `tlsCAFile` via **certifi** for `mongodb+srv://` URLs automatically.
+Allowing `0.0.0.0/0` on Atlas does **not** expose your database to browsers; it only lets the API’s outbound connection succeed from any egress IP. Protect data with a strong DB user password and (in production) tighten to your cloud provider’s known egress ranges when those are stable.
 
 ---
 
 ## Next steps
 
-- **Native Windows (no Docker):** [docs/OPEN_SOURCE.md](./OPEN_SOURCE.md) + `.\setup-native.ps1`  
-- **Docker without mongo image:** `docker compose -f docker-compose.atlas.yml up --build`  
-- **Full native run:** backend `uvicorn` + frontend `yarn start` — see [OPEN_SOURCE.md](./OPEN_SOURCE.md)
+- **Native Windows:** [docs/OPEN_SOURCE.md](./OPEN_SOURCE.md) + `.\run-backend.ps1`  
+- **Docker without local mongo image:** `docker compose -f docker-compose.atlas.yml up --build`  
+- After Network Access shows Active: `python scripts/test_mongo_connect.py` then start the API

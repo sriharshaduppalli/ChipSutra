@@ -19,6 +19,10 @@ HARD RULES for testbench generation (follow exactly):
    - Sync FIFO: `logic [W-1:0] q[$]`; clamp wr/rd on full/empty; check empty/full/rd_data vs queue.
    - Parity: when valid, `parity === ^data`.
    - AXI-Lite: model_reg[]; complete AW+W→B then AR→R handshakes (do not randomize all channels every cycle).
+   - APB: SETUP then ACCESS; scoreboard on paddr/pwdata/prdata; wait pready with timeout.
+   - 2:1 mux: y matches (sel ? b : a) or (sel ? a : b).
+   - Valid/ready stream: fire when ready; $isunknown checks on outs.
+   - Unknown protocol: random legal stimulus + post-reset / continuous no-X on outputs (universal auto-TB).
 6. Output **only** SystemVerilog (brief // comments ok). No "Certainly!", no markdown essay after the code.
 7. Name top `<dut>_tb`, instance `dut`. Match reset polarity and widths from RTL. Pass WIDTH/DEPTH if parameterized.
 8. Driven signals must be `reg`/`logic` (not `wire`).
@@ -49,11 +53,30 @@ HARD RULES for checkers:
 3. Output only SystemVerilog. No chat preamble. Prefer a small reusable checker + random TB harness.
 """.strip()
 
+SPEC2RTL_RULES = """
+HARD RULES for Spec→RTL:
+1. Honor the Spec checklist: require clock, reset polarity, and an I/O list. If missing, invent a minimal interface and document assumptions in // comments; mark exploratory.
+2. Prefer synthesizable RTL (no delays in always_ff; no initial for logic).
+3. Name ports clearly; match any table in the spec. Parameterize WIDTH when data width is stated.
+4. Output only RTL (SystemVerilog/Verilog as requested). No markdown essay after the code.
+5. Include a brief module header comment: clocks, reset, and primary I/O.
+""".strip()
+
+DEBUG_RULES = """
+HARD RULES for debug:
+1. Use the ranked Debug classifier findings first (ports, width, X-prop, handshake timeout, scoreboard).
+2. Propose the smallest concrete fix (code snippet or checklist), not a long essay.
+3. If Verilator rejects UVM, recommend pure SV Fast-random TB.
+4. Never invent DUT ports — regenerate from attached RTL when port-map errors appear.
+""".strip()
+
 _MODULE_RULES = {
     "testbench": TESTBENCH_RULES,
     "assertions": ASSERTIONS_RULES,
     "covergroups": COVERGROUPS_RULES,
     "checkers": CHECKERS_RULES,
+    "spec2rtl": SPEC2RTL_RULES,
+    "debug": DEBUG_RULES,
 }
 
 # Token caps: TB needs room for dump/finish + golden (3B often truncates at 640)
@@ -125,6 +148,19 @@ def tb_golden_hint_from_ports(port_names: Optional[List[str]] = None) -> str:
         return "DUT class: parity. When valid, check parity === ^data."
     if "enable" in names and ("count" in names or "q" in names):
         return "DUT class: enable-counter. Independent expected += enable; never expected = count + 1."
+    if {"psel", "penable", "pwrite", "paddr", "pwdata", "pready", "prdata"} <= names:
+        return "DUT class: APB slave. SETUP+ACCESS; scoreboard regs; wait pready with timeout."
+    if (names & {"sel", "select"}) and (names & {"a", "in0"}) and (names & {"b", "in1"}) and (
+        names & {"y", "out", "dout"}
+    ):
+        return "DUT class: 2:1 mux. Check y against (sel?b:a) or (sel?a:b)."
+    if (names & {"valid", "tvalid", "in_valid"}) and (names & {"ready", "tready", "in_ready"}) and (
+        names & {"data", "tdata", "in_data"}
+    ):
+        return "DUT class: valid/ready stream. Drive valid/data when ready; $isunknown on outputs."
     if "count" in names or "q" in names:
         return "DUT class: counter. Independent expected model; never circular golden from DUT outs."
-    return "Use an independent golden/scoreboard for checked outputs when the protocol is clear."
+    return (
+        "Unknown protocol: universal auto-TB — randomize inputs, check $isunknown on outputs after reset; "
+        "add a golden only when semantics are clear."
+    )

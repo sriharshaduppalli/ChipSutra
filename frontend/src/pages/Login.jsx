@@ -20,7 +20,15 @@ export default function Login() {
       toast.success("Signed in");
       nav("/app");
     } catch (err) {
-      toast.error(err.response?.data?.detail || "Login failed");
+      const detail = err.response?.data?.detail;
+      if (detail) toast.error(typeof detail === "string" ? detail : "Login failed");
+      else if (err.code === "ECONNABORTED" || /timeout/i.test(err.message || "")) {
+        toast.error("Login timed out — API cannot reach MongoDB Atlas. Whitelist your IP in Atlas Network Access, then retry.");
+      } else if (!err.response) {
+        toast.error("Cannot reach API (network). Is the backend running on the URL in REACT_APP_BACKEND_URL?");
+      } else {
+        toast.error("Login failed");
+      }
     } finally { setBusy(false); }
   };
 
