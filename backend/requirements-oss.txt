@@ -3,7 +3,7 @@
 
 fastapi==0.110.1
 uvicorn==0.25.0
-starlette==0.37.2
+starlette==1.3.1
 motor==3.3.1
 pymongo==4.6.3
 pydantic==2.13.4
@@ -21,7 +21,7 @@ idna==3.18
 requests==2.34.2
 urllib3==2.7.0
 charset-normalizer==3.4.9
-bcrypt==4.1.3
+bcrypt==5.0.0
 PyJWT==2.13.0
 passlib==1.7.4
 python-jose==3.5.0
@@ -32,7 +32,7 @@ ecdsa==0.19.2
 rsa==4.9.1
 pyasn1==0.6.4
 anthropic==0.120.0
-openai==1.99.9
+openai==2.51.0
 PyYAML==6.0.3
 typing_extensions==4.16.0
 annotated-types==0.7.0
@@ -40,7 +40,7 @@ dnspython==2.8.0
 click==8.4.2
 
 # Optional multi-worker rate limiting (used only when REDIS_URL is set)
-redis==5.2.1
+redis==8.1.0
 
 # Dev / CI (small image impact; used by pytest in CI)
 pytest==9.1.1
