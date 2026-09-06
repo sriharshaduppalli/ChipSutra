@@ -1,0 +1,76 @@
+# Using `_decl` Macros in TLM
+# Multiple imp ports on one component → distinct put/get/write callbacks.
+# ChipSutra original wording. Curriculum: ChipVerify Using _decl macro in TLM.
+# Pair with: uvm_tlm_blocking_put.txt, uvm_tlm_analysis.txt, uvm_scoreboard.txt.
+
+## Problem
+One component, one default `put` / `get` / `write` imp → all producers share the **same** callback.
+If A and C both connect to B and B must handle them differently, you need **two imps** and two methods.
+
+## Solution: `*_imp_decl`
+Macros **outside** the class invent typed imp classes + renamed methods:
+
+```systemverilog
+`uvm_blocking_put_imp_decl(_1)
+`uvm_blocking_put_imp_decl(_2)
+
+class componentB extends uvm_component;
+  `uvm_component_utils(componentB)
+  uvm_blocking_put_imp_1 #(simple_packet, componentB) put_imp1;
+  uvm_blocking_put_imp_2 #(simple_packet, componentB) put_imp2;
+
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    put_imp1 = new("put_imp1", this);
+    put_imp2 = new("put_imp2", this);
+  endfunction
+
+  task put_1(simple_packet pkt); /* from A */ endtask
+  task put_2(simple_packet pkt); /* from C */ endtask
+endclass
+
+// env connect
+compA.put_port.connect(compB.put_imp1);
+compC.put_port.connect(compB.put_imp2);
+```
+
+## Naming rules
+1. Macro call is **outside** any class (file/package scope).
+2. Suffix (`_1`, `_2`, `_before`, `_after`, …) is appended to:
+   - Imp type: `uvm_blocking_put_imp_1`
+   - Method: `put_1` / `put_2` (not plain `put`)
+3. Use the **same** suffix everywhere after the decl.
+4. Suffix can be any legal identifier fragment — keep short and unique.
+
+## Common decl families
+| Macro family | Creates | Method pattern |
+|--------------|---------|----------------|
+| `` `uvm_blocking_put_imp_decl(SFX) `` | `uvm_blocking_put_imp_SFX` | `put_SFX` |
+| `` `uvm_put_imp_decl(SFX) `` | nonblocking-capable put imp variant | `put_SFX` / try APIs per UVM |
+| `` `uvm_blocking_get_imp_decl(SFX) `` | get imps | `get_SFX` |
+| `` `uvm_analysis_imp_decl(SFX) `` | analysis imps | `write_SFX` |
+
+Scoreboards often use analysis decls for expected vs actual:
+
+```systemverilog
+`uvm_analysis_imp_decl(_expected)
+`uvm_analysis_imp_decl(_actual)
+// write_expected(T t); write_actual(T t);
+```
+
+## When to use
+- Two+ producers into one consumer with **different** processing.
+- Multi-input scoreboard (exp/act, or multi-agent).
+- Avoid if one shared handler is enough — single imp is simpler.
+
+## Beginner mistakes
+1. Declaring the macro **inside** the class.
+2. Implementing `put` instead of `put_1` / `put_2`.
+3. Typo mismatch between decl suffix and type/method names.
+4. Connecting both producers to the same imp — defeats the purpose.
+
+## ChipSutra emit notes
+- Smoke SB: one analysis_imp + `write` is enough for single-monitor TBs.
+- Multi-agent / exp+act SB: prefer `` `uvm_analysis_imp_decl `` + `write_*` (see `uvm_scoreboard.txt`).
+- Generic dual put demo: only if user asks; otherwise stick to analysis fan-in pattern.
+- Put/analysis basics: `uvm_tlm_blocking_put.txt`, `uvm_tlm_analysis.txt`.

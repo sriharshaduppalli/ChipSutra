@@ -1,0 +1,30 @@
+# RISC-V RV32I smoke VIP — ChipSutra Community (Verilator-first)
+# Directed instruction smoke, not a full ISA VIP or Spike/Sail lockstep.
+
+## riscv / rv32i
+- DUT is typically a small core: clk, rst_n, instruction/imem bus, optional dmem, pc/wb.
+- Use ONLY ports parsed from RTL. Never invent AXI/TileLink unless those pins exist.
+- Reset: assert active-low, release, check PC at reset vector (0 or user-documented BASE).
+- Directed smoke (enough for college/startup cores):
+  1. Drive NOP (`addi x0,x0,0` = 32'h00000013) and step; PC should advance +4 if pipelined/single-cycle fetch works.
+  2. Drive ADDI x1,x0,1 then ADD/ADDI that writes a GPR; check a debug wb_data / regfile probe IF the DUT exposes it.
+  3. Timeout every imem/dmem ready wait (40 cycles). Independent expected PC, never golden from DUT pc+4 blindly if stall exists.
+- Do NOT emit a 50-instruction random ISA fuzzer or UVM RAL for CSRs unless the user provided a CSR map.
+- Verilator: module TB, $dumpfile/$dumpvars/$finish, ONE PASS/FAIL.
+- cocotb alternative: Clock + RisingEdge reset, poke instr, sample pc.
+
+## rv32i_load_store
+- Only if dmem ports exist (mem_addr/mem_wdata/mem_rdata/mem_we).
+- Store then load the same address; scoreboard is a dict/array model, not DUT rdata loopback into expected before the write lands.
+
+## rv32i_user_map
+- If the user supplied memory_map (IMEM/DMEM base/size): index model_reg by those bases only.
+- If the user supplied csr_list (name=addr): opaque model_reg[addr] for front-door CSR accesses. Still no auto-RAL.
+- Do not invent extra regions, reset values, or CSR names beyond the user list.
+- Load/store smoke uses user DMEM base when present; otherwise only if dmem ports exist.
+
+## Anti-patterns
+- Inventing Spike/Dromajo co-sim.
+- Assuming Wishbone/AXI when the core is a simple imem_rdata port.
+- Checking rd_data/PC during reset X without a documented reset vector.
+- Inventing a CSR map when the user did not provide one.

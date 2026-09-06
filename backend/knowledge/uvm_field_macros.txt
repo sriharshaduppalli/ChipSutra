@@ -1,0 +1,88 @@
+# UVM Field Macros
+# Field-type catalog + flags for automated copy/compare/print/pack.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Field Macros.
+# Overview/utils: uvm_utility_field_macros.txt. Ops: print/compare/copy/pack articles.
+
+## Role
+Between `` `uvm_*_utils_begin `` / `` `uvm_*_utils_end ``, each property uses a matching `` `uvm_field_* `` so UVM can automate copy, compare, print, pack, record without hand `do_*`.
+Macros expand heavy code — fine for small config/txn objects; prefer `do_*` for large/hot classes.
+
+## Args
+| Arg | Meaning |
+|-----|---------|
+| ARG | Variable name; type must match the macro |
+| FLAG | Ops + optional radix; default mentally `UVM_ALL_ON` / prefer `UVM_DEFAULT` |
+
+## Operation flags (OR with `|`)
+| Flag | Effect |
+|------|--------|
+| `UVM_ALL_ON` | All ops on |
+| `UVM_DEFAULT` | Recommended — all ops; future-safe defaults |
+| `UVM_NOCOPY` | Skip copy |
+| `UVM_NOCOMPARE` | Skip compare |
+| `UVM_NOPRINT` | Skip print |
+| `UVM_NOPACK` | Skip pack/unpack |
+| `UVM_REFERENCE` | Object handles only (no deep copy/compare) |
+
+## Print / record radix (OR with ops)
+`UVM_BIN` | `UVM_DEC` | `UVM_UNSIGNED` | `UVM_OCT` | `UVM_HEX` | `UVM_STRING` | `UVM_TIME`
+
+## Common field macros (pick by type)
+| Macro | Typical property |
+|-------|------------------|
+| `` `uvm_field_int `` | `bit`/`logic`/`int`/`byte`/`shortint` integrals |
+| `` `uvm_field_string `` | `string` |
+| `` `uvm_field_enum `` | enum (`TYPE, ARG, FLAG`) |
+| `` `uvm_field_object `` | nested `uvm_object` handle |
+| `` `uvm_field_real `` | `real` / `shortreal` |
+| `` `uvm_field_event `` | `event` |
+| `` `uvm_field_sarray_int `` | fixed-size integral array |
+| `` `uvm_field_array_int `` | dynamic integral array |
+| `` `uvm_field_queue_int `` | integral queue |
+| `` `uvm_field_aa_int_string `` / aa variants | associative arrays (key/value form varies) |
+| `` `uvm_field_sarray_object `` / array/queue object variants | object collections |
+
+Use the object/array/queue/aa family that matches storage — wrong macro → silent missing fields in print/copy/compare.
+
+## Nested example pattern
+```systemverilog
+class Child extends uvm_object;
+  string m_name;
+  logic [3:0] m_age;
+  `uvm_object_utils_begin(Child)
+    `uvm_field_string(m_name, UVM_DEFAULT)
+    `uvm_field_int(m_age, UVM_DEFAULT)
+  `uvm_object_utils_end
+  function new(string name = "Child"); super.new(name); endfunction
+endclass
+
+class Parent extends uvm_object;
+  string m_name;
+  bit [15:0] m_age;
+  int m_numbers[$];
+  e_bool m_employed;
+  Child m_child;
+  `uvm_object_utils_begin(Parent)
+    `uvm_field_enum(e_bool, m_employed, UVM_DEFAULT)
+    `uvm_field_int(m_age, UVM_DEFAULT)
+    `uvm_field_queue_int(m_numbers, UVM_DEFAULT)
+    `uvm_field_string(m_name, UVM_DEFAULT)
+    `uvm_field_object(m_child, UVM_DEFAULT)
+  `uvm_object_utils_end
+  function new(string name = "Parent"); super.new(name); endfunction
+endclass
+```
+`print()` walks nested registered objects and queue elements when macros match.
+
+## Beginner mistakes
+1. `` `uvm_field_int `` on a queue/object — wrong family.
+2. Enum without `` `uvm_field_enum(TYPE, arg, flag) ``.
+3. Nested child not registered → parent print/copy skips deep fields.
+4. `UVM_REFERENCE` then expecting deep compare/copy of sub-objects.
+5. Prefer `UVM_DEFAULT` over hard-coding only today's ALL_ON assumptions when teaching.
+
+## ChipSutra emit notes
+- Smoke txns/config: match macro to type; `UVM_DEFAULT` unless a field must be `UVM_NOCOMPARE` (e.g. timestamps) or `UVM_NOPRINT`.
+- Nested VIP payloads: register child + `` `uvm_field_object ``; clone before scoreboard store (`uvm_object_copy.txt`).
+- Skip field macros on huge arrays — hand `convert2string` / selective `do_*`.
+- Utils/factory: `uvm_utility_field_macros.txt`.

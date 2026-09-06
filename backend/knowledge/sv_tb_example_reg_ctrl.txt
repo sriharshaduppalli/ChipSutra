@@ -1,0 +1,80 @@
+# ChipVerify Testbench Example 1 — reg_ctrl (teaching map)
+# Practical layered Pure SV: txn / driver / monitor / scoreboard / env / test / IF / top.
+# Curriculum: ChipVerify SystemVerilog Testbench Example 1. ChipSutra rewrites patterns (do not invent DUT ports).
+
+## Example 1 overview
+- DUT: parameterized register file / control block (`reg_ctrl`) with addr, sel, wr, wdata, rdata, ready, rstn.
+- Protocol idea: write address+data accepted in one ready cycle; read returns data next cycle and may drop `ready` so no new txn starts until ready again.
+- TB goal: reusable class environment around a virtual interface — same roles as ChipSutra layered stack.
+- ChipSutra default still prefers a **generator** + fixed-N `run(n)` + `$finish` after join; Example 1 often puts stimulus in the **test** and uses `forever` components + delayed `$finish`.
+
+## Design under test (protocol cues)
+- Ports typically: `clk`, `rstn`, `addr`, `sel`, `wr`, `wdata`, `rdata`, `ready`.
+- On reset: memory cells → `RESET_VAL`; `ready` high.
+- Write when `sel & ready & wr`: store `wdata` at `addr`.
+- Read when `sel & ready & !wr`: present `rdata` next beat; `ready` may go low until data phase completes.
+- TB must **wait for ready** before considering the transfer done — do not ignore back-pressure.
+
+## Transaction object (reg_item / txn)
+- `rand` fields for stimulus: addr, wdata, wr; non-rand `rdata` filled by monitor on reads.
+- Optional `print(tag)` for debug logs (`$display` with `$time`).
+- ChipSutra: `class <dut>_txn;` + real constraints (`addr` range, legal wr/sel) — never noop `{1;}`.
+
+## Driver pattern (Example 1)
+- Holds `virtual reg_if vif`, mailbox from stim path, optional `event drv_done`.
+- Loop: `mbx.get(item)` → drive sel/addr/wr/wdata → `@(posedge clk)` → **while (!ready) @(posedge clk)** → deassert sel → trigger done.
+- ChipSutra mapping: generator → `gen2drv` mailbox; driver `run(n)` with fixed count is OK for smoke; for ready-based buses keep the wait-ready loop (same idea as AXI/APB timeout-guarded waits).
+
+## Monitor pattern
+- Passive: sample on `posedge` when `sel` indicates a transfer; pack into txn; for reads wait an extra cycle for `rdata`; `scb_mbx.put(item)`.
+- Does not drive DUT inputs.
+- ChipSutra: `mon2sb` mailbox + `#1` settle when combo paths need it; for this registered protocol, Example 1’s extra read cycle is the right idea.
+
+## Scoreboard / reference model
+- Associative or array of last-written items per address (`refq[addr]`).
+- On write: store item (create slot if null).
+- On read: compare `rdata` to stored `wdata`, or to reset default (`RESET_VAL`, e.g. `16'h1234`) if never written.
+- This is an **independent** memory model — not `expected = dut.rdata` circular.
+- ChipSutra: same idea as register-model scoreboards for APB/AXI-Lite; count `errors` and one PASS/FAIL at end when using fixed-N runs.
+
+## Environment (no generator variant)
+- Env constructs driver, monitor, scoreboard, shared `scb_mbx`, holds `virtual` IF.
+- `run`: assign vif/mailboxes, `fork` scoreboard/driver/monitor — Example 1 uses `join_any`.
+- ChipSutra default env also builds a **generator** and three mailboxes (`gen2drv`, `drv2sb`, `mon2sb`) and `join` of fixed-N tasks — prefer that unless user wants Example-1-style stim-in-test.
+
+## Test (stimulus owner when no generator)
+- Creates env + `drv_mbx`, wires `e0.d0.drv_mbx`, `fork e0.run(); join_none`, then `apply_stim()`.
+- Stimulus: `item.randomize() with { addr == 8'hAA; wr == 1; };` then read same addr — inline constraints.
+- ChipSutra: keep inline constraints in tests for directed overlays; everyday CRV stays in generator constraints.
+
+## Interface + top
+- `interface reg_if(input bit clk);` bundles rstn/addr/data/sel/wr/ready; virtual IF into classes.
+- Top: clock (`always #10` in example; ChipSutra `#5`), IF instance, DUT port map to IF, reset pulse, `t = new`, assign `t.e0.vif`, `t.run()`, then `#delay $finish` because forever threads never end.
+- Waves: `$dumpfile` / `$dumpvars`.
+- ChipSutra naming: prefer `rst_n` when DUT uses it; always match **user RTL** names.
+
+## ChipSutra vs Example 1 (emit rules)
+| Topic | Example 1 | ChipSutra default |
+|-------|-----------|-------------------|
+| Stimulus | Test `apply_stim` | Generator + mailbox |
+| Component lifetime | `forever` + timed `$finish` | Fixed `repeat(n)` then join |
+| Clock | `#10` | `#5` unless DUT needs otherwise |
+| Scoreboard end | Ongoing `$display` PASS/ERROR | `errors` + `env.report` once |
+| Ready buses | Wait ready in driver | Same — required for sel/ready protocols |
+| NBA in driver | `<=` common in article | Blocking `=` OK in TB; be consistent |
+
+## Minimal mental sketch (roles only)
+```
+txn  --mbx-->  driver  --vif-->  DUT
+                 ^                |
+                 |                v
+               test/gen        monitor --mbx--> scoreboard(ref memory)
+env wires vif + mailboxes; top clocks + reset + $finish
+```
+
+## Anti-patterns
+- Ignoring `ready` (overwrites / lost reads).
+- Scoreboard without reset-default check on first read.
+- Monitor driving `sel`/`wr`.
+- Inventing ports not on the user’s reg-file DUT.
+- Copying Example 1 clock/reset names when RTL differs.

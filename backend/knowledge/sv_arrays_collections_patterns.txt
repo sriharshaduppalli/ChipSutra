@@ -1,0 +1,53 @@
+# SystemVerilog arrays & collections (deep RAG)
+# Curriculum map: ChipVerify Arrays chapters (packed/unpacked/queue/dynamic/associative).
+# Original ChipSutra wording. Critical for scoreboards and payload modeling.
+
+## Packed vs unpacked
+- Packed: `logic [3:0][7:0] mem;` — contiguous bits; good for protocol words.
+- Unpacked: `logic [7:0] mem [0:15];` — array of elements; indexing `[i]`.
+- Mixing: packed dimensions left of name, unpacked right — match DUT packing.
+- Prefer explicit widths from RTL parameters (`WIDTH`, `DEPTH`).
+
+## Fixed-size arrays
+- `logic [W-1:0] regs [0:3];` — AXI-Lite 4-reg model pattern.
+- Methods limited vs dynamic; initialize in `initial` or loops.
+- `foreach (regs[i]) regs[i] = '0;`
+
+## Dynamic arrays
+- `logic [7:0] payload[];` — `payload = new[n];` then fill; `.size()`, `.delete()`.
+- Resize loses contents unless copy carefully; size from constraints often.
+- Good for variable-length packets; pair with `constraint { payload.size() inside {[1:8]}; }`.
+
+## Queues (TB workhorse)
+- `logic [W-1:0] q[$];` — ordered FIFO model for scoreboards.
+- `push_back` / `pop_front` / `push_front` / `pop_back`; `.size()`, `.delete()`.
+- ChipSutra FIFO golden: independent `q[$]`; never mirror DUT `rd_data` into expected push.
+- Bounded optional: `q[$:DEPTH-1]` when modeling max depth.
+
+## Associative arrays
+- `int aa[string];` or `logic [31:0] mem[logic [31:0]];` — sparse maps.
+- OOO scoreboards: key by id/tag; check `aa.exists(key)` before access.
+- `.num()`, `.first/.next` iteration; delete keys when retired.
+- Prefer queues for in-order FIFO; assoc for tagged/OOO/CSR sparse models.
+
+## Array manipulation methods
+- `sort`, `rsort`, `reverse`, `shuffle`, `unique`, `sum`, `product`, `and`/`or`/`xor`.
+- Locator: `find`, `find_index`, `min`, `max` with `with (item ...)` predicates.
+- Use in post_randomize / scoreboard helpers — keep generated TB simple when possible.
+
+## Strings (related)
+- `string s; s.len(); s.substr(); s.atoi();` — plusargs parsing, logging.
+- Prefer `$sformatf` for messages; UVM: `` `uvm_info(..., $sformatf(...), ...) ``.
+
+## ChipSutra patterns
+- Counter: scalar `expected`, not an array.
+- FIFO: `q[$]` scoreboard.
+- AXI-Lite: fixed `model_reg[0:3]` or assoc by word addr.
+- UVM item: `rand bit [7:0] data[];` with size constraint for payloads.
+
+## Anti-patterns
+- Using DUT output queue as the golden (circular).
+- Unbounded dynamic growth without max size → mem blowups in long sims.
+- Associative without `exists` check → runtime errors.
+- Hardcoded depth 16 when DUT `DEPTH=8`.
+- Packed/unpacked mismatch vs DUT port (endian/lane bugs).

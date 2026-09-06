@@ -53,10 +53,10 @@ const SECTIONS = [
     title: "Verilator Simulation",
     testid: "docs-verilator",
     body: [
-      "In a project, select .v/.sv files then click 'Simulate' (Verilator).",
-      "We run `verilator --lint-only` on your selected sources and stream logs live.",
-      "If Verilator is unavailable in your deployment, we fall back to a mock flow that still demonstrates the pipeline.",
-      "Coming soon: full compile + run with waveform capture.",
+      "In a project, select .v/.sv files then click Simulate.",
+      "Lint always runs. Compile + run is Pure SV only (Verilator). Waveforms dump when the run succeeds.",
+      "UVM testbenches are generated as source — ChipSutra Simulate does not compile or sign-off UVM.",
+      "The public portal refuses mock simulation. Self-host if Verilator is not on the API host.",
     ]
   },
   {
@@ -72,8 +72,9 @@ const SECTIONS = [
 ];
 
 const CHANGELOG = [
-  { date: "2026-02", title: "v0.2 — Collaboration + Verilator + Chiplet Templates", items: ["Team invites with editor/viewer roles", "Generation comments", "Real Verilator (--lint-only) integration with mock fallback", "UCIe / BoW / Chiplet templates gallery", "Google Sign-in via Emergent Auth"] },
-  { date: "2026-02", title: "v0.1 — MVP", items: ["9 AI generation modules (Testbench, SVA, Checkers, Covergroups, Spec↔RTL, Testplan, Coverage-Hole Tests, Debug)", "Claude Sonnet 4.5 + GPT-5.2 switcher", "Coverage parser + heatmap", "VCD waveform viewer"] },
+  { date: "2026-08", title: "v0.3 — chipsutra.org + ChipSutra-VLSI", items: ["Public portal is https://chipsutra.org (not the Emergent demo)", "Default model ChipSutra-VLSI via Ollama; Claude/GPT only if SHOW_CLOUD_MODELS is set", "Pure SV Verilator compile/run; UVM is source, not ChipSutra sign-off", "Public mode refuses mock simulation"] },
+  { date: "2026-02", title: "v0.2 — Collaboration + Verilator + Chiplet Templates", items: ["Team invites with editor/viewer roles", "Generation comments", "Verilator lint + Pure SV sim path", "UCIe / BoW / Chiplet templates gallery", "Google Sign-in (optional OAuth)"] },
+  { date: "2026-02", title: "v0.1 — MVP", items: ["AI generation modules (Testbench, SVA, Checkers, Covergroups, Spec↔RTL, Testplan, Coverage-Hole Tests, Debug)", "ChipSutra-VLSI local model (cloud models optional)", "Coverage parser + heatmap", "VCD waveform viewer"] },
 ];
 
 export default function Docs() {

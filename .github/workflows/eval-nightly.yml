@@ -1,0 +1,32 @@
+# Nightly / on-demand eval hook (Community)
+# Does NOT run chipsutra-vlsi:7b — that needs a local Ollama box.
+# Fail→fix LoRA training stays on the laptop that generated storage/failfix.jsonl.
+
+name: ChipSutra eval hook
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *"
+
+jobs:
+  closed-loop-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install OSS backend deps
+        run: pip install -r backend/requirements-oss.txt
+      - name: Closed-loop / evidence / spec-IR unit tests
+        working-directory: backend
+        run: python -m pytest -n 0 -q tests/test_closed_loop.py tests/test_evidence_pack.py tests/test_spec_debug.py tests/test_dv_mutation.py tests/test_ollama_runtime.py tests/test_ci_review.py tests/test_formal_pack.py tests/test_sim_adapter.py tests/test_opensta_demo.py tests/test_coverage_industry.py
+      - name: Skeleton goldens + planner (no Ollama)
+        working-directory: backend
+        run: python -m pytest -n 0 -q tests/test_eval_dut_goldens.py tests/test_tb_skeleton.py tests/test_dv_planner.py tests/test_generation_rules.py tests/test_dv_user_config.py tests/test_tb_ral.py tests/test_reg_hjson.py tests/test_ral_crosscheck.py tests/test_scale_emit.py tests/test_signoff.py tests/test_rtl_ir.py
+      - name: Remind local eval
+        run: |
+          echo "Full TB bakeoff: backend/scripts/eval_llm_vs_premium.py (needs Ollama + Verilator)."
+          echo "LoRA JSONL accumulates at backend/storage/failfix.jsonl when Generate repairs a TB."

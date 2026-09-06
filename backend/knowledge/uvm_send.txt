@@ -1,0 +1,69 @@
+# Sequence Action Macros for Pre-Existing Items
+# `uvm_send*` / `uvm_rand_send*` / `uvm_create` — send without (or with) re-create/randomize.
+# ChipSutra original wording. Curriculum: ChipVerify Sequence action macros for pre-existing items.
+# Pair with: uvm_do.txt, uvm_sequence_macros.txt.
+
+## `uvm_do` vs `uvm_send`
+| Macro family | Create | Randomize | Send / start |
+|--------------|--------|-----------|--------------|
+| `` `uvm_do* `` | Yes (via `` `uvm_create `` if null) | Yes | Yes |
+| `` `uvm_send* `` | **No** | **No** | Yes |
+| `` `uvm_rand_send* `` | **No** | Yes | Yes |
+| `` `uvm_create `` | Yes only | No | No |
+
+`` `uvm_send `` on a **null** handle → runtime error. Create first (ctor, `` `uvm_create ``, or prior `` `uvm_do ``).
+
+## Typical flows
+```systemverilog
+// A) do = create + randomize + send
+`uvm_do(req)
+
+// B) already created — do still re-randomizes and sends
+`uvm_do(m_data0)
+
+// C) send as-is (no randomize)
+`uvm_send(req)
+
+// D) manual create + randomize + send
+`uvm_create(m_data2)
+void'(m_data2.randomize());
+`uvm_send(m_data2)
+
+// E) send with priority
+`uvm_send_pri(m_data2, 72)
+```
+
+## Catalog (pre-existing object)
+| Macro | Behavior |
+|-------|----------|
+| `` `uvm_send(SEQ_OR_ITEM) `` | start_item/finish_item or start — no create/rand |
+| `` `uvm_send_pri(SEQ_OR_ITEM, PRI) `` | + priority |
+| `` `uvm_rand_send(SEQ_OR_ITEM) `` | randomize then send |
+| `` `uvm_rand_send_pri(SEQ_OR_ITEM, PRI) `` | + priority |
+| `` `uvm_rand_send_with(SEQ_OR_ITEM, {c}) `` | randomize with constraints then send |
+| `` `uvm_create(SEQ_OR_ITEM) `` | factory create only (on `m_sequencer`) |
+
+Same item-vs-sequence dispatch as `` `uvm_do ``: items use start/finish_item; sequences call `start(..., call_pre_post=0)`.
+
+## Sequences as pre-existing objects
+Pre-create a child sequence, then:
+```systemverilog
+m_seq3 = seq3::type_id::create("m_seq3");
+`uvm_send(m_seq3)              // no rand of sequence
+`uvm_rand_send(m_seq3)         // randomize sequence (rand members)
+`uvm_rand_send_with(m_seq3, { m_data3.data == 8'h4; m_data3.addr == 8'h23; })
+```
+`rand` fields inside the child sequence update on `` `uvm_rand_send* ``; plain `` `uvm_send `` leaves them unchanged.
+
+## ChipSutra emit notes
+- Smoke: explicit path is clearest:
+  ```systemverilog
+  req = my_txn::type_id::create("req");
+  start_item(req);
+  assert(req.randomize() with { ... });
+  finish_item(req);
+  ```
+- Use `` `uvm_send `` when the item is already filled (directed/fixed fields) and must not be re-randomized.
+- Use `` `uvm_create `` + manual randomize + `` `uvm_send `` when separating create from send.
+- Never `` `uvm_send `` before create.
+- Full `` `uvm_do* `` catalog: `uvm_do.txt`. Expand/caveats: `uvm_sequence_macros.txt`.

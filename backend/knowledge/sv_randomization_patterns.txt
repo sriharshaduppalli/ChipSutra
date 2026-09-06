@@ -1,0 +1,55 @@
+# SystemVerilog randomization techniques (deep RAG)
+# Curriculum map: ChipVerify Randomization chapters (complements constraints file).
+# See also: sv_constraints_patterns.txt. Original ChipSutra wording.
+
+## Randomization goals
+- Explore legal state space across seeds; pair with coverage closure.
+- Directed tests for known bugs; random for unknown unknowns.
+- ChipSutra default smoke: `$urandom` / `$urandom_range` in a loop (no class required).
+- Class CRV / UVM items when user asks constraints, sequences, or methodology=uvm.
+
+## System random vs object random
+- `$urandom()`, `$urandom_range(lo,hi)` — process RNG; great for pure SV smoke.
+- `std::randomize(a,b) with { ... };` — constrain locals without a class.
+- `obj.randomize()` — uses `rand` fields + constraint blocks on the object.
+- Seed: `void'($urandom(SEED));` or `process::self.srandom(SEED);` log seed always.
+
+## randcase
+- Weighted random branch selection without a class:
+  `randcase 3: do_read(); 1: do_write(); 1: do_idle(); endcase`
+- Good for mixing scenarios in a procedural loop.
+- Prefer constraint `dist` on txn fields when using class CRV.
+
+## Enabling / disabling randomness
+- `obj.rand_mode(0);` — freeze all rand fields; or `obj.field.rand_mode(0);`
+- `constraint_mode(0|1)` on named blocks — scenario overlays.
+- `randomize(null)` / randomize subset: `assert(obj.randomize(addr, data));` — only listed fields.
+- After directed poke, re-enable modes for subsequent random traffic.
+
+## pre_randomize / post_randomize
+- pre: adjust knobs, sizes, enable/disable constraints before solve.
+- post: compute parity, invert bits, pack headers — non-rand derived fields.
+- Keep golden/scoreboard updates OUT of these hooks (call from test loop instead).
+
+## Stability and reproducibility
+- Print seed at TB start: `$display("SEED=%0d", seed);`
+- Plusargs: `+ntb_random_seed=` / `+SEED=` — regression matrix.
+- Same seed + same constraints ⇒ same stimulus (solver-dependent caveats across vendors).
+- Don't reseed every cycle unless intentional (destroys reproducibility).
+
+## Coverage-driven random
+- Randomize → sample covergroup → if hole, tighten `with {}` or dist toward hole.
+- ChipSutra Coverage-Hole Tests: emit directed/constrained sequences named after holes.
+- Avoid infinite "until 100%" loops without max iter / timeout.
+
+## ChipSutra mapping
+- gen_mode skeleton / Fast-random: `$urandom_range` loop + independent golden.
+- Template C / LLM class TB: rand + constraints file patterns.
+- UVM: randomize sequence_item in body(); check return; start_item/finish_item.
+
+## Anti-patterns
+- Calling `randomize()` without checking return value.
+- Reseeding every iteration → unreproducible failures.
+- Randomizing DUT outputs / clocks.
+- Unconstrained enum including illegal opcodes with no illegal_bins/asserts.
+- Huge nested randcase instead of clear sequences.

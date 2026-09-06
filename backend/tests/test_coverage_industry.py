@@ -79,6 +79,21 @@ def test_detect_and_parse_routes_formats():
         detect_and_parse("no coverage data here", "x.log")
 
 
+def test_ucis_fixture_corpus_parses():
+    """Vendor-style dialect fixtures must keep producing metrics (drift guard)."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent / "fixtures" / "ucis"
+    files = sorted(p for p in root.iterdir() if p.is_file())
+    assert len(files) >= 5
+    for path in files:
+        text = path.read_text(encoding="utf-8")
+        r = detect_and_parse(text, path.name)
+        assert r.get("count"), f"{path.name} produced no metrics"
+        assert r.get("detected") in ("ucis_xml", "imc_urg", "csv")
+        assert r.get("overall") is not None or r.get("metrics")
+
+
 def test_merge_summary_points_is_union_not_average():
     runs = [
         {"metrics": [{"name": "line", "pct": 40.0}, {"name": "toggle", "pct": 90.0}]},

@@ -4,6 +4,8 @@ Use this when moving from **personal dev** (native Windows, mock sim, local port
 
 **Audience:** operators / founders — not end users. End users only need the website URL and an account.
 
+**Live cutover (2026-08):** DNS for [chipsutra.org](https://chipsutra.org/) still serves an old Emergent snapshot (browser title “Emergent | Fullstack App”, Claude/GPT marketing). `api.chipsutra.org` currently shares the **same Cloudflare IPs as the website**; those certs are only for `chipsutra.org` / `www`, so browsers fail with **`ERR_SSL_VERSION_OR_CIPHER_MISMATCH`**. Point `api` at the Caddy/API VM (see [deploy/README.md](../deploy/README.md) § DNS). Until `/api/health` is healthy, tell users to **self-host** from GitHub.
+
 ---
 
 ## 1. Define what “official” means

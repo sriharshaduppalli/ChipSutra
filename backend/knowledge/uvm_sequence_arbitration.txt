@@ -1,0 +1,57 @@
+# UVM Sequence Arbitration
+# How a sequencer grants driver access when multiple sequences call start_item.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Sequence Arbitration.
+# Pair with: uvm_sequencer.txt, uvm_sequence_start.txt, uvm_sequence_library.txt.
+
+## When arbitration applies
+Only sequences that send items via `start_item`/`finish_item` (or macros that do)
+compete for the **same** sequencer↔driver path.
+Plain sequences with no items can run in parallel without this scheduling.
+Configure on the sequencer:
+```systemverilog
+m_seqr.set_arbitration(UVM_SEQ_ARB_STRICT_FIFO);
+UVM_SEQ_ARB_TYPE cur = m_seqr.get_arbitration();
+```
+Priority comes from `seq.start(sqr, parent, this_priority, call_pre_post)`
+or `` `uvm_do_pri `` / `` `uvm_do_on_pri ``.
+
+## Modes (cheat sheet)
+| Mode | Priority honored? | Same-priority / default order |
+|------|-------------------|-------------------------------|
+| `UVM_SEQ_ARB_FIFO` (**default**) | No | Arrival / queue order |
+| `UVM_SEQ_ARB_RANDOM` | No | Random among ready |
+| `UVM_SEQ_ARB_STRICT_FIFO` | Yes — highest first | FIFO among equal priority |
+| `UVM_SEQ_ARB_STRICT_RANDOM` | Yes — highest first | Random among equal priority |
+| `UVM_SEQ_ARB_WEIGHTED` | Soft — higher priority more likely | Weighted random |
+| `UVM_SEQ_ARB_USER` | Custom | Override `user_priority_arbitration` on a custom sequencer |
+
+Takeaways from ChipVerify experiments:
+- FIFO / RANDOM: setting `.this_priority(...)` has **no** effect.
+- STRICT_FIFO with pri 400,200,200,200,200,100 → drive order starts with 400, then the 200s in start order, then 100.
+- STRICT_RANDOM: same priority band comes out in **random** order (vs FIFO band order).
+
+## Concurrent start pattern
+```systemverilog
+m_seqr.set_arbitration(UVM_SEQ_ARB_STRICT_FIFO);
+fork
+  m_seq[0].start(m_seqr, .this_priority(100));
+  m_seq[1].start(m_seqr, .this_priority(200));
+  m_seq[5].start(m_seqr, .this_priority(400));
+join
+```
+Bodies may all “start” at time 0; **grant order** to the driver follows the mode.
+
+## USER mode
+```systemverilog
+class my_sequencer extends uvm_sequencer #(base_pkt);
+  // override user_priority_arbitration(...) for custom pick among availables
+endclass
+// then set_arbitration(UVM_SEQ_ARB_USER)
+```
+
+## ChipSutra emit notes
+- Smoke: one sequence on one sqr — leave default `UVM_SEQ_ARB_FIFO`; do not set arbitration.
+- Multi-sequence on one driver: set mode explicitly; use STRICT_* when priority must matter.
+- Document that FIFO/RANDOM ignore priority — common interview / debug trap.
+- Virtual sequences on different sequencers do **not** share one arbitration queue.
+- Sequence library picks **which** sequence type to run next; arbitration orders **concurrent** item grants — related but different (`uvm_sequence_library.txt`).

@@ -1,0 +1,65 @@
+# Setting policy using uvm_comparer
+# Compare policy object: show_max, verbosity, field helpers, result trap.
+# ChipSutra original wording. Curriculum: ChipVerify Setting policy using uvm_comparer.
+# Pair with: uvm_object_compare.txt, uvm_printer.txt, uvm_object_copy.txt.
+
+## Role
+`uvm_comparer` is a **standalone policy** for how comparisons run and how miscompares
+are counted/reported. Every `uvm_object` has:
+```systemverilog
+bit ok = lhs.compare(rhs);           // uses global default comparer
+bit ok = lhs.compare(rhs, comparer); // custom policy; clears result first
+```
+Policy knobs include depth, verbosity, max printed miscompares, etc.
+Comparer also exposes typed helpers: integers, strings, reals, objects.
+
+## Prefer object.compare (not bare helpers in a loop)
+When you pass a comparer into `uvm_object::compare()`, UVM applies the policy and
+**clears** the internal miscompare counter (`result`) before starting.
+
+If you call comparer helpers **directly** on the same instance across many checks:
+```systemverilog
+uc0.compare_field(...);
+uc0.compare_field_int(...);
+uc0.compare_object(...);
+```
+`result` **accumulates** until you clear it. End totals can look wrong.
+Advice: clear `result` between independent direct-helper batches, or better —
+configure once and use `obj.compare(other, uc0)`.
+
+## Useful knobs
+```systemverilog
+uc0.show_max   = 20;         // how many MISCMP lines to print
+uc0.verbosity  = UVM_MEDIUM; // report level for miscompare messages
+// also: physical/abstract, check_type, depth, ... (see Accellera class)
+```
+
+## Field helpers (awareness)
+| Method | Notes |
+|--------|--------|
+| `compare_field(name, a, b, size)` | General; works for sizes **> 64** |
+| `compare_field_int(name, a, b, size)` | Integral path; size effectively up to 64 — wider may no-op |
+| `compare_object(name, a, b)` | Nested `uvm_object` compare |
+| `compare_string(name, a, b)` | String equality |
+
+Miscompares log with ID `[MISCMP]` (lhs vs rhs). After `copy`, `compare_object` / `compare` should pass if fields are registered.
+
+## Proper usage pattern
+```systemverilog
+uvm_comparer uc0 = new();
+uc0.show_max = 20;
+uc0.verbosity = UVM_MEDIUM;
+void'(obj0.randomize());
+obj1.copy(obj0);
+if (!obj1.compare(obj0, uc0))
+  `uvm_error("SB", "expected txn mismatch")
+```
+Each `compare(..., uc0)` starts fresh on `result`.
+
+## ChipSutra emit notes
+- Smoke: `a.compare(b)` with **default** comparer — no custom `uvm_comparer` needed.
+- Scoreboards: explicit field checks remain primary; optional `compare` for cloned expected vs observed.
+- Custom `show_max` / verbosity only when debugging noisy nested mismatches.
+- Do not reuse one comparer for many **direct** helper calls without clearing `result`.
+- Field registration / `do_compare` hooks: `uvm_object_compare.txt`.
+- Printer formatting is unrelated policy: `uvm_printer.txt`.

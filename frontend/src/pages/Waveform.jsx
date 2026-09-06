@@ -14,6 +14,8 @@ export default function Waveform() {
   const [params] = useSearchParams();
   const projectId = params.get("pid");
   const fileId = params.get("file_id");
+  const jumpTimeRaw = params.get("t") || params.get("time");
+  const jumpTime = jumpTimeRaw != null && jumpTimeRaw !== "" ? Number(jumpTimeRaw) : NaN;
 
   const parseProjectFile = async (signalIds = null) => {
     if (!projectId || !fileId) return;
@@ -38,6 +40,20 @@ export default function Waveform() {
     if (projectId && fileId) parseProjectFile();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, fileId]);
+
+  useEffect(() => {
+    if (!data?.times?.length || !Number.isFinite(jumpTime)) return;
+    let best = 0;
+    let bestDiff = Infinity;
+    data.times.forEach((t, i) => {
+      const d = Math.abs(Number(t) - jumpTime);
+      if (d < bestDiff) {
+        bestDiff = d;
+        best = i;
+      }
+    });
+    setCursorIndex(best);
+  }, [data, jumpTime]);
 
   const upload = async (e) => {
     const f = e.target.files?.[0];
@@ -97,7 +113,10 @@ export default function Waveform() {
               Timescale: <span className="text-emerald-400">{data.timescale}</span> · Signals: <span className="text-emerald-400">{data.signal_count}</span> · Steps: <span className="text-emerald-400">{data.times.length}</span>
               {data.truncated && <span className="text-amber-400"> · sampled</span>}
             </div>
-            <div className="font-mono text-xs text-emerald-400">cursor: {cursorIndex == null ? "—" : data.times[cursorIndex]}</div>
+            <div className="font-mono text-xs text-emerald-400">
+              cursor: {cursorIndex == null ? "—" : data.times[cursorIndex]}
+              {Number.isFinite(jumpTime) ? <span className="text-amber-400"> · jump t={jumpTime}</span> : null}
+            </div>
           </div>
           <div className="grid grid-cols-12 gap-3">
             <div className="col-span-3 border border-[#1E293B] p-2 max-h-[560px] overflow-auto">

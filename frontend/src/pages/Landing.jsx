@@ -1,9 +1,24 @@
-import { Link, useNavigate } from "react-router-dom";
-import { useState } from "react";
+import { Link } from "react-router-dom";
+import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Cpu, Zap, Activity, GitBranch, FileCode, Waves, Shield, LayoutGrid, ArrowRight, CheckCircle2, Cog, Puzzle, Network, Layers } from "lucide-react";
-import { api } from "@/lib/api";
+import { api, API } from "@/lib/api";
 import { toast } from "sonner";
+
+const GITHUB_REPO = "https://github.com/sriharshaduppalli/ChipSutra";
+const SUPPORT_MAIL = "verification@chipsutra.ai";
+
+function healthLine(health) {
+  if (health === null) return { ok: null, text: "Checking hosted API…" };
+  if (!health || health.status === "unreachable") {
+    return { ok: false, text: "Hosted API unreachable · self-host from GitHub" };
+  }
+  const o = health.ollama || {};
+  const model = o.preferred_installed || o.model || "chipsutra-vlsi";
+  const vlsi = o.ready ? `ChipSutra-VLSI (${model})` : "ChipSutra-VLSI not on this host";
+  const sim = health.verilator ? "Verilator ready" : "Verilator not on this host";
+  return { ok: health.status !== "degraded" && o.ready, text: `${vlsi} · ${sim}` };
+}
 
 const ChipSutraMark = () => (
   <div className="flex items-center gap-2" data-testid="chipsutra-logo">
@@ -28,7 +43,7 @@ const Nav = () => (
         <a href="#languages" className="hover:text-emerald-400" data-testid="nav-langs">Languages</a>
         <a href="#pricing" className="hover:text-emerald-400" data-testid="nav-pricing">Pricing</a>
         <Link to="/docs" className="hover:text-emerald-400" data-testid="nav-docs">Docs</Link>
-        <a href="#waitlist" className="hover:text-emerald-400" data-testid="nav-waitlist">Waitlist</a>
+        <a href={GITHUB_REPO} target="_blank" rel="noreferrer" className="hover:text-emerald-400" data-testid="nav-github">Self-host</a>
       </nav>
       <div className="flex items-center gap-3">
         <Link to="/login" className="text-sm font-mono text-slate-300 hover:text-emerald-400" data-testid="nav-login">Sign in</Link>
@@ -43,7 +58,7 @@ const modules = [
   { icon: Shield, title: "SVA Assertion Gen", desc: "Protocol, safety and liveness assertions synthesized from spec + RTL context.", tag: "SVA" },
   { icon: LayoutGrid, title: "Covergroups & Testplan", desc: "Covergroups with bins, crosses and illegal_bins, plus the testplan that justifies them.", tag: "PLAN" },
   { icon: GitBranch, title: "Spec ↔ RTL", desc: "Bi-directional: generate RTL from spec, or extract a spec from existing RTL.", tag: "S↔R" },
-  { icon: Zap, title: "Compile · Elaborate · Run", desc: "Verilator builds and runs your DUT in the browser, streaming the log and dumping waveforms.", tag: "SIM" },
+  { icon: Zap, title: "Compile · Elaborate · Run", desc: "Verilator lints, compiles and runs Pure SV testbenches. UVM is generated as source for a licensed simulator — ChipSutra Simulate does not run UVM.", tag: "SIM" },
   { icon: Waves, title: "Waveform Viewer", desc: "VCD and FST ingestion with WaveDrom-style timing diagrams and signal summaries.", tag: "VCD / FST" },
   { icon: CheckCircle2, title: "Formal Proofs", desc: "SymbiYosys bounded and unbounded proofs from generated SVA properties.", tag: "FORMAL" },
   { icon: Network, title: "Synthesis & LEC", desc: "Yosys synthesis with area and cell reports, plus gold-vs-gate equivalence checking.", tag: "SYNTH" },
@@ -70,12 +85,13 @@ const tiers = [
     period: "/mo",
     features: [
       "Up to 3 projects",
-      "All 10 AI modules",
-      "1 workspace · 3 seats",
-      "10 generations / day",
+      "Generate TB / SVA / covergroups",
+      "ChipSutra-VLSI (no API key)",
+      "Daily quota on the public portal",
       "Community support",
     ],
     cta: "Start free",
+    to: "/signup",
     highlight: false,
   },
   {
@@ -85,13 +101,14 @@ const tiers = [
     features: [
       "Unlimited projects",
       "Unlimited generations",
-      "Verilator compile+run+VCD",
-      "Formal verification",
+      "Verilator Pure SV compile+run+VCD",
+      "Formal (SymbiYosys) when hosted",
       "Coverage + waveform tools",
       "Up to 10 seats per workspace",
       "Priority email support",
     ],
-    cta: "Start Pro trial",
+    cta: "Join Pro waitlist",
+    href: "#waitlist",
     highlight: true,
   },
   {
@@ -108,6 +125,7 @@ const tiers = [
       "99.9% SLA",
     ],
     cta: "Contact sales",
+    href: "#contact",
     highlight: false,
   },
 ];
@@ -134,7 +152,27 @@ const Feature = ({ icon: Icon, title, desc, tag, idx }) => (
 export default function Landing() {
   const [wl, setWl] = useState({ email: "", name: "", company: "", role: "", tier: "Pro" });
   const [contact, setContact] = useState({ name: "", email: "", message: "" });
-  const navigate = useNavigate();
+  const [health, setHealth] = useState(null);
+  const status = healthLine(health);
+
+  useEffect(() => {
+    document.title = "ChipSutra — AI verification copilot for silicon";
+    const ctrl = new AbortController();
+    fetch(`${API}/health`, { signal: ctrl.signal })
+      .then(async (r) => {
+        const body = await r.json().catch(() => null);
+        const looksLikeHealth = body && (body.llm_providers || body.ollama || typeof body.verilator === "boolean");
+        setHealth(looksLikeHealth ? body : { status: "unreachable" });
+      })
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
+        setHealth({ status: "unreachable" });
+      });
+    return () => ctrl.abort();
+  }, []);
+
+  const apiDownHint = () =>
+    toast.error(`Hosted API is not reachable. Email ${SUPPORT_MAIL} or self-host from GitHub.`);
 
   const submitWaitlist = async (e) => {
     e.preventDefault();
@@ -143,7 +181,8 @@ export default function Landing() {
       toast.success("You're on the waitlist. We'll be in touch.");
       setWl({ email: "", name: "", company: "", role: "", tier: "Pro" });
     } catch (err) {
-      toast.error(err.response?.data?.detail || "Something went wrong");
+      if (!err.response) apiDownHint();
+      else toast.error(err.response?.data?.detail || "Something went wrong");
     }
   };
 
@@ -154,13 +193,23 @@ export default function Landing() {
       toast.success("Message sent. We'll reach out shortly.");
       setContact({ name: "", email: "", message: "" });
     } catch (err) {
-      toast.error("Failed to send message");
+      if (!err.response) apiDownHint();
+      else toast.error("Failed to send message");
     }
   };
 
   return (
     <div className="min-h-screen text-slate-100">
       <Nav />
+      {health?.status === "unreachable" && (
+        <div className="border-b border-amber-500/40 bg-amber-500/10 px-6 py-2 font-mono text-xs text-amber-200" data-testid="api-down-banner">
+          Hosted API is down — sign-in and generate will not work until{" "}
+          <span className="text-amber-100">api.chipsutra.org</span> is healthy.{" "}
+          <a href={GITHUB_REPO} className="underline hover:text-white" target="_blank" rel="noreferrer">Self-host from GitHub</a>
+          {" · "}
+          <a href={`mailto:${SUPPORT_MAIL}`} className="underline hover:text-white">{SUPPORT_MAIL}</a>
+        </div>
+      )}
 
       {/* HERO */}
       <section className="relative overflow-hidden" data-testid="hero-section">
@@ -181,18 +230,20 @@ export default function Landing() {
             <br />automated from spec to <span className="ion-text">coverage closure</span>.
           </h1>
           <p className="mt-8 text-lg font-mono text-slate-400 max-w-2xl leading-relaxed">
-            ChipSutra generates UVM testbenches, SVA assertions, covergroups and testplans for
-            Verilog / SystemVerilog / VHDL — then compiles, simulates, synthesizes and closes coverage
-            with Verilator, Yosys and SymbiYosys. Runs on a local VLSI model, so no API key is required.
+            ChipSutra is an AI verification copilot: generate SV/UVM testbenches, SVA, covergroups and
+            testplans from your RTL, then lint and run <span className="text-slate-200">Pure SV</span> with
+            Verilator. UVM output is source you take to a licensed simulator — not ChipSutra sign-off.
+            Default model is ChipSutra-VLSI via Ollama; no cloud API key required.
           </p>
           <div className="mt-10 flex flex-wrap gap-4 items-center">
             <Link to="/signup" className="btn-neon inline-flex items-center gap-2" data-testid="hero-cta-signup">
               Launch Workspace <ArrowRight size={16} />
             </Link>
-            <a href="#waitlist" className="btn-outline-neon" data-testid="hero-cta-waitlist">Join Waitlist</a>
-            <div className="flex items-center gap-2 text-xs font-mono text-slate-500">
-              <div className="w-2 h-2 bg-emerald-500 animate-pulse"></div>
-              <span>Local model · ChipSutra-VLSI 3B via Ollama</span>
+            <a href={GITHUB_REPO} target="_blank" rel="noreferrer" className="btn-outline-neon" data-testid="hero-cta-selfhost">Self-host</a>
+            <a href="#waitlist" className="text-xs font-mono text-slate-500 hover:text-emerald-400" data-testid="hero-cta-waitlist">Pro waitlist</a>
+            <div className="flex items-center gap-2 text-xs font-mono text-slate-500" data-testid="hero-health">
+              <div className={`w-2 h-2 ${status.ok === false ? "bg-amber-500" : "bg-emerald-500"} ${status.ok === null ? "animate-pulse" : ""}`}></div>
+              <span>{status.text}</span>
             </div>
           </div>
 
@@ -221,9 +272,9 @@ export default function Landing() {
           <div className="flex items-end justify-between mb-12 flex-wrap gap-4">
             <div>
               <div className="pin-badge mb-4 inline-block">01 · MODULES</div>
-              <h2 className="font-display text-4xl font-bold tracking-tight max-w-2xl">Ten AI modules, wired to real EDA tools.</h2>
+              <h2 className="font-display text-4xl font-bold tracking-tight max-w-2xl">AI generation, wired to real EDA tools.</h2>
             </div>
-            <p className="text-sm font-mono text-slate-400 max-w-md">Generation is only half of it — every artifact runs through an actual tool, so you get a log and a number back, not a guess. Downloadable, versioned, diff-able.</p>
+            <p className="text-sm font-mono text-slate-400 max-w-md">Generate the TB, then lint and simulate Pure SV with Verilator. Artifacts are downloadable and versioned. Engineer review is required — ChipSutra is a copilot, not a sign-off tool.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {modules.map((m, i) => <Feature key={m.title} idx={i} {...m} />)}
@@ -289,7 +340,11 @@ export default function Landing() {
                     <li key={f} className="flex items-start gap-2 text-sm font-mono text-slate-300"><CheckCircle2 size={14} className="text-emerald-400 mt-0.5 flex-shrink-0" />{f}</li>
                   ))}
                 </ul>
-                <a href="#waitlist" className={t.highlight ? "btn-neon w-full inline-block text-center" : "btn-outline-neon w-full inline-block text-center"} data-testid={`tier-cta-${t.name.toLowerCase()}`}>{t.cta}</a>
+                {t.to ? (
+                  <Link to={t.to} className={t.highlight ? "btn-neon w-full inline-block text-center" : "btn-outline-neon w-full inline-block text-center"} data-testid={`tier-cta-${t.name.toLowerCase()}`}>{t.cta}</Link>
+                ) : (
+                  <a href={t.href} className={t.highlight ? "btn-neon w-full inline-block text-center" : "btn-outline-neon w-full inline-block text-center"} data-testid={`tier-cta-${t.name.toLowerCase()}`}>{t.cta}</a>
+                )}
               </div>
             ))}
           </div>
@@ -301,8 +356,8 @@ export default function Landing() {
         <div className="absolute inset-0 dot-bg opacity-30 pointer-events-none"></div>
         <div className="max-w-3xl mx-auto px-6 relative">
           <div className="pin-badge mb-4 inline-block">05 · JOIN</div>
-          <h2 className="font-display text-4xl font-bold tracking-tight mb-4">Get early access to ChipSutra.</h2>
-          <p className="font-mono text-sm text-slate-400 mb-8">First 500 engineers get 3 months of Pro free. Priority for semiconductor companies and research labs.</p>
+          <h2 className="font-display text-4xl font-bold tracking-tight mb-4">Pro and Enterprise waitlist.</h2>
+          <p className="font-mono text-sm text-slate-400 mb-8">The free workspace is sign-up. Use this form for Pro/Enterprise, or email {SUPPORT_MAIL} if the hosted API is down.</p>
           <form onSubmit={submitWaitlist} className="card-surface p-6 space-y-4" data-testid="waitlist-form">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <input required type="email" placeholder="work email *" value={wl.email} onChange={(e)=>setWl({...wl, email: e.target.value})} className="bg-[#0B0E14] border border-[#1E293B] px-3 py-2.5 text-sm font-mono focus:outline-none focus:border-emerald-500" data-testid="waitlist-email" />
@@ -324,22 +379,22 @@ export default function Landing() {
             <div className="pin-badge mb-4 inline-block">06 · ABOUT</div>
             <h2 className="font-display text-3xl font-bold tracking-tight mb-4">Built by verification engineers, for verification engineers.</h2>
             <p className="font-mono text-sm text-slate-400 leading-relaxed">
-              ChipSutra is a Made-in-India EDA startup building the AI copilot the semiconductor industry has been waiting for.
-              We believe every verification engineer deserves a partner that can read specs, write testbenches, chase coverage
-              holes, and reason about failing waveforms — while they focus on architecture.
+              ChipSutra is a Made-in-India open-source verification copilot. Generate testbenches and SVA,
+              lint and run Pure SV with Verilator, then take UVM source to your licensed simulator.
+              Self-host the whole stack, or use the public portal when the API is healthy.
             </p>
             <div className="mt-8 grid grid-cols-3 gap-4">
               <div className="border-l border-emerald-500/50 pl-3">
-                <div className="font-display text-3xl font-bold text-emerald-400">9</div>
-                <div className="font-mono text-xs uppercase text-slate-400">AI Modules</div>
+                <div className="font-display text-3xl font-bold text-emerald-400">VLSI</div>
+                <div className="font-mono text-xs uppercase text-slate-400">ChipSutra model</div>
               </div>
               <div className="border-l border-emerald-500/50 pl-3">
-                <div className="font-display text-3xl font-bold text-emerald-400">2</div>
-                <div className="font-mono text-xs uppercase text-slate-400">Frontier LLMs</div>
+                <div className="font-display text-3xl font-bold text-emerald-400">SV</div>
+                <div className="font-mono text-xs uppercase text-slate-400">Verilator sim</div>
               </div>
               <div className="border-l border-emerald-500/50 pl-3">
-                <div className="font-display text-3xl font-bold text-emerald-400">∞</div>
-                <div className="font-mono text-xs uppercase text-slate-400">Iterations</div>
+                <div className="font-display text-3xl font-bold text-emerald-400">MIT</div>
+                <div className="font-mono text-xs uppercase text-slate-400">Self-hostable</div>
               </div>
             </div>
           </div>
@@ -356,7 +411,7 @@ export default function Landing() {
       <footer className="border-t border-[#1E293B] py-8">
         <div className="max-w-7xl mx-auto px-6 flex flex-wrap items-center justify-between gap-4 font-mono text-xs text-slate-500">
           <ChipSutraMark />
-          <div>© 2026 <a href="https://github.com/sriharshaduppalli/ChipSutra" target="_blank" rel="noreferrer" className="text-emerald-400 hover:underline">ChipSutra™</a> by Sri Harsha Duppalli · Made in India · verification@chipsutra.ai</div>
+          <div>© 2026 <a href={GITHUB_REPO} target="_blank" rel="noreferrer" className="text-emerald-400 hover:underline">ChipSutra™</a> by Sri Harsha Duppalli · Made in India · {SUPPORT_MAIL} · <a href="https://chipsutra.org/" className="hover:text-emerald-400">chipsutra.org</a></div>
         </div>
       </footer>
     </div>

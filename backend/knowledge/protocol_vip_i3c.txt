@@ -1,0 +1,16 @@
+# I3C emit guide (ChipSutra)
+# I2C-compatible fallback. CCC/IBI only if those ports exist. Do not invent MIPI timings.
+
+## i3c
+- If DUT has SCL/SDA (or sda_in/sda_out) and no CCC/IBI pins: treat as I2C-compatible. Use i2c_7bit smoke. Do not emit HDR.
+- CCC / IBI / HJ only when parsed ports or user knobs name them (ccc, ibi, ibi_req, hj).
+- Mixed I2C+I3C bus: I2C devices stay 7-bit; do not send CCC to an I2C-only slave.
+- Never invent MIPI I3C open-drain/push-pull switch times or HDR-DDR rates.
+
+## i3c_ccc
+- Emit a CCC txn field only if a ccc/cmd port exists or the user listed CCC codes.
+- Do not invent ENTDAA / SETDASA encodings.
+
+## i3c_ibi
+- In-band interrupt: TB accepts IBI only if ibi / ibi_req / ibi_data ports exist.
+- ACK/NACK the IBI using user pin names. Do not invent IBI payload width.

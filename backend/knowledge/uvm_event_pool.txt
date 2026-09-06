@@ -1,0 +1,59 @@
+# UVM Event Pool
+# Named global/local lookup for uvm_event handles. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Event Pool.
+# Pair with: uvm_event.txt, uvm_config_db.txt, sv_threads_ipc_patterns.txt.
+
+## What
+`uvm_event_pool` stores `uvm_event #(uvm_object)` instances keyed by **string name**
+(like files in a folder). It is:
+```systemverilog
+typedef uvm_object_string_pool #(uvm_event#(uvm_object)) uvm_event_pool;
+```
+i.e. a specialized `uvm_pool #(string, T)` — sparse associative array, passable by reference.
+
+One process `trigger()`s; any number of processes can wait — lookup by the same key
+from agent, env, scoreboard, etc. without wiring handles through every ctor.
+
+## Core API
+| Method | Role |
+|--------|------|
+| `add(key, item)` | Insert named event |
+| `get(key)` | Return entry; **creates default** if missing |
+| `exists(key)` | 1 if key present |
+| `delete(key)` / `num()` | Remove / count |
+| `get_global_pool()` | Singleton global pool |
+| `get_global(key)` | `get` on the global pool (also auto-creates if missing) |
+| `first` / `next` / `prev` / `last` | Iterate keys |
+
+```systemverilog
+uvm_event_pool pool = uvm_event_pool::get_global_pool();
+uvm_event e = new("evt_rstn");
+pool.add("evt_rstn", e);
+// consumer:
+if (!uvm_event_pool::get_global_pool().exists("evt_rstn"))
+  `uvm_fatal("EVT", "evt_rstn missing from pool")
+uvm_event e2 = uvm_event_pool::get_global("evt_rstn");
+e2.wait_ptrigger();  // see uvm_event.txt for wait races
+```
+
+## Trap: get auto-creates
+`get` / `get_global` create a **new empty event** when the key is absent.
+That silently disconnects producer and consumer (different handles).
+Always `exists` (or fail) before get when the producer should have registered first.
+**Key strings must match exactly** on add and get.
+
+## Usecase pattern (reset broadcast)
+1. Agent (or reset monitor) creates `uvm_event`, `add("evt_rstn", ...)` to global pool.
+2. `@(negedge vif.rstn); m_evt.trigger();`
+3. Env / scoreboard: `get_global("evt_rstn")` then `wait_trigger` / `wait_ptrigger` and clear state.
+
+Prefer config_db or analysis ports for data paths; event pool is for **named sync**
+signals (reset seen, barrier, handshake) across loosely coupled components.
+
+## ChipSutra emit notes
+- Smoke: **no** event pool — clock/reset in driver sequences; objections for end-of-test.
+- Emit only when user asks for named cross-hierarchy sync without handle plumbing.
+- Register in `build_phase` (producer); consumers wait in `run_phase` after build.
+- Prefer `wait_ptrigger` for same-time races (`uvm_event.txt`).
+- Never treat auto-created `get_global` as proof the producer registered.
+- Alternative for config handles: `uvm_config_db` for vif/cfg objects — different job.

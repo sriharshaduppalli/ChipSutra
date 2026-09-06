@@ -1,0 +1,59 @@
+# Using get() and put()
+# Alternate driver↔sequencer handshake with explicit response. ChipSutra original wording.
+# Curriculum: ChipVerify Using get() and put().
+# Pair with: uvm_get_next_item.txt (preferred), uvm_driver.txt, uvm_sequence.txt.
+
+## When to use
+Default ChipSutra path: `get_next_item` + `item_done` (`uvm_get_next_item.txt`).
+Alternate: `get` + `put` when the sequence must wait for an explicit **response**
+after `finish_item` returns (e.g. read data filled by the driver).
+
+Key difference: with `get`/`put`, **`finish_item` returns before the driver finishes
+driving** — completion is `get_response` on the sequence side.
+
+## Driver
+```systemverilog
+forever begin
+  seq_item_port.get(req);     // pull REQ (blocking)
+  // drive DUT ...
+  req.data = dut_rdata;       // fill response fields (same or separate RSP)
+  seq_item_port.put(req);     // push RSP to sequencer response FIFO
+end
+```
+- No `item_done` in this style.
+- `put` delivers the response the sequence waits on.
+
+## Sequence
+```systemverilog
+virtual task body();
+  my_data tx = my_data::type_id::create("tx");
+  start_item(tx);
+  void'(tx.randomize());
+  finish_item(tx);            // returns early — driver may still be driving
+  get_response(tx);           // blocks until driver put()
+  // use tx.* response fields
+endtask
+```
+
+## Timeline vs get_next_item
+| Style | When `finish_item` returns | Sequence waits for drive done via |
+|-------|----------------------------|-----------------------------------|
+| `get_next_item` / `item_done` | After drive + `item_done` | (implicit in `finish_item`) |
+| `get` / `put` | Right after grant (often t=0) | `get_response` after `put` |
+
+ChipVerify log: `finish_item` @ 0; `put` + `get_response` @ 20ns with updated `data`.
+
+## Connect
+Same as pull model:
+```systemverilog
+m_drv.seq_item_port.connect(m_seqr.seq_item_export);
+```
+Prefer agent hierarchy in real VIP (drv+seqr inside agent).
+
+## ChipSutra emit notes
+- Smoke/Generate: **do not** emit `get`/`put` — use `get_next_item`/`item_done`.
+- Emit `get`/`put` + `get_response` only when user needs in-sequence response wait
+  or existing VIP uses this style.
+- Do not mix styles on the same agent (one handshake convention per driver).
+- If using `get`/`put`, always pair with `get_response` or the sequence may miss RSP
+  / leave response FIFO growing.

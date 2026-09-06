@@ -26,8 +26,8 @@ Prioritized for an India-first open-source EDA verification startup.
 
 | Gap | Direction |
 |-----|-----------|
-| Cold Ollama load | Pre-warm model in `ollama-create` or backend startup |
-| 3B latency on CPU | Document GPU compose snippet; default `7b` only on GPU profiles |
+| Cold Ollama load | ✅ Pre-warm model in `ollama-create` or backend startup |
+| 3B latency on CPU | ✅ GPU compose overlay `docker-compose.gpu.yml`; default `7b` only on GPU hosts |
 | Large RTL context | Chunk files + summarize before LLM; raise `num_ctx` in Modelfile |
 
 ## P2 — Industry completeness
@@ -35,25 +35,26 @@ Prioritized for an India-first open-source EDA verification startup.
 | Gap | Direction |
 |-----|-----------|
 | Coverage: regex only | UCIS/IMC parsers, merge across regressions — 🧪 trends/merge helpers shipped |
-| No Questa/VCS/Xcelium | Enterprise adapters + job queue |
+| No Questa/VCS/Xcelium | ✅ Adapter interface + Enterprise stubs (`sim_adapter.py`); real runners stay licensed |
 | Formal tool age | ✅ OSS CAD Suite path; keep pinned/reproducible |
 | No regression matrix | ✅ Parallel workers 1–4 + coverage + trend summary |
 | No synthesis sanity | ✅ Yosys synth/equiv + eqy LEC (fallback) + OpenSTA scaffold |
-| Weak lint governance | ✅ Project policy + owned waivers |
+| Weak lint governance | ✅ Project policy + owned waivers; native SVA/FCOV lint; optional [AsFigo](https://github.com/AsFigo/SVALint) PATH adapters |
 | Basic waveform | ✅ VCD hierarchy/search/zoom/cursor; FST via fst2vcd when available |
 | Python TB path | ✅ cocotb scaffold + one-click runner (mock without tools) |
-| CI webhook stub | Worker: PR diff → lint → optional AI comment |
+| CI webhook stub | ✅ Worker: PR diff → lint → optional GitHub comment (`ci_review.py`) |
 | Closed-loop coverage | ✅ Plan + one-click Generate hole tests + Apply seeds → Regression |
 | Auto-attach sim → `tool_log` | ✅ SimulationPanel fills Generate fix-loop on run complete |
 | Redis multi-replica limits | ✅ Optional `redis` dep + compose `--profile redis` + `REDIS_URL` |
+| RAG cold start | ✅ Optional `requirements-rag.txt`; hashed-TFIDF fallback; `warm_index()` at API boot |
 
 ## P2 — README & onboarding
 
 | Done / next |
 |-------------|
 | ✅ Troubleshooting table, bootstrap, OPEN_SOURCE checklist |
-| Add 60s screen recording GIF under `docs/screenshots/` |
-| “First project” wizard: upload `counter.sv` → testbench → simulate |
+| ✅ First-project wizard: `counter.sv` → testbench → simulate (`POST /projects/quickstart`) |
+| Optional 60s GIF under `docs/screenshots/` — storyboard in that folder's README |
 | Hindi/Telugu one-pager for universities (optional) |
 
 ## ChipSutra-VLSI-LLM positioning (honest)

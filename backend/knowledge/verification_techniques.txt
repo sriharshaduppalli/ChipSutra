@@ -1,0 +1,49 @@
+# Verification techniques (ChipSutra)
+# Complementary — not alternatives. Curriculum map: ChipVerify Verification Techniques
+# (original ChipSutra wording; do not paste tutorial text).
+
+## four_techniques
+- Simulation: software runs RTL cycle by cycle. Sampled coverage. Slow–medium. Low setup. ChipSutra default.
+- Formal: mathematical proof of written properties over reachable states. Exhaustive for those properties. Medium setup.
+- Emulation: RTL on a hardware accelerator. Sampled. ~1e3–1e4× sim. High cost. Software bring-up before silicon.
+- FPGA prototyping: RTL on FPGA fabric. Near real-time, real cables. High setup. Less internal visibility than emu.
+- No single technique signs off a chip. Real projects layer all four by stage.
+
+## simulation
+- Dominant DV path: TB drives DUT, independent golden/scoreboard checks, waves + seeds.
+- Strength: stop, inspect any signal, inject sequences, re-run with a new seed.
+- Limit: only tests what you stimulate. A 32-bit adder cannot be exhaustively sim'd.
+- Manage the gap with constrained-random legal stimulus + functional coverage (not code coverage alone).
+- 100% code coverage ≠ all bugs found. Functional holes and unwritten properties remain.
+- ChipSutra Generate/Verilator closed-loop is this technique. UVM sim needs a commercial simulator.
+
+## formal
+- Engineer writes SVA (assert/assume/cover). Tool proves the property or returns a failing trace.
+- Formal only knows properties you asked. No violations ≠ the design is fully correct.
+- Bounded: holds for N cycles — fast, catches most protocol bugs. Full/unbounded proof may explode.
+- Excels: arbiters/mutex/fairness, reset reaches known state, handshake never deadlocks, small ALU all operands, secrets never on a public port.
+- Large SoCs: prove sub-blocks; do not claim chip-level unbounded proof from ChipSutra SVA stubs.
+
+## emulation
+- Use when sim cannot finish: OS/firmware boot, driver bring-up, hours of stress, end-to-end with real-ish peripherals.
+- Tradeoff: expensive compile, weaker per-cycle visibility than sim waves.
+- ChipSutra does not emit an emulator compile. Point software-boot questions at emulation, not Verilator.
+
+## fpga_proto
+- Faster than typical emu (tens of MHz vs a few MHz). Real USB/Ethernet/sensors.
+- Partitioning multi-FPGA, inter-FPGA links, and non-silicon timing are user/board problems.
+- Timing-dependent bugs may not match the target node. Not a substitute for gate-level sim sign-off.
+
+## combine_by_scale
+- See `verification_stages.txt`: block (isolation + highest coverage), subsystem (interfaces), SoC (end-to-end + emu).
+- Block / IP RTL: simulation primary. Formal on control, reset, protocol checkers, security properties.
+- Integration / subsystem: sim for cross-block; formal on interface properties at boundaries.
+- SoC: sim slows; emulation for boot/long stress; FPGA proto for real-interface tests.
+- Post-synthesis: rerun a subset of RTL tests as gate-level sim — synthesis must not change function.
+- USB-style IP example: sim+VIP for compliance; formal for handshake deadlock; FPGA proto for real enumeration.
+
+## choose
+- Prove “never two grants / never leak key”: formal.
+- 50k random PCIe payloads: simulation + protocol VIP.
+- Boot Linux before tapeout: emulation (FPGA proto if real-speed I/O matters more than debug).
+- Always keep sim regressions for RTL changes; do not drop waves/scoreboards because emu exists.

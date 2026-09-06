@@ -1,0 +1,90 @@
+# UVM Register Model Classes
+# uvm_reg_field / uvm_reg / uvm_reg_block, desired vs mirrored. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Register Model Classes.
+# Pair with: uvm_ral.txt (why RAL), uvm_ral_env.txt (adapter/predictor), later: connect / backdoor.
+
+## What is a register model
+Hierarchy of UVM objects mirroring DUT registers/memories: fields → registers →
+blocks/maps. Large designs usually generate this from IP-XACT (or similar) via
+vendor tools — ChipSutra only emits models from a **user-supplied** CSR map.
+
+## Class map
+| Class | Role |
+|-------|------|
+| `uvm_reg_field` | Bit field (width, lsb, access, reset) |
+| `uvm_reg` | One design register (holds fields) |
+| `uvm_reg_file` | Group of registers |
+| `uvm_reg_map` | Address map (offsets, endian, bus width) |
+| `uvm_mem` | Memory region |
+| `uvm_reg_block` | Container: regs, maps, mems, sub-blocks |
+
+## uvm_reg_field
+Configure inside the parent register `build()`:
+```systemverilog
+m_enable = uvm_reg_field::type_id::create("m_enable");
+m_enable.configure(
+  this,      // parent uvm_reg
+  1,         // size (bits)
+  0,         // lsb_pos
+  "RW",      // access
+  0,         // volatile
+  1'h0,      // reset
+  1,         // has_reset
+  1,         // is_rand
+  1          // individually_accessible
+);
+```
+Useful: `get_n_bits()`, `get_lsb_pos()`, `set`/`get` (desired), `get_mirrored_value()`.
+
+## uvm_reg
+Extend `uvm_reg`; `super.new(name, n_bits, UVM_NO_COVERAGE)` then `build()` fields.
+Common tasks/functions:
+- `write` / `read` — DUT access via door/map (needs adapter later)
+- `update` — push desired → DUT if differs from mirrored
+- `mirror` — refresh model from DUT (optional check)
+- `set` / `get` / `get_mirrored_value` — model-side desired/mirrored
+- `get_fields` / `get_field_by_name` / `get_address`
+
+```systemverilog
+class reg_ctl extends uvm_reg;
+  rand uvm_reg_field En;
+  function new(string name = "reg_ctl");
+    super.new(name, 32, UVM_NO_COVERAGE);
+  endfunction
+  virtual function void build();
+    En = uvm_reg_field::type_id::create("En");
+    En.configure(this, 1, 0, "RW", 0, 1'h0, 1, 1, 1);
+  endfunction
+endclass
+```
+
+## uvm_reg_block
+Owns registers + `default_map`. Typical `build()`:
+1. `default_map = create_map("", 0, 4, UVM_LITTLE_ENDIAN, 0);` // n_bytes=4
+2. `create` each `uvm_reg`, `configure(this, null, "")`, call reg.`build()`
+3. `default_map.add_reg(reg, offset, "RW"|"RO", …)`
+
+```systemverilog
+this.default_map.add_reg(this.m_reg_ctl, 'h0, "RW", 0);
+this.default_map.add_reg(this.m_reg_stat, 'h4, "RO", 0);
+```
+The block instance **is** the register model handle used by sequences (`m_regmodel.reg_ctl.write(...)`).
+
+## Desired vs mirrored
+| Value | Meaning |
+|-------|---------|
+| **Desired** | What we want the DUT to have (`set` / pending `update`) |
+| **Mirrored** | Last known DUT value (updated on successful frontdoor/backdoor read/write) |
+
+- `set` + `update` → write DUT when desired ≠ mirrored.
+- `mirror` → read DUT into mirrored (and optionally check).
+- Same concepts exist per **field**.
+- Mirror lets you avoid re-reading when you already know the last access updated it.
+
+## ChipSutra emit notes
+- Never invent offsets/fields — only from user IP-XACT / table / RTL comments.
+- Prefer generated/hand model with exact `configure` widths/lsb/access/reset.
+- Smoke without CSR map: skip RAL entirely (`uvm_ral.txt`).
+- Teaching DUT module named `reg_block` ≠ this `uvm_reg_block` class (`uvm_first_tb_dut.txt`).
+- Frontdoor: adapter + predictor in `uvm_ral_env.txt`; sequencer on map in `uvm_ral_connect.txt`.
+- `write`/`read` without a connected map/adapter will not exercise the DUT bus.

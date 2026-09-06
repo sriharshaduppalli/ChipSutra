@@ -1,0 +1,59 @@
+# SystemVerilog threads, processes & IPC (deep RAG)
+# Curriculum map: ChipVerify Threads & Processes + Interprocess Communication.
+# Original ChipSutra wording.
+
+## Processes in TB
+- `initial` — runs once at time 0 (stimulus, dump, finish).
+- `always` / `always_ff` / `always_comb` — DUT-style; TB clock often `always #5 clk=~clk`.
+- `forever` — loops until `$finish` / disable; prefer structured `for` for smoke TBs.
+- Multiple `initial` blocks run concurrently — order not guaranteed without sync.
+
+## fork / join family
+- `fork ... join` — wait for all children.
+- `fork ... join_any` — wait for first; others may still run (disable if needed).
+- `fork ... join_none` — spawn and continue parent immediately (UVM run_phase style).
+- `wait fork;` — wait for all outstanding children of current process.
+- `disable fork;` — kill children of current fork scope (cleanup timeouts).
+
+## Typical TB patterns
+- Parallel: drive + monitor + timeout watchdog in `fork/join_any` then `disable fork`.
+- Timeout: `fork begin : stim ... end begin #TIMEOUT $fatal("timeout"); end join_any disable fork;`
+- UVM: `fork seq.start(seqr); join_none` inside run_phase; objections control end-of-test.
+- ChipSutra pure SV smoke: usually ONE initial loop — add fork only for timeout/monitor.
+
+## Events
+- `event e; -> e;` trigger; `@(e);` or `wait(e.triggered);`
+- Edge-sensitive sync between producer/consumer threads.
+- Prefer named events for handshake between driver and checker tasks.
+- Don't replace scoreboard with only events — still compare data.
+- UVM enhanced events (`wait_ptrigger`, pool, typed data): `uvm_event.txt`.
+
+## Semaphore
+- `semaphore sem = new(1);` — mutex / resource count.
+- `sem.get(1);` ... critical ... `sem.put(1);`
+- Limit concurrent accessors to a shared bus model or file logger.
+- Keyed resources: capacity >1 for multi-outstanding txns.
+
+## Mailbox
+- `mailbox #(txn) mb = new();` — typed message queue between threads/classes.
+- `mb.put(t);` / `mb.get(t);` / `try_get` / `num()`.
+- Layered SV without UVM TLM: driver←mailbox←generator; monitor→mailbox→scoreboard.
+- UVM replaces many mailboxes with TLM ports/exports/fifos — use mailbox in pure SV layered TB.
+
+## disable / wait controls
+- `disable label;` / `disable fork;` — structured shutdown.
+- `wait(expr);` level-sensitive; `@(posedge clk)` edge-sensitive.
+- Mix carefully: avoid busy-wait `#1` polls when `wait`/`@(posedge)` suffice.
+
+## ChipSutra guidance
+- Default generated TB: no fork — single initial + clock always.
+- Add fork+timeout when user asks "watchdog" / "parallel monitor".
+- UVM methodology: rely on phases/objections/TLM; don't invent mailbox-only UVM.
+- Verilator: keep process structure simple; avoid exotic process control.
+
+## Anti-patterns
+- `join_none` without later wait/objection → sim ends early.
+- Forgetting `disable fork` after `join_any` → runaway watchdog.
+- Unbounded mailbox growth (producer faster than consumer).
+- Using `mailbox` but never checking empty/full intent.
+- Race: driving same signal from two threads without semaphore/clocking.

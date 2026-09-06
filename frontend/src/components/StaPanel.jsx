@@ -163,7 +163,7 @@ export default function StaPanel({ project, selectedFileIds, onClose }) {
           <label className="font-mono text-[10px] text-slate-400">
             LIBERTY (.lib)
             <select value={libertyId} onChange={(e) => setLibertyId(e.target.value)} className="w-full mt-1 bg-[#0B0E14] border border-[#1E293B] px-2 py-1 text-xs font-mono text-slate-200" data-testid="sta-liberty">
-              <option value="">none (mock run)</option>
+              <option value="">bundled demo liberty (if sta on PATH)</option>
               {liberties.map((f) => <option key={f.id} value={f.id}>{f.original_filename}</option>)}
             </select>
           </label>
@@ -208,7 +208,7 @@ export default function StaPanel({ project, selectedFileIds, onClose }) {
 
         {(note || isMock) && (
           <div className="px-4 py-2 border-b border-[#1E293B] font-mono text-[10px] text-amber-400/90" data-testid="sta-note">
-            {note || "Mock run — install OpenSTA (`sta`) and upload a liberty (.lib) for real timing numbers."}
+            {note || "Mock run — install OpenSTA (`sta`). Missing liberty falls back to the bundled demo .lib (not foundry sign-off)."}
             {stats?.missing?.length ? <span className="text-slate-400"> · missing: {stats.missing.join(", ")}</span> : null}
           </div>
         )}
@@ -219,7 +219,9 @@ export default function StaPanel({ project, selectedFileIds, onClose }) {
               <div key={i} className={l.level === "error" ? "text-red-400" : l.level === "warn" ? "text-amber-400" : "text-slate-300"}>{l.line}</div>
             ))}
             {!logs.length && !running && (
-              <div className="text-slate-500">Runs OpenSTA on a synthesized netlist. Without `sta` on PATH or a liberty file you get a mock run that tells you exactly what is missing.</div>
+              <div className="text-slate-500">
+                Runs OpenSTA on a synthesized netlist. No uploaded .lib uses the bundled ChipSutra demo liberty (INV/BUF/NAND2/DFF — not a foundry PDK). Without `sta` on PATH you get a mock run. Sky130: see docs/STA_LIBERTY.md.
+              </div>
             )}
             {status && <div className={`mt-4 ${status === "done" ? "text-emerald-400" : status === "mock" ? "text-amber-400" : "text-red-400"}`}>[{status.toUpperCase()}]</div>}
           </div>

@@ -1,0 +1,85 @@
+# Protocol / version guidance for ChipSutra TB generation
+# Prefer user RTL port names and timing. Never invent CSR maps or JEDEC timings.
+
+## Generic DUT
+- Parse every port from RTL; declare TB signals with exact widths.
+- If no clock port: combinational — do not map invented clk/rst onto DUT.
+- If clock+reset: assert reset, release, settle one cycle, check reset values, then stimulus.
+- Independent golden only (never expected = dut_out + 1).
+- UVM smoke: IF + seq_item + driver(get_next_item) + monitor(analysis_port.write) +
+  scoreboard(analysis_imp.write) + agent + env + test(objections) + module top(DUT+config_db+run_test).
+
+## mux / combinational_mux
+- Combo select: y === (sel ? b : a) or case(sel) for N:1.
+- No DUT .clk/.rst_n. Local TB clock optional for pacing.
+- UVM: same hierarchy; driver can #0/#1 after drive; monitor samples after settle.
+
+## counter / enable_counter
+- Independent expected += enable (or +1 when free-running); never expected = count + 1.
+- After reset deassert: count === '0 before stimulus.
+- UVM: txn.rand enable; SB predict on enable; compare count.
+
+## parity / xor_parity
+- When valid: parity === ^data; check valid_out if present.
+- Post-reset: parity/valid_out === '0 when registered.
+
+## fifo / sync_fifo_fwft
+- Queue model q[$]; after randomize clamp wr when full / rd when empty.
+- @(posedge); #1; predict then check empty/full/count===q.size() and (empty || rd_data===q[0]).
+- Do not require rd_data==='0 after reset (mem may be X). empty after reset === 1.
+- UVM: txn fields wr_en/rd_en/wr_data; SB holds q[$].
+
+## apb / apb3
+- SETUP (PSEL&&!PENABLE) then ACCESS (PSEL&&PENABLE); complete when PREADY=1.
+- While PREADY is LOW in ACCESS: hold PSEL, PENABLE, PADDR, PWRITE, PWDATA.
+- model_reg[]; check PRDATA on reads; drive PWRITE/PADDR/PWDATA from txn.
+- Clock PCLK, reset PRESETn (active-low). Timeout every PREADY wait.
+
+## apb4
+- Same as APB3 plus optional PSTRB (byte enables) and PPROT — omit if absent in RTL.
+- Drive PSTRB LOW on reads. PSLVERR is valid only on the completing ACCESS cycle.
+
+## axi_lite / axi4_lite
+- No bursts. AW+W then B; AR then R. Wait READY with timeout.
+- Transmitter must not wait for READY before VALID; hold VALID until handshake.
+- Drive WSTRB=all-ones unless testing strobes. Check BRESP/RRESP===OKAY (2'b00).
+- Independent model_reg[aligned addr]; never golden from RDATA alone.
+
+## axi4
+- Bursts: AWLEN/ARLEN, AWSIZE/ARSIZE, AWBURST; WLAST/RLAST; ID ordering.
+- Prefer VIP or directed burst sequences; do not invent memory map.
+
+## ahb / ahb_lite
+- One-cycle address phase (cannot wait) then data phase (HREADYOUT may wait).
+- Address of transfer N overlaps data of N-1. HWDATA belongs to the data phase.
+- HTRANS NONSEQ (2'b10) for singles; IDLE/BUSY → zero-wait OKAY, ignore transfer.
+- After address posedge, #1 then drop HWRITE/HTRANS — never in the same timeslot.
+- Check HRDATA vs independent model; HRESP OKAY=2'b00. Do not invent ERROR unless asked.
+
+## ahb5
+- Same as AHB-Lite plus optional exclusive/secure/HWSTRB only if those ports exist.
+
+## axis / axi4_stream
+- TVALID/TREADY handshake; timeout; TLAST packet boundaries when present.
+- TKEEP/TSTRB/TUSER only if in RTL.
+
+## spi / spi_mode0
+- CS_n assert, shift on SCLK per CPOL/CPHA; check MISO/rx_byte.
+- Do not invent mode — randomize or match user parameters.
+
+## qspi
+- Quad IO0–IO3 phases (cmd/addr/dummy/data) from user flash controller RTL only.
+
+## i2c / i2c_7bit
+- START, 7-bit addr+R/W, ACK, data, STOP; clock stretch if SCL held low by slave.
+
+## uart / uart_8n1
+- Pulse start, wait busy/done; sample TX for start/data/parity/stop if bit-level.
+
+## stream / valid_ready
+- Drive valid/data when ready; timeout on hang; $isunknown on outputs after reset.
+
+## riscv / rv32i
+- Experimental RV32I smoke: reset, drive NOP `32'h00000013`, check PC+4 if no stall.
+- Optional ADDI writeback only if DUT exposes wb/rd. Timeout every mem ready.
+- Use exact parsed ports. Never invent Spike, AXI/TileLink, or a CSR/RAL map.

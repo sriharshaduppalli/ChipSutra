@@ -1,0 +1,71 @@
+# SystemVerilog interfaces, modports, clocking (deep RAG)
+# Curriculum map: https://chipverify.com/systemverilog/systemverilog-interface
+# Original ChipSutra wording. Bundle only signals that exist on user DUT/VIP.
+
+## Why interfaces
+- Group related pins into one reusable bundle (APB/AXI/FIFO ports).
+- Cleaner DUT connect: pass `bus_if.DUT` instead of 20 named ports.
+- Can hold tasks, functions, parameters, assertions, covergroups near the pins.
+- UVM/OVM: pass `virtual interface` via config_db — never invent signals.
+
+## Declare with logic (4-state)
+- Prefer `logic` so X/Z from DUT is visible (bit would hide X as 0).
+- Clock often `input logic clk` on the interface port list.
+- Parameterize widths: `interface bus_if #(parameter W=32)(input logic clk);`
+
+## Modports (direction views)
+- `modport DUT (input ..., output ...);`
+- `modport TB  (output ..., input ...);` — TB drives DUT inputs.
+- `modport MON (input ...);` — monitor observes only.
+- Connect: `dut u0 (bus_if.DUT);` and TB uses `bus_if.TB` or hierarchical refs.
+- Wrong modport direction → compile/elab errors or silent undriven nets — match roles.
+
+## Connecting DUT and TB
+```
+interface cnt_if(input logic clk);
+  logic rst_n, enable;
+  logic [3:0] count;
+  modport DUT (input clk, rst_n, enable, output count);
+  modport TB  (input clk, count, output rst_n, enable);
+endinterface
+
+module tb;
+  logic clk; always #5 clk = ~clk;
+  cnt_if vif(clk);
+  counter_rtl dut(.clk(vif.clk), .rst_n(vif.rst_n),
+                  .enable(vif.enable), .count(vif.count));
+  // or dut(vif.DUT) if DUT ports are the interface modport
+endmodule
+```
+When DUT is classic port list, TB still uses interface signals as wires to named map.
+
+## Clocking blocks (TB race control)
+- Sample/drive relative to a clock edge with skew:
+  `clocking cb @(posedge clk); default input #1step output #1step; input count; output enable; endclocking`
+- Wait: `@(vif.cb);` then `vif.cb.enable <= 1;` — drive/sample with defined timing.
+- Multiple clocking blocks allowed for multi-clock IFs.
+- Use for synchronous TB drive/sample; still keep ChipSutra pure-SV smoke simple (`@(posedge clk); #1`) when no IF.
+
+## Virtual interfaces (class / UVM)
+- Class TB / driver holds `virtual cnt_if.TB vif;`
+- Top: create real `cnt_if`, `uvm_config_db#(virtual cnt_if)::set(...)`, agent `get`.
+- Null vif → `uvm_fatal` immediately; never proceed.
+- Do not put DUT instance inside UVM components — keep DUT in top module.
+
+## Assertions and coverage inside interfaces
+- Protocol asserts near pins: `assert property (@(posedge clk) ...);`
+- Covergroups sampling IF signals; sample on clock or `.sample()`.
+- Keep bind/assert modules optional when user asks SVA module separately.
+
+## When ChipSutra should emit an interface
+- User asks interface / VIP / UVM / layered TB.
+- Multi-signal bus protocols (APB/AXI/AXI-Stream).
+- Pure SV random smoke for tiny DUTs: optional — named ports are fine and Verilator-simple.
+- Never invent IF members not present in RTL/spec.
+
+## Anti-patterns
+- Declaring IF as `bit` for DUT-facing nets (masks X).
+- Driving through wrong modport.
+- Clocking block output assigned with blocking `=` races — prefer NBA via clocking drive.
+- Virtual interface without config_db/get check.
+- Copying APB IF onto a counter DUT (wrong protocol bundle).

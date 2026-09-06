@@ -10,7 +10,7 @@ ChipSutra Community Edition is **MIT licensed** (with UI attribution). Anyone ca
 | Local LLM (no tokens) | [ChipSutra-VLSI-LLM](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM) + `models/chipsutra-vlsi/` |
 | Feature maturity | [docs/SUPPORTED_FEATURES.md](./docs/SUPPORTED_FEATURES.md) |
 | Roadmap | [ROADMAP.md](./ROADMAP.md) |
-| Self-host guide | [SELF_HOST.md](./SELF_HOST.md) |
+| Self-host guide | [SELF_HOST.md](../SELF_HOST.md) (GHCR overlay: `docker-compose.ghcr.yml`) |
 | Contributing | [docs/CONTRIBUTOR_GUIDE.md](./docs/CONTRIBUTOR_GUIDE.md) |
 
 ## Production self-host checklist
@@ -46,4 +46,4 @@ See also **[docs/AUTOMATED_SETUP.md](./docs/AUTOMATED_SETUP.md)** (what Git inst
 
 - Never commit `backend/.env` or customer RTL.
 - Keep `REQUIRE_EMAIL_VERIFICATION=false` for frictionless OSS demos; enable for public multi-tenant hosts.
-- Put TLS (Nginx/Caddy) in front for internet-facing deploys — see [SELF_HOST.md](./SELF_HOST.md).
+- Put TLS (Nginx/Caddy) in front for internet-facing deploys — see [SELF_HOST.md](../SELF_HOST.md).

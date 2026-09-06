@@ -25,6 +25,7 @@ NEW_ROUTES = [
     "/api/projects/{pid}/coverage/{cov_id}/holes",
     "/api/projects/{pid}/coverage/{cov_id}/closure-plan",
     "/api/projects/{pid}/coverage/closure-status",
+    "/api/generations/{gen_id}/evidence",
 ]
 
 ENGINE_MODULES = [
@@ -114,6 +115,9 @@ def test_health_reports_new_subsystems():
     assert set(health["fst"]) >= {"fst2vcd", "vcd2fst", "engine"}
     assert health["rate_limit"]["backend"] in ("redis", "memory")
     assert "opensta" in health
+    assert "asfigo" in health
+    assert health["asfigo"]["svalint"]["env"] == "CHIPSUTRA_SVALINT"
+    assert "packs" in health["asfigo"]
 
 
 # =========================

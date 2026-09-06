@@ -15,7 +15,22 @@ from typing import Dict, List, Optional, Tuple
 
 
 def verilator_bin() -> Optional[str]:
-    return shutil.which("verilator")
+    """Resolve Verilator: PATH first, then backend/tools shim (WSL bat)."""
+    found = shutil.which("verilator")
+    if found:
+        return found
+    tools = Path(__file__).resolve().parent / "tools"
+    for name in ("verilator.bat", "verilator.BAT", "verilator.cmd", "verilator"):
+        cand = tools / name
+        if cand.is_file():
+            return str(cand)
+    env = (os.environ.get("VERILATOR_ROOT") or "").strip()
+    if env:
+        for name in ("bin/verilator", "verilator"):
+            cand = Path(env) / name
+            if cand.is_file():
+                return str(cand)
+    return None
 
 
 def _safe_name(name: str, fallback: str) -> str:
@@ -30,6 +45,20 @@ def _tb_module_name(sv: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def _sim_exec_cmd(vbin: str, top: str) -> List[str]:
+    """Command to execute the built sim binary from the temp cwd.
+
+    When verilator is the WSL shim (verilator.bat), the binary is a Linux ELF
+    and must run inside WSL too; WSL maps the Windows cwd automatically.
+    """
+    rel = f"obj_dir/V{top}"
+    # +verilator+rand+reset+2 pairs with --x-initial unique (random power-up).
+    plusargs = ["+verilator+rand+reset+2"]
+    if vbin.lower().endswith((".bat", ".cmd")):
+        return ["wsl", "-d", "Ubuntu", "-e", f"./{rel}"] + plusargs
+    return [os.path.join(".", rel)] + plusargs
+
+
 def verify_sv_sources(
     sources: List[Tuple[str, str]],
     *,
@@ -41,7 +70,9 @@ def verify_sv_sources(
     Verify SystemVerilog sources with Verilator.
 
     sources: list of (filename, content)
-    mode: "lint" (default) or "compile" (--binary without run — heavier)
+    mode: "lint" (default), "compile" (--binary build only),
+          or "run" (build + execute; ok requires the sim to print PASS,
+          never print FAIL, and exit cleanly)
     """
     if not sources:
         return {
@@ -68,7 +99,10 @@ def verify_sv_sources(
             "top_module": top_module,
         }
 
-    with tempfile.TemporaryDirectory(prefix="chipsutra_dv_verify_") as tmp:
+    # ignore_cleanup_errors: WSL/Verilator can briefly lock obj_dir on Windows
+    with tempfile.TemporaryDirectory(
+        prefix="chipsutra_dv_verify_", ignore_cleanup_errors=True
+    ) as tmp:
         paths: List[str] = []
         for fname, body in sources:
             if not (body or "").strip():
@@ -92,18 +126,28 @@ def verify_sv_sources(
 
         top = top_module or _tb_module_name(sources[-1][1]) or "tb"
         basenames = [os.path.basename(p) for p in paths]
-        if mode == "compile":
-            cmd = [vbin, "--binary", "--timing", "-Wno-fatal", "--top-module", top] + basenames
+        if mode in ("compile", "run"):
+            # --assert is REQUIRED: without it Verilator drops assert statements
+            # entirely, so the standard `assert(txn.randomize())` idiom never
+            # randomizes and the TB silently tests nothing.
+            # --x-initial unique: randomize register power-up state so missing
+            # resets are observable (2-state sim otherwise hides them as 0).
+            cmd = [
+                vbin, "--binary", "--timing", "--assert", "--x-initial", "unique",
+                "-Wno-fatal", "--top-module", top,
+            ] + basenames
         else:
-            cmd = [vbin, "--lint-only", "-Wno-fatal", "--top-module", top] + basenames
+            # --timing: TBs use #delays / @(posedge) — required for lint since Verilator 5.
+            cmd = [vbin, "--lint-only", "--timing", "-Wno-fatal", "--top-module", top] + basenames
 
         try:
+            build_timeout = timeout_s if mode == "lint" else max(timeout_s, 180.0)
             proc = subprocess.run(
                 cmd,
                 cwd=tmp,
                 capture_output=True,
                 text=True,
-                timeout=timeout_s,
+                timeout=build_timeout,
                 encoding="utf-8",
                 errors="replace",
             )
@@ -114,18 +158,50 @@ def verify_sv_sources(
                 if "%Error" in ln or "error:" in ln.lower()
             ][:20]
             ok = proc.returncode == 0
-            return {
+
+            sim_pass: Optional[bool] = None
+            sim_log = ""
+            if mode == "run" and ok:
+                run_cmd = _sim_exec_cmd(vbin, top)
+                try:
+                    sproc = subprocess.run(
+                        run_cmd,
+                        cwd=tmp,
+                        capture_output=True,
+                        text=True,
+                        timeout=60.0,
+                        encoding="utf-8",
+                        errors="replace",
+                    )
+                    sim_log = ((sproc.stdout or "") + "\n" + (sproc.stderr or "")).strip()
+                    printed_pass = bool(re.search(r"\bPASS\b", sim_log))
+                    printed_fail = bool(
+                        re.search(r"\bFAIL\b|%Error|\$fatal|mismatch", sim_log, re.I)
+                    )
+                    sim_pass = sproc.returncode == 0 and printed_pass and not printed_fail
+                except subprocess.TimeoutExpired:
+                    sim_pass = False
+                    sim_log = "simulation timed out (missing $finish?)"
+                ok = bool(sim_pass)
+
+            out = {
                 "ok": ok,
                 "skipped": False,
                 "engine": "verilator",
                 "mode": mode,
-                "reason": "pass" if ok else "verilator_failed",
+                "reason": "pass" if ok else (
+                    "sim_failed" if (mode == "run" and sim_pass is False) else "verilator_failed"
+                ),
                 "log": log[-6000:],
                 "errors": errors,
                 "top_module": top,
                 "returncode": proc.returncode,
                 "command": cmd,
             }
+            if mode == "run":
+                out["sim_pass"] = sim_pass
+                out["sim_log"] = sim_log[-4000:]
+            return out
         except subprocess.TimeoutExpired:
             return {
                 "ok": False,
@@ -166,7 +242,7 @@ def verify_testbench(
 
 def verify_status_for_learning(result: Dict) -> Dict:
     """Compact dict for generation.learning."""
-    return {
+    out = {
         "verify_ok": result.get("ok"),
         "verify_skipped": bool(result.get("skipped")),
         "verify_engine": result.get("engine"),
@@ -174,3 +250,6 @@ def verify_status_for_learning(result: Dict) -> Dict:
         "verify_errors": (result.get("errors") or [])[:8],
         "verify_mode": result.get("mode"),
     }
+    if "sim_pass" in result:
+        out["sim_pass"] = result.get("sim_pass")
+    return out

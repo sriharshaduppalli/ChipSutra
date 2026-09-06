@@ -1,0 +1,86 @@
+# UVM Monitor [uvm_monitor]
+# Passive observe: IF signals -> sequence_item; broadcast via analysis_port. Never drive.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Monitor.
+# Pair with: uvm_driver.txt, uvm_transaction.txt, uvm_first_tb_dut.txt.
+
+## Role
+- Watch virtual IF; reconstruct transactions; optional low-level protocol checks / coverage.
+- **Never drive** IF signals — contention with driver breaks the split.
+- High-level functional check ("read matches last write") belongs in **scoreboard**, not monitor.
+- Extending `uvm_monitor` (vs bare `uvm_component`) documents intent; little extra API.
+
+## Class skeleton
+```systemverilog
+class reg_monitor extends uvm_monitor;
+  `uvm_component_utils(reg_monitor)
+  virtual reg_if vif;
+  uvm_analysis_port #(reg_transaction) mon_analysis_port;
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    mon_analysis_port = new("mon_analysis_port", this);  // plain new — not factory
+    if (!uvm_config_db#(virtual reg_if)::get(this, "", "vif", vif))
+      `uvm_error(get_type_name(), "Didn't get handle to virtual interface reg_if")
+  endfunction
+endclass
+```
+- Analysis port: construct with `new`, not `type_id::create` (not factory-overridden).
+- config_db vif: same pattern as driver; chapter uses `` `uvm_error `` if missing (driver often fatal).
+  ChipSutra prefer `` `uvm_fatal `` for null vif on both when emit smoke TB.
+
+## run_phase — watch + broadcast
+```systemverilog
+virtual task run_phase(uvm_phase phase);
+  reg_transaction tr;
+  forever begin
+    @(posedge vif.clk);
+    if (vif.wr_en) begin
+      tr = reg_transaction::type_id::create("tr");
+      tr.wr_en = 1; tr.rd_en = 0;
+      tr.addr  = vif.addr;
+      tr.wdata = vif.wdata;
+      mon_analysis_port.write(tr);
+    end
+    else if (vif.rd_en) begin
+      tr = reg_transaction::type_id::create("tr");
+      tr.rd_en = 1; tr.wr_en = 0;
+      tr.addr  = vif.addr;
+      @(posedge vif.clk);           // same +1 latency as driver / DUT
+      tr.rdata = vif.rdata;
+      mon_analysis_port.write(tr);
+    end
+  end
+endtask
+```
+- Write: capture addr/wdata on the cycle `wr_en` is seen; no extra wait for data validity.
+- Read: wait one more cycle before sampling `rdata` (NBA settles after sample edge).
+- `write(tr)` fans out to all connected analysis imps (scoreboard, coverage, ...).
+
+## Optional knobs
+```systemverilog
+bit enable_check = 1;
+bit enable_coverage = 1;
+// gate check_protocol / covergroup.sample
+// tests: uvm_config_db#(bit)::set(..., "enable_check", 0);
+```
+Keep monitors lean; scoreboard owns functional predict/compare.
+
+## Beginner mistakes
+1. Driving IF from monitor.
+2. Sampling `rdata` same edge as `rd_en`.
+3. Putting scoreboard golden logic inside monitor.
+4. Factory-create for analysis_port (use `new`).
+5. Forgetting `ap.write` — silent no coverage/sb traffic.
+
+## ChipSutra emit notes (methodology=uvm)
+- Always: `uvm_monitor`, utils, vif via config_db, `uvm_analysis_port #(txn)`, forever sample + `write`.
+- Env/agent `connect_phase`: `mon.ap.connect(sb.analysis_export)` (or fifo/imp).
+- Coverage listener pattern: `uvm_subscriber.txt`. Analysis port API: `uvm_tlm_analysis.txt`.
+- Passive agents: monitor only (no driver) — still same monitor pattern.
+- User DUT: sample with that DUT's timing; chapter `reg_*` is teaching example.
+- Pure SV layered analogue: monitor class + mailbox to scoreboard (no analysis_port).
+- Optional VIP hooks without editing monitor source: `uvm_callback.txt` (not for smoke).

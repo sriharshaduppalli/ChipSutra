@@ -119,6 +119,8 @@ flowchart TB
 
 **Exit criteria:** Project can export a **sign-off evidence pack**; eval trend not regressing; SoC demo (multi-module) TB + CDC + cov loop.
 
+Community implementations for this slice: sign-off ZIP + dashboard, Spec-IR formal pack + CEX→Debug, SoC IR (`rtl_ir.py`), UVM scale emit with Verilator SV fallback, nightly eval workflow, `Modelfile.ft.example` / `LORA.md` for `chipsutra-vlsi:*-ft`, `sim_adapter.py` stubs. Vendor simulators and published FT weights stay out of OSS.
+
 ---
 
 ## 4. Module-by-module enhancements (product surface)

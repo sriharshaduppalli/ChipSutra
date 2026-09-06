@@ -1,0 +1,97 @@
+# Layered Pure SV testbench components (must-know)
+# ChipVerify-style roles for ChipSutra default Pure SV TBs. Prefer user RTL ports over examples.
+# Curriculum map: https://chipverify.com/tutorials/systemverilog
+
+## What is DUT / DUV
+- DUT = Design Under Test — the hardware written in Verilog / SystemVerilog / VHDL.
+- In silicon post-silicon validation people often say DUT; in pre-silicon verification the same block is also called DUV (Design Under Verification).
+- ChipSutra Generate always treats the user's RTL module as the DUT/DUV: use ONLY its real ports and name — never invent pins.
+- The TB surrounds the DUT; the DUT itself is not a verification class.
+
+## What is an interface
+- When a design has many ports, listing every signal in every component is hard to connect, maintain, and reuse.
+- An `interface` is a container for the DUT's I/O (plus clock). The TB drives and samples the design through that bundle.
+- ChipSutra pattern: `interface <dut>_if(input logic clk);` with DUT signals, modports `DRV` / `MON`, and a virtual interface into classes.
+- Tasks inside the interface (or driver methods using the IF) hide pin timing so callers stay abstract.
+- If the physical pin timing changes later, update the interface/driver task — generators and tests keep calling the same API.
+
+## What is a driver
+- The driver is the verification component that does pin-wiggling of the DUT (through the virtual interface).
+- When it must drive inputs, it uses a pre-defined drive/reset task path — not ad-hoc `#` delays scattered in the test.
+- Timing relations between signals belong in the driver (or IF tasks), not in every test.
+- Abstraction goal: tests say *what* transaction to send; the driver knows *how* to wiggle pins.
+- If the bus protocol changes, a new driver can implement the same mailbox API with different pin timing.
+
+## How the driver knows what to drive (generator)
+- The generator creates valid data transactions (class objects with `rand` fields + constraints) and sends them to the driver (mailbox `gen2drv`).
+- The driver `get`s each transaction object and translates fields into pin values the DUT understands.
+- Transactions are reusable across smoke / directed / CRV tests — change constraints or count in the test/env, not the driver.
+
+## Why a monitor is required
+- Driving the DUT is only half of verification; we must observe results.
+- The DUT processes inputs and presents outputs on pins. The monitor samples those signals (after a settle `#1` when needed), packs them into a monitor packet / transaction, and sends them to the scoreboard (`mon2sb`).
+- Monitors are passive: they do not drive DUT inputs.
+
+## What is the purpose of a scoreboard
+- The scoreboard holds (or calls) a reference / golden model that reflects expected DUT behavior.
+- Stimulus sent to the DUT is also reflected into the predictor (`predict` from driver txn or shared stimulus path).
+- Compare predicted vs monitored outputs (`check`). Mismatch ⇒ functional defect (or TB bug) — report `$error` and increment `errors`.
+- Independent golden: never set `expected = dut_output` (circular). For counters use enable-based predict; for mux use `case(sel)`; for FIFO use `q[$]`.
+- Forbidden: `function bit check(); return 1;` (noop — always "passes").
+
+## Why an environment is required
+- The env builds and connects generator, driver, monitor, scoreboard, and mailboxes (`build` / `connect`).
+- It makes verification flexible and scalable: more agents/components can be plugged into the same env for a future project or larger DUT.
+- `env.run` forks the components; `env.report` prints one PASS/FAIL.
+
+## What does the test do
+- The test instantiates the environment and configures it (txn count, knobs, seeds) the way *this* scenario needs.
+- Projects have many tests — do not hard-edit the env for each one; expose parameters the test can tweak.
+- Flow: `env.build(n)` → reset / idle check → `env.run(n)` → `env.report()`.
+- Top module: clock, interface instance, DUT port map, `$dumpfile`/`$dumpvars`, `void'($urandom(SEED))`, construct test with `t = new(vif)`, `$finish`.
+
+## Abstraction levels
+- Lowest: toggle individual signals with `#` delays in an `initial` block (`resetn <= 0; ...`).
+- Better: hide details in a reusable task (`apply_reset`) so the test writer focuses on *when/why*, not *how*.
+- Layered TB: hide pin timing in driver/IF; hide stimulus creation in generator; hide checking in scoreboard; hide wiring in env; tests only configure and start.
+- Simple counter (~50 lines RTL): full layered stack still preferred in ChipSutra for consistency; complexity grows by adding components/agents, not by abandoning the stack.
+- Example of task abstraction:
+
+```systemverilog
+module tb_top;
+  bit resetn;
+  task apply_reset();
+    #5  resetn <= 0;
+    #20 resetn <= 1;
+  endtask
+  initial begin
+    apply_reset();
+  end
+endmodule
+```
+
+## ChipSutra layered stack (map)
+1. DUT/DUV — user RTL module.
+2. interface — signal container + modports.
+3. generator — create txns → mailbox.
+4. driver — txn → pins (virtual IF).
+5. monitor — pins → pkt → mailbox.
+6. scoreboard — predict + check vs reference.
+7. environment — build/connect/run/report.
+8. test — configure env knobs and start.
+9. top — clock, DUT bind, dumps, finish.
+
+## Worked examples (ChipVerify)
+- Example 1 (`reg_ctrl`): txn + driver (wait ready) + monitor + associative scoreboard; stim often in **test**. Map: `sv_tb_example_reg_ctrl.txt`.
+- Example 2 (`switch`): **generator** + `drv_done` event, dual-thread monitor + **semaphore**, address-range routing scoreboard. Map: `sv_tb_example_switch.txt`.
+- Example Adder: **combo DUT** + TB-only clock IF; scoreboard `{carry,sum}=a+b` with reset; bug-inject to prove checker. Map: `sv_tb_example_adder.txt`.
+- ChipSutra default still prefers generator + fixed-N `run` + one PASS/FAIL report.
+
+## Anti-patterns
+- Missing any layer when methodology is Pure SV layered.
+- Driver that invents stimulus without a generator/mailbox path (unless tiny procedural smoke was explicitly requested).
+- Monitor that drives DUT inputs.
+- Scoreboard without a real reference compare.
+- Test that duplicates pin timing instead of calling driver/env APIs.
+- Inventing DUT ports not present in the RTL.
+- Ignoring DUT `ready` / back-pressure on register-bus protocols.

@@ -1,0 +1,19 @@
+# On-chip fabric + FSM emit guide (ChipSutra)
+# Wishbone / Avalon-MM / one-hot FSM safety. Prefer user RTL names.
+
+## wishbone
+- Classic cycle: CYC&&STB, WE for write; wait ACK with timeout; then drop STB/CYC.
+- Independent model_reg[adr word]; check DAT_O on reads. Do not invent a decode map.
+
+## avalon / avalon_mm
+- Drive address + write/writedata (or read); while waitrequest is HIGH, hold controls.
+- Sample readdata when waitrequest is LOW. Independent model_reg. Omit waitrequest if absent.
+
+## tilelink
+- TL-UL/UH/C from user TL params. Drive only a_*/d_* (and b/c/e if those ports exist).
+- Get/Put opcodes as txn fields when user listed them. Do not invent a TileLink version or beat size.
+- Coherent TL-C (Acquire/Release): require user VIP. Outline only if B/C/E channels exist.
+
+## fsm
+- Do not invent the transition table. After reset: !$isunknown(state) and $onehot0(state).
+- Randomize the visible stimulus port only. Promote to a real golden when the user supplies the map.

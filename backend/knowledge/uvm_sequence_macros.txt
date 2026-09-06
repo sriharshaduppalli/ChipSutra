@@ -1,0 +1,66 @@
+# Executing Sequence Macros
+# `uvm_do*` family expands to create/randomize/start_item or start — skips pre_body/post_body.
+# ChipSutra original wording. Curriculum: ChipVerify Executing sequence macros.
+# Pair with: uvm_sequence_start.txt, uvm_do article next, uvm_sequence_usage.txt.
+
+## Tradeoff
+| Gain | Cost |
+|------|------|
+| Fewer lines; inline constraints | Lose control of `pre_body` / `post_body` on nested `start` |
+| Create + randomize + send in one macro | Harder to debug than explicit `start_item`/`finish_item` |
+
+All `` `uvm_do* `` variants ultimately expand through `` `uvm_do_on_pri_with ``.
+
+## Core expansion (mental model)
+```systemverilog
+`define uvm_do_on_pri_with(SEQ_OR_ITEM, SEQR, PRIORITY, CONSTRAINTS)
+  begin
+    uvm_sequence_base __seq;
+    `uvm_create_on(SEQ_OR_ITEM, SEQR)
+    if (!$cast(__seq, SEQ_OR_ITEM)) start_item(SEQ_OR_ITEM, PRIORITY);
+    if ((__seq == null || !__seq.do_not_randomize) &&
+        !SEQ_OR_ITEM.randomize() with CONSTRAINTS)
+      `uvm_warning("RNDFLD", "Randomization failed in uvm_do_with action")
+    if (!$cast(__seq, SEQ_OR_ITEM)) finish_item(SEQ_OR_ITEM, PRIORITY);
+    else __seq.start(SEQR, this, PRIORITY, 0);  // call_pre_post = 0
+  end
+```
+
+### If SEQ_OR_ITEM is a sequence_item
+1. `` `uvm_create_on ``
+2. `start_item` → `randomize() with {…}` → `finish_item`
+
+### If SEQ_OR_ITEM is a sequence
+1. `` `uvm_create_on ``
+2. `randomize() with {…}` (unless `do_not_randomize`)
+3. `__seq.start(SEQR, this, PRIORITY, 0)` — **parent = this**, **call_pre_post = 0**
+
+So nested sequences started via macros:
+- **Do run** parent `pre_do` / `mid_do` / `post_do` (because parent is set).
+- **Do not run** child `pre_body` / `post_body`.
+- Still run child `pre_start` / `body` / `post_start`.
+
+## Example takeaway
+`` `uvm_do_pri_with(m_seq2, , {}) `` from seq1 → starts seq2 with `call_pre_post=0`:
+- seq2's `pre_body`/`post_body` never print.
+- seq1's `pre_do`/`mid_do`/`post_do` wrap seq2's `body`.
+
+Same when seq2 macros-starts seq3.
+
+## When ChipSutra prefers macros vs explicit
+| Case | Prefer |
+|------|--------|
+| Smoke / Generate TB | Explicit `start_item`/`finish_item` or test `seq.start(sqr)` |
+| Nested sub-sequences with inline constraints | `` `uvm_do_with `` / `` `uvm_do_on_with `` OK |
+| Need child `pre_body` objections | Explicit `child.start(sqr, this, -1, 1)` — not `` `uvm_do `` |
+
+## Beginner mistakes
+1. Expecting `pre_body`/`post_body` on macro-started child sequences — they are skipped.
+2. Using `` `uvm_do `` from the **test** instead of `seq.start(sqr)`.
+3. Ignoring `RNDFLD` warnings — randomization failed inside the macro.
+4. Forgetting objections still needed (macros do not raise them).
+
+## ChipSutra emit notes
+- Default smoke: no `` `uvm_do `` — use `start_item`/`finish_item` in `body`, test `start(sqr)`.
+- If emitting macros: document that nested `pre_body`/`post_body` are skipped; keep objections on outer sequence/test.
+- Macro catalog: `uvm_do.txt`. Lifecycle of plain `start()`: `uvm_sequence_start.txt`.

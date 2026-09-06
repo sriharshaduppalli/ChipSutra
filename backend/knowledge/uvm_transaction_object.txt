@@ -1,0 +1,60 @@
+# Transaction Object
+# Checklist to build a uvm_sequence_item. ChipSutra original wording.
+# Curriculum: ChipVerify Transaction Object (Advanced Topics).
+# Pair with: uvm_transaction.txt (full field design), uvm_field_macros.txt, uvm_object_print.txt.
+
+## What it is
+A transaction object packs the randomized (and response) fields for one DUT operation.
+It is data — extend **`uvm_sequence_item`**, not `uvm_component`.
+
+## Steps
+### 1. Class + factory + new
+```systemverilog
+class my_object extends uvm_sequence_item;
+  // utils macros below
+  function new(string name = "my_object");
+    super.new(name);   // name only — no parent (not a component)
+  endfunction
+endclass
+```
+Trap: some tutorials show `parent` on `new` — **wrong** for sequence items.
+
+### 2. Declare fields
+```systemverilog
+rand bit [15:0] addr;   // stimulus — rand
+rand bit [31:0] data;
+rand bit [2:0]  burst;
+// bit [31:0] rdata;    // response — usually NOT rand
+```
+Widths/names must match the protocol / user IF.
+
+### 3. Field macros (optional but common)
+```systemverilog
+`uvm_object_utils_begin(my_object)
+  `uvm_field_int(addr,  UVM_ALL_ON | UVM_NOCOMPARE)  // or UVM_NO_COMPARE per lib
+  `uvm_field_int(data,  UVM_ALL_ON)
+  `uvm_field_int(burst, UVM_ALL_ON)
+`uvm_object_utils_end
+```
+Flags control print/copy/compare/pack. Skip heavy macros on huge objects — use `do_*`
+hooks / `convert2string` instead (`uvm_object_print.txt`).
+
+### 4. Constraints
+```systemverilog
+constraint c_addr  { addr <= 16'hBFFF; }
+constraint c_burst { burst inside {[0:4]}; }
+```
+
+### 5. convert2string (recommended for logs)
+```systemverilog
+function string convert2string();
+  return $sformatf("addr=0x%0h data=0x%0h burst=0x%0h", addr, data, burst);
+endfunction
+```
+Use inside `` `uvm_info `` / scoreboard messages.
+
+## ChipSutra emit notes
+- Always `extends uvm_sequence_item` + `` `uvm_object_utils `` + `new(name)`.
+- Match user DUT ports; do not invent bus fields.
+- Smoke: field macros + constraints + optional `convert2string`.
+- Deeper design rules (REQ vs RSP, chapter `reg_transaction`): `uvm_transaction.txt`.

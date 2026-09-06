@@ -1,0 +1,79 @@
+# UVM Class Hierarchy (ChipVerify Introduction map)
+# SV = language; UVM = class library/methodology on top. ChipSutra original wording.
+# Pair with `uvm_basics_intro.txt` (what/why) and `uvm_patterns.txt` (emit APIs).
+# Curriculum: ChipVerify UVM Introduction. External: https://chipverify.com/tutorials/uvm
+
+## Why UVM exists (problems it solves)
+Pre-UVM pain: inconsistent TB structure, hard VIP reuse, painful multi-team integration,
+every team reinvented reporting/config/connections.
+UVM standardizes architecture so VIP from one team plugs into another; engineers focus on
+stimulus and checkers, not plumbing.
+
+## Components vs objects (critical)
+| Kind | Lifetime | Extends | Examples |
+|------|----------|---------|----------|
+| Component (static) | Exists whole sim | `uvm_component` | driver, monitor, sequencer, agent, env, scoreboard, test |
+| Object (dynamic) | Created/destroyed as data flows | `uvm_object` / `uvm_sequence_item` / `uvm_sequence` | transactions, configs, sequences |
+
+Key: **components process objects**. Driver (component) receives txn objects from sequencer
+and drives pins. Never extend a transaction from `uvm_component`.
+
+Classify drill (emit rule):
+- AXI write fields (addr/data/len) -> `uvm_sequence_item`
+- Driver converting txn to pins -> `uvm_driver` (`uvm_component`)
+- Agent config (widths, active/passive) -> `uvm_object`
+- Monitor reconstructing txns -> `uvm_monitor` (`uvm_component`)
+- Sequence generating N random txns -> `uvm_sequence` (`uvm_object` lineage)
+
+## Two hierarchy branches
+Root: `uvm_object` (print, copy, compare, pack/unpack for all). Deep: `uvm_object.txt`.
+Full base chain including `uvm_report_object` / deprecated `uvm_transaction` / `uvm_root`: `uvm_base_classes.txt`.
+
+### uvm_component branch (infrastructure)
+Deep constructor/build/lookup rules: `uvm_component.txt`.
+- `uvm_driver` - txn -> pin wiggles via virtual IF
+- `uvm_monitor` - pins -> txn; broadcast on analysis port
+- `uvm_sequencer` - arbitrate sequences; feed driver
+- `uvm_agent` - bundle sequencer+driver+monitor for one protocol IF
+- `uvm_env` - top container: agents, scoreboards, coverage
+- `uvm_scoreboard` - expected vs actual
+- `uvm_subscriber` - listen (coverage / checkers)
+- `uvm_test` - scenario / knobs / start sequences
+
+### uvm_transaction branch (data)
+- `uvm_sequence_item` - one protocol transaction (fields + rand)
+- `uvm_sequence` - reusable stimulus container; can nest/start other sequences
+
+## Major features (emit map)
+1. **Objects** - use utils/field macros for print/copy/compare; config classes extend `uvm_object`.
+2. **Sequences** - stimulus in `body()`; compose via `seq.start(m_sequencer)`; do not hardcode stimulus in driver.
+3. **Sequence items** - `rand` fields + `` `uvm_object_utils `` / field macros matching protocol.
+4. **Components** - factory `type_id::create` in `build_phase`; never `new` children in `run_phase`.
+5. **Phases** - build (construct) -> connect (TLM) -> run (time + objections) -> extract/check/report/final.
+6. **TLM** - ports/exports/imps; analysis_port 1-to-many `ap.write(txn)` monitor -> scoreboard/coverage.
+7. **RAL** - CSR maps, frontdoor/backdoor, built-in reg tests — only when user provides register map.
+
+## Sequences in practice
+- Compose patterns (W-R-R-W) from smaller sequences; nest for boot/stress/firmware-like flows.
+- SoC: boot sequence (prog CSRs, init memory) vs stress (interleave DMA/IRQ/cache) — still one item type + sequences.
+- ChipSutra smoke: one simple random sequence unless user asks for nested library.
+
+## TLM one-liners
+- Blocking put/get: producer-consumer handshake.
+- Analysis port: nonblocking broadcast (monitor fan-out).
+- `uvm_tlm_fifo` / analysis fifo: buffer between components.
+- Connect in `connect_phase` only — declare ports in components, wire in env.
+
+## Beginner mistakes (avoid in emit)
+1. Transaction extends `uvm_component` — wrong; use `uvm_sequence_item`.
+2. Hand-writing print/copy/compare — use `` `uvm_object_utils `` / `` `uvm_component_utils `` + field macros.
+3. Learning UVM without SV OOP — prefer methodology=sv layered first.
+4. Building components in `run_phase` — build in `build_phase`, connect in `connect_phase`.
+5. Stimulus hardcoded in driver — put patterns in sequences.
+
+## ChipSutra emit checklist (methodology=uvm)
+- Hierarchy: test -> env -> agent(sqr,drv,mon) -> scoreboard; top module + IF + config_db + `run_test()`.
+- Item = object; driver/monitor/agent/env/test = components with utils macros.
+- Monitor: `uvm_analysis_port #(txn) ap;` then `ap.write(tx)`.
+- Scoreboard: analysis imp/fifo; independent predict — never noop pass.
+- Exact DUT ports; no invented RAL; no ovm_* mix; note commercial-sim / Verilator UVM limits.

@@ -1,0 +1,60 @@
+# HDL access routines
+# DPI/PLI backdoor peek/poke helpers. ChipSutra original wording.
+# Curriculum: ChipVerify HDL access routines.
+# Pair with: uvm_ral_backdoor.txt (RAL uses these under the hood), uvm_config_db.txt.
+
+## What / when
+UVM provides DPI-C helpers to check, deposit, force, release, and read HDL signals
+by hierarchical **string path** (e.g. `"tb.a.b.cfg"`). Used for:
+- Ad-hoc backdoor inject / peek in tests
+- RAL backdoor (`UVM_BACKDOOR`) when HDL paths are registered
+
+Prefer **frontdoor / IF drive** for functional verify. HDL access skips protocol logic
+and needs a simulator with working UVM DPI/PLI support.
+
+Hierarchy sketch:
+```systemverilog
+module B; reg [3:0] cfg; endmodule
+module A; B b(); endmodule
+module tb; A a(); initial run_test("base_test"); endmodule
+// path: "tb.a.b.cfg"
+```
+
+## API cheat sheet
+All return `1` on success, `0` on failure (check and `` `uvm_error ``).
+
+| Call | Role |
+|------|------|
+| `uvm_hdl_check_path(path)` | `1` if path exists |
+| `uvm_hdl_deposit(path, value)` | Place value; lasts until DUT/other driver changes it |
+| `uvm_hdl_force(path, value)` | Force; **must** later `release` (or release_and_read) |
+| `uvm_hdl_force_time(path, value, t)` | Force for `t`; auto-release. If `t==0`, acts like deposit |
+| `uvm_hdl_release(path)` | Release prior force |
+| `uvm_hdl_release_and_read(path, value)` | Release force; `value` applied/read per API (inout) |
+| `uvm_hdl_read(path, value)` | Sample current value into `value` |
+
+```systemverilog
+if (!uvm_hdl_check_path("tb.a.b.cfg"))
+  `uvm_fatal("HDL", "path missing")
+if (!uvm_hdl_deposit("tb.a.b.cfg", 4'h9))
+  `uvm_error("HDL", "deposit failed")
+if (!uvm_hdl_read("tb.a.b.cfg", rdata))
+  `uvm_error("HDL", "read failed")
+```
+
+## Deposit vs force
+| | Deposit | Force |
+|--|---------|-------|
+| Persistence | Until something else drives | Held until release |
+| Cleanup | None | `uvm_hdl_release` / `force_time` auto |
+
+Use force sparingly — easy to leave nets stuck if release is forgotten.
+
+## ChipSutra emit notes
+- Smoke: **never** emit HDL DPI peeks/pokes — drive via IF / sequences.
+- Emit only when user asks for backdoor inject, force, or path debug.
+- Always `check_path` (or handle fail) before deposit/force/read.
+- Prefer RAL `UVM_BACKDOOR` + registered paths when a register model exists
+  (`uvm_ral_backdoor.txt`) over ad-hoc string paths in every test.
+- Verilator / limited DPI: these often **fail** — warn and use frontdoor.
+- Never invent hierarchical paths — require user/RTL names.

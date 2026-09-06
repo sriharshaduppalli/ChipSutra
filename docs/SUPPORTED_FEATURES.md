@@ -51,6 +51,7 @@ Optional cloud LLMs (Anthropic/OpenAI/Emergent) are **supported when configured*
 | Yosys synthesis / equivalence | 🧪 | Synth + internal equiv; exports `synth.json` / netlist |
 | eqy LEC | 🧪 | Needs `eqy` on PATH; else falls back to Yosys equiv + note |
 | OpenSTA scaffold | 🧪 | Generates SDC+TCL; full STA needs liberty (not included) |
+| Open Lab pipeline | 🧪 | One-click lint→sim→synth→STA via `POST /api/lab/stream` + UI; STA mocks without `.lib` |
 | cocotb scaffold + runner | 🧪 | Scaffold + `POST /cocotb/stream`; mock if tools missing |
 | Questa / VCS / Xcelium | ❌ | Enterprise roadmap |
 

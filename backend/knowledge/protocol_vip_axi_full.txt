@@ -1,0 +1,21 @@
+# AXI4 burst / ACE / CHI emit bounds (ChipSutra)
+# Lite slaves stay on protocol_vip_axi_lite.txt. Do not invent snoop or CHI flit timing.
+
+## axi4
+- Burst pins (AWLEN/ARLEN/AWSIZE/AWBURST or s_axi_awlen) mean this is not Lite.
+- Do not use the 4-reg Lite golden. Require user VIP/BFM for INCR/WRAP/FIXED and ID reordering.
+- VALID/READY rules still apply: transmitter must not wait for READY before VALID; hold VALID until handshake.
+- WLAST/RLAST must match the beat count from user AxLEN. Do not invent QoS/REGION/LOCK unless those ports exist.
+- Scoreboard: user burst BFM updates model_reg; ChipSutra may outline txn fields only.
+
+## axi4_burst
+- Same as axi4. User knob axi_variant=burst or parsed AWLEN.
+- Exclusive / ACE snoop channels are out of scope unless ACE ports exist.
+
+## ace
+- ACE / ACE-Lite: extra AC/CR/CD snoop channels. Use user coherency VIP — do not invent snoop timing or shareable-domain maps.
+- If only AXI4-Lite pins exist, do not emit ACE.
+
+## chi
+- AMBA CHI: REQ/RSP/SNP/DAT flits. SoC/VIP level. Do not emit gate-level CHI TB from a 7B model.
+- Require user CHI VIP and topology. Outline virtual-seq only when scale=subsystem/soc and user listed agents.

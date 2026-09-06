@@ -47,6 +47,13 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 dump.rdb
+frontend/*.log
+backend/storage/
+backend/scripts/eval_suite/chipsutra_out/
+backend/scripts/eval_suite/sv_vs_uvm_out/
+backend/scripts/eval_suite/reports/
+backend/scripts/eval_suite/mutation_results.json
+backend/scripts/eval_suite/comparison_results.json
 
 # System files
 .DS_Store

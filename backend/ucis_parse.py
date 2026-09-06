@@ -18,13 +18,26 @@ _MAX_HOLES = 40
 # UCIS scopes we understand (compared against the namespace-stripped tag, lowercased)
 _UCIS_TAGS = {
     "coverageinstance",
+    "instancecoverages",
     "covergroup",
+    "covergroupcoverages",
     "coverpoint",
+    "coverpointcoverages",
     "cross",
+    "crosscoverages",
     "statement",
     "branch",
     "toggle",
+    "togglecoverage",
     "fsm",
+}
+
+_KIND_ALIAS = {
+    "instancecoverages": "coverageinstance",
+    "covergroupcoverages": "covergroup",
+    "coverpointcoverages": "coverpoint",
+    "crosscoverages": "cross",
+    "togglecoverage": "toggle",
 }
 
 _NAME_ATTRS = ("name", "moduleName", "instanceName", "alias", "key", "id")
@@ -178,6 +191,7 @@ def parse_ucis_xml(text: str) -> dict:
         kind = _local(elem.tag).lower()
         if kind not in _UCIS_TAGS:
             continue
+        kind = _KIND_ALIAS.get(kind, kind)
         pct, cov, tot = _pct_of(elem)
         if pct is None:
             continue

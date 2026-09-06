@@ -1,0 +1,15 @@
+# Optional NVIDIA GPU for Ollama (faster ChipSutra-VLSI first token).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#
+# Requires NVIDIA Container Toolkit. CPU hosts should ignore this file.
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

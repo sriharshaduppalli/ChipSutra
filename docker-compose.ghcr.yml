@@ -1,0 +1,14 @@
+# ChipSutra GHCR overlay — pull the published backend instead of rebuilding it.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#   # omit --build so Compose uses the pulled image
+#
+# Pin a release:  CHIPSUTRA_TAG=1.2.0 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+#
+# Frontend stays a local build: the GHCR frontend image bakes
+# REACT_APP_BACKEND_URL=https://api.chipsutra.org (production only).
+
+services:
+  backend:
+    image: ghcr.io/sriharshaduppalli/chipsutra-backend:${CHIPSUTRA_TAG:-edge}
+    pull_policy: always

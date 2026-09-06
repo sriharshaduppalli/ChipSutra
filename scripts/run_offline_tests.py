@@ -24,6 +24,22 @@ SUITES = [
     "tests/test_rag_and_golden.py",
     "tests/test_rtl_ports_and_feedback.py",
     "tests/test_wiring.py",
+    "tests/test_closed_loop.py",
+    "tests/test_evidence_pack.py",
+    "tests/test_spec_debug.py",
+    "tests/test_dv_mutation.py",
+    "tests/test_ollama_runtime.py",
+    "tests/test_ci_review.py",
+    "tests/test_formal_pack.py",
+    "tests/test_sim_adapter.py",
+    "tests/test_opensta_demo.py",
+    "tests/test_scale_emit.py",
+    "tests/test_signoff.py",
+    "tests/test_sva_lint.py",
+    "tests/test_fcov_lint.py",
+    "tests/test_asfigo_bridge.py",
+    "tests/test_asfigo_packs.py",
+    "tests/test_fpga_lint.py",
 ]
 
 # Mixed suite: only the checks that need no services. `fresh_clone` is excluded

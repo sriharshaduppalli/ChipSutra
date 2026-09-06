@@ -1,0 +1,88 @@
+# UVM Test [uvm_test]
+# Builds env, configures knobs, starts sequence(s) with objections. Reuse one env across many tests.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Test.
+# Pair with: uvm_env.txt, uvm_sequence_usage.txt. Top calls run_test() — next article.
+
+## Role
+- Verify one scenario/feature; many tests share the same env.
+- Test changes: which sequence, config_db knobs, factory overrides — not VIP wiring.
+- Do not rebuild agent/sb hierarchy in every test — create `reg_env` once in base test.
+
+## Base test skeleton
+```systemverilog
+class reg_test extends uvm_test;
+  `uvm_component_utils(reg_test)
+  reg_env m_top_env;
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    m_top_env = reg_env::type_id::create("m_top_env", this);
+  endfunction
+
+  virtual function void end_of_elaboration_phase(uvm_phase phase);
+    uvm_top.print_topology();
+  endfunction
+
+  virtual task run_phase(uvm_phase phase);
+    reg_sequence m_seq = reg_sequence::type_id::create("m_seq");
+    phase.raise_objection(this);
+    m_seq.start(m_top_env.m_agent.m_sequencer);
+    phase.drop_objection(this);
+  endtask
+endclass
+```
+- Path `m_top_env.m_agent.m_sequencer` requires **active** agent (passive has no sequencer).
+- Objections wrap `start()` — see `uvm_sequence_usage.txt`.
+
+## Default sequence (alternative to hand start)
+```systemverilog
+function void start_of_simulation_phase(uvm_phase phase);
+  super.start_of_simulation_phase(phase);
+  uvm_config_db#(uvm_object_wrapper)::set(
+    this, "m_top_env.m_agent.m_sequencer.run_phase",
+    "default_sequence", reg_sequence::type_id::get());
+endfunction
+```
+Use **either** explicit `start()` in run_phase **or** default_sequence — not both for the same sqr.
+
+## Derivative tests (reuse env)
+```systemverilog
+class reg_write_only_sequence extends reg_sequence;
+  `uvm_object_utils(reg_write_only_sequence)
+  // body: randomize() with { wr_en == 1; rd_en == 0; }
+endclass
+
+class reg_write_only_test extends reg_test;
+  `uvm_component_utils(reg_write_only_test)
+  // no build_phase — inherit env create
+  virtual task run_phase(uvm_phase phase);
+    reg_write_only_sequence m_seq = reg_write_only_sequence::type_id::create("m_seq");
+    phase.raise_objection(this);
+    m_seq.start(m_top_env.m_agent.m_sequencer);
+    phase.drop_objection(this);
+  endtask
+endclass
+```
+Override only what changes (usually `run_phase`); inherit `build_phase`.
+
+## Launch
+- Top module: `run_test("reg_test")` or `run_test()` + `+UVM_TESTNAME=reg_test`.
+- Virtual IF set from top via config_db **before** `run_test` — see `uvm_tb_top.txt`.
+
+## Beginner mistakes
+1. No objection — sim ends before sequence finishes.
+2. Copy-paste build_phase into every derived test — update env in one place only.
+3. Starting sequence on passive agent (null sequencer).
+4. Default_sequence + explicit start both firing on same sequencer.
+
+## ChipSutra emit notes (methodology=uvm)
+- Emit base test: create env, print_topology optional, raise/drop + `seq.start(env.agent.sequencer)`.
+- Extra scenarios: derived test + derived sequence with inline constraints.
+- Factory register every test with `` `uvm_component_utils ``.
+- Pure SV layered: `test` class configures/runs env (no uvm_test base).
+- Objection details (drain, auto, plusargs): `uvm_objection.txt`.
+- Type/instance factory overrides before env create: `uvm_factory_override.txt`.

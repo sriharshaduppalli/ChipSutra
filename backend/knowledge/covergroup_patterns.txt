@@ -1,34 +1,83 @@
-# Covergroup / coverage-closure patterns (RAG). Prefer user RTL ports and real bins over invented ones.
+# Covergroup / functional coverage patterns (deep RAG)
+# Curriculum map: https://chipverify.com/systemverilog/systemverilog-functional-coverage
+# Prefer user RTL ports and real bins. Coverage ≠ proof of completeness if bins omit features.
 
-## Covergroup basics
-- Define covergroup near the monitor or a dedicated cov collector; sample on transaction or clock edge.
-- `coverpoint` for discrete enums/opcodes; `bins` for legal values; `illegal_bins` / `ignore_bins` for reserved.
-- `cross` only when both coverpoints are meaningful together (opcode × status, addr_range × burst).
-- Name covergroups after the protocol or DUT feature (`cg_axi_aw`, `cg_fifo_depth`).
-- Prefer `option.per_instance = 1` when multiple agents share a type.
+## What functional coverage measures
+- Which design features / scenarios tests exercised (not code coverage alone).
+- CRV regressions: merge databases across seeds/tests to see union of hits.
+- Limitation: missing coverpoints for unspecified features → false "100%" — mirror the spec.
 
-## Binning strategies
-- Enum / one-hot: one bin per legal encoding; illegal_bins for reserved encodings.
-- Counters / FIFO depth: `{0}`, `{[1:almost_full]}`, `{full}`, transition bins empty→full and full→empty.
-- Addresses: low/mid/high ranges matching DUT map; align bins to word/byte boundaries the DUT uses.
-- Data patterns: all0, all1, walking1, walking0, random — only if scoreboard/DUT cares.
-- Handshake timing: single-cycle ready, multi-cycle backpressure, zero-latency ready-before-valid when legal.
+## Covergroup structure
+- `covergroup name;` … `endgroup` — create with `cg = new;` (or `new(this)` in UVM).
+- `coverpoint var { bins ... }` — variables/expressions of interest.
+- Multiple covergroups can sample same vars with different bin strategies.
+- Name after feature: `cg_fifo_fill`, `cg_axi_resp`.
 
-## Protocol-oriented coverpoints (use only signals present in RTL)
-- AXI/AXI-Lite: AW/AR len/size/burst (if present), WSTRB patterns, BRESP/RRESP OKAY vs SLVERR/DECERR, idle vs back-to-back.
-- APB: PSEL/PENABLE phases, PWRITE, PREADY wait states, PSLVERR.
-- AXI-Stream: TVALID/TREADY stall patterns, TLAST alignment, TKEEP sparse vs contiguous.
-- FIFO: push when full (reject), pop when empty (reject), simultaneous push/pop, fill watermark crosses.
-- Interrupts / status: sticky vs pulse, clear-on-read, mask enable/disable.
+## Sampling triggers
+- Event: `covergroup cg @(posedge clk);` or `@ (event e);`
+- Explicit: `cg.sample();` after building a transaction / at monitor write.
+- Conditional: `coverpoint mode iff (!rst_n == 0)` — skip during reset.
+- `cg.stop()` / `cg.start()` to gate whole group around reset or idle.
+- UVM: sample in monitor `write()` or analysis export; `option.per_instance = 1` for multi-agent.
 
-## Closing coverage holes
-- Rank holes worst-first; write one directed sequence/task per high-priority hole named after the hole.
-- Add a matching coverpoint/bin that proves the hole is now hittable; keep illegal_bins honest.
-- Medium/low holes: constrained-random with explicit `constraint` blocks targeting the missing bins.
-- After new tests, re-sim with deterministic seeds derived from hole names; compare before/after overall %.
-- Never invent ports or timing; if RTL lacks a signal, skip that coverpoint.
+## Binning vocabulary
+- Explicit: `bins featureA = {0}; bins featureB = {[1:3]};`
+- Array of bins: `bins common[] = {4:$};` — one bin per value in range.
+- `bins reserve = default;` — catch-all for unlisted values (review if hit often).
+- `illegal_bins` — must never hit (reserved opcodes); fail/report if hit.
+- `ignore_bins` — legal but not interesting for closure %.
+- Transition: `bins e2f = (0 => 15);` empty→full style for FIFO depth.
+- Wildcard / others: use carefully; prefer named legal encodings from spec.
 
-## Verilator / OSS-friendly notes
-- Functional covergroups in SV TB compile under Verilator when sampled in TB (not all vendor UCIS features).
-- For Verilator coverage reports, also exercise statement/toggle via directed stimulus even without UVM covergroups.
-- Export or parse tool reports (UCIS/IMC/URG/.rpt) in ChipSutra Coverage page, then use Coverage-Hole Tests module.
+## Cross coverage
+- `cross cp_a, cp_b;` — joint scenarios (opcode × status, addr_range × burst).
+- Cross only meaningful pairs; huge crosses explode bins and slow merge.
+- Ignore illegal crosses: `ignore_bins bad = binsof(cp_a) intersect {IDLE} && binsof(cp_b) intersect {ERR};`
+
+## Options and reporting
+- `option.per_instance = 1;` when type shared across agents.
+- Name covergroups `cg_*` and coverpoints `cp_*`.
+- Prefer a few named crosses; huge crosses explode bins and slow merge.
+- Vendor switches required to dump UCIS/IMC/URG — ChipSutra Coverage page parses reports when provided.
+- Merge multi-test DBs before declaring closure.
+
+## Protocol-oriented coverpoints (signals must exist in RTL)
+- AXI/AXI-Lite: AW/AR size/burst/len if present; WSTRB; BRESP/RRESP; back-to-back vs idle.
+- APB: setup/access phases, PWRITE, PREADY waits, PSLVERR.
+- AXI-Stream: TVALID/TREADY stalls, TLAST, TKEEP sparse vs full.
+- FIFO: depth bins {0}, mid, full; push-when-full / pop-when-empty rejects; simultaneous push/pop.
+- Interrupts: sticky vs pulse; mask on/off; clear-on-read if applicable.
+- Counter: enable high/low; wrap; reset-during-count transition bins.
+
+## Closing coverage holes (ChipSutra loop)
+1. Rank holes worst-first from report.
+2. Add directed sequence/task named after the hole; matching bin must be hittable.
+3. Medium holes: tighten constraints / dist toward missing bins.
+4. Re-sim deterministic seeds; compare before/after %.
+5. Never invent ports — if signal absent, drop that coverpoint.
+
+## Minimal covergroup sketch
+```
+covergroup cg_cnt @(posedge clk);
+  cp_en: coverpoint enable { bins off = {0}; bins on = {1}; }
+  cp_cnt: coverpoint count {
+    bins zero = {0};
+    bins mid  = {[1:14]};
+    bins max  = {15};
+  }
+  x_en_cnt: cross cp_en, cp_cnt;
+endgroup
+```
+Instantiate after reset release; sample every cycle or on enable edges.
+
+## Verilator / OSS notes
+- Covergroups in TB often compile; full UCIS feature set is vendor-specific.
+- Pair functional bins with code/toggle coverage for OSS flows.
+- ChipSutra Coverage-Hole Tests module consumes parsed hole lists → new stimulus.
+
+## Anti-patterns
+- Coverpoints on signals never driven → permanent holes / wasted bins.
+- Enormous unconstrained crosses.
+- Declaring 100% while illegal_bins never defined for reserved encodings.
+- Sampling during reset without `iff` → polluted early bins.
+- Inventing AXI coverpoints on a non-AXI DUT.

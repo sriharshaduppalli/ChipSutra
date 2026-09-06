@@ -1,0 +1,71 @@
+# UVM TLM Sockets (TLM 2.0)
+# Bidirectional initiator/target sockets with b_transport (+ timing annotation).
+# ChipSutra original wording. Curriculum: ChipVerify UVM TLM Sockets.
+# Pair with: uvm_tlm.txt. Prefer put/get/analysis for RTL VIP smoke.
+
+## What sockets are
+TLM 2.0 style endpoints on `uvm_port_base`:
+- **Initiator** starts the transfer (`uvm_tlm_b_initiator_socket #(T)`).
+- **Target** receives and implements transport (`uvm_tlm_b_target_socket #(IMP, T)`).
+- Connect **only** initiator ↔ target (not initiator↔initiator).
+- Supports asynchronous bidirectional semantics; timing via `uvm_tlm_time` delay arg on `b_transport`.
+
+Use when modeling loosely timed / approx-timed abstract models or TLM2 VIP.
+ChipSutra RTL smoke: stick to `seq_item_port`, analysis ports, optional put/get/FIFO — **do not** emit sockets unless asked.
+
+## Initiator
+```systemverilog
+uvm_tlm_b_initiator_socket #(simple_packet) initSocket;
+uvm_tlm_time delay;
+
+function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  initSocket = new("initSocket", this);
+  delay = new();
+endfunction
+
+task run_phase(uvm_phase phase);
+  simple_packet pkt = simple_packet::type_id::create("pkt");
+  assert(pkt.randomize());
+  initSocket.b_transport(pkt, delay);
+endtask
+```
+
+## Target
+```systemverilog
+uvm_tlm_b_target_socket #(target, simple_packet) targetSocket;
+
+function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  targetSocket = new("targetSocket", this);
+endfunction
+
+task b_transport(simple_packet pkt, uvm_tlm_time delay);
+  // consume / respond; may use delay for timing annotation
+endtask
+```
+
+## Connect
+```systemverilog
+// env connect_phase
+init.initSocket.connect(tgt.targetSocket);
+```
+
+## vs TLM1 ports (ChipSutra default)
+| Need | Prefer |
+|------|--------|
+| Driver ↔ sequencer | `seq_item_port` |
+| Monitor → SB/cov | `uvm_analysis_port` |
+| Simple A→B buffer | put/get + `uvm_tlm_fifo` |
+| TLM2 / SystemC-style transport | blocking/nonblocking **sockets** + `b_transport` / `nb_transport_*` |
+
+## Beginner mistakes
+1. Connecting two initiators or two targets.
+2. Forgetting to implement `b_transport` on the target component.
+3. Wrong socket template args (`#(IMP, T)` on target).
+4. Using sockets in a pin-level APB/AXI UVM agent “just because”.
+
+## ChipSutra emit notes
+- Default Generate: **no sockets**.
+- If user asks TLM2/socket demo: initiator + target + `b_transport` + env connect; keep Packet as `uvm_object`/`sequence_item` with utils.
+- Overview: `uvm_tlm.txt`. Analysis (smoke path): `uvm_tlm_analysis.txt`.

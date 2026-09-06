@@ -13,14 +13,17 @@ export default function SynthPanel({ project, selectedFileIds, onClose, onArtifa
   const [artifacts, setArtifacts] = useState([]);
   const [mode, setMode] = useState("synth");
   const [topModule, setTopModule] = useState("");
+  const [goldIds, setGoldIds] = useState([]);
+  const [gateIds, setGateIds] = useState([]);
 
   const selected = selectedFileIds.filter((fid) => {
     const f = (project.files || []).find((x) => x.id === fid);
     return f && ["v", "sv"].includes((f.ext || "").toLowerCase());
   });
+  const rtlFiles = (project.files || []).filter((f) => ["v", "sv"].includes((f.ext || "").toLowerCase()));
   const rtlIds = selected.length
     ? selected
-    : (project.files || []).filter((f) => ["v", "sv"].includes((f.ext || "").toLowerCase())).map((f) => f.id);
+    : rtlFiles.map((f) => f.id);
 
   const run = async () => {
     if (!rtlIds.length) return toast.error("Select or upload synthesizable RTL");
@@ -34,6 +37,9 @@ export default function SynthPanel({ project, selectedFileIds, onClose, onArtifa
           rtl_file_ids: rtlIds,
           top_module: topModule || null,
           mode,
+          ...(mode === "eqy" && goldIds.length && gateIds.length
+            ? { gold_file_ids: goldIds, gate_file_ids: gateIds }
+            : {}),
         }),
       });
       if (!res.ok || !res.body) throw new Error("Synthesis stream failed");
@@ -109,6 +115,37 @@ export default function SynthPanel({ project, selectedFileIds, onClose, onArtifa
             {running ? <><Loader2 size={12} className="animate-spin" /> Running</> : <><Play size={12} /> Run</>}
           </button>
         </div>
+        {mode === "eqy" && (
+          <div className="px-4 py-3 border-b border-[#1E293B] grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="lec-revision-picks">
+            <label className="font-mono text-[10px] text-slate-400">
+              GOLD (RTL revision)
+              <select
+                multiple
+                value={goldIds}
+                onChange={(e) => setGoldIds(Array.from(e.target.selectedOptions).map((o) => o.value))}
+                className="w-full mt-1 h-24 bg-[#0B0E14] border border-[#1E293B] px-2 py-1 text-xs font-mono text-slate-200"
+                data-testid="lec-gold"
+              >
+                {rtlFiles.map((f) => <option key={f.id} value={f.id}>{f.original_filename}</option>)}
+              </select>
+            </label>
+            <label className="font-mono text-[10px] text-slate-400">
+              GATE (netlist / other revision)
+              <select
+                multiple
+                value={gateIds}
+                onChange={(e) => setGateIds(Array.from(e.target.selectedOptions).map((o) => o.value))}
+                className="w-full mt-1 h-24 bg-[#0B0E14] border border-[#1E293B] px-2 py-1 text-xs font-mono text-slate-200"
+                data-testid="lec-gate"
+              >
+                {rtlFiles.map((f) => <option key={f.id} value={f.id}>{f.original_filename}</option>)}
+              </select>
+            </label>
+            <div className="md:col-span-2 font-mono text-[10px] text-slate-500">
+              Leave both empty to compare selected RTL vs the auto-synthesized netlist. Pick files on both sides for multi-revision LEC (Yosys/eqy, not Formality).
+            </div>
+          </div>
+        )}
         {stats && (
           <div className="px-4 py-2 border-b border-[#1E293B] font-mono text-xs text-emerald-400">
             cells={stats.cells ?? "—"} · wires={stats.wires ?? "—"} · memories={stats.memories ?? "—"} · equivalence={stats.equivalence ?? "n/a"}

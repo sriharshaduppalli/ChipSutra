@@ -1,0 +1,64 @@
+# UVM Virtual Sequencer
+# Sequencer that holds handles to real sequencers — no driver, no items.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Virtual Sequencer.
+# Pair with: uvm_virtual_sequence.txt, uvm_sequencer.txt, uvm_env.txt.
+
+## What it is
+There is **no** separate `uvm_virtual_sequencer` class — use `uvm_sequencer`
+(often unparameterized / default) configured as a coordinator:
+- **Not** connected to a driver.
+- Does **not** process `uvm_sequence_item` traffic itself.
+- Holds typed handles to agent/env sequencers (APB, AXI, UART, …).
+- Runs **virtual sequences** that `start` sub-sequences on those handles.
+
+Enables hierarchical SoC scenarios: one vseqr in top env → many interface sequencers.
+
+## Create steps
+1. Extend `uvm_sequencer` + `` `uvm_component_utils `` + two-arg `new`.
+2. Declare sub-sequencer handles (name by interface).
+3. Create in env `build_phase`.
+4. Assign handles in env `connect_phase` (after agents exist).
+
+```systemverilog
+class my_virtual_sequencer extends uvm_sequencer;
+  `uvm_component_utils(my_virtual_sequencer)
+  apb_sequencer  m_apb_seqr;
+  wb_sequencer   m_wb_seqr;
+  pcie_sequencer m_pcie_seqr;
+  function new(string name = "my_virtual_sequencer", uvm_component parent = null);
+    super.new(name, parent);
+  endfunction
+endclass
+
+// env
+m_vseqr = my_virtual_sequencer::type_id::create("m_vseqr", this);
+// connect_phase:
+m_vseqr.m_apb_seqr  = m_apb_agent.m_sequencer;
+m_vseqr.m_wb_seqr   = m_wb_agent.m_sequencer;
+m_vseqr.m_pcie_seqr = m_pcie_env.m_agent.m_sequencer;
+```
+Optional: pass handles via `uvm_config_db` — keep keys unique in large envs.
+
+## Usage guidelines
+| Do | Don't |
+|----|-------|
+| Run virtual sequences on the vseqr | Connect vseqr `seq_item_export` to a driver |
+| Sub-seq: `start(p_sequencer.m_apb_seqr)` | `` `uvm_do(item) `` on the virtual sequencer (no items) |
+| Prefer explicit `start()` over macros | Assume handles always non-null |
+| Null-check before start (passive agent) | Skip connect_phase assignment |
+
+```systemverilog
+if (p_sequencer.m_apb_seqr == null)
+  `uvm_fatal("VSEQR", "APB sequencer null — passive agent or missed connect?")
+else
+  apb_sub_seq.start(p_sequencer.m_apb_seqr);
+```
+If using macros on sub-sequencers: `` `uvm_do_on `` / `` `uvm_do_on_with `` — not bare `` `uvm_do `` for items on the vseqr.
+
+Virtual sequencers can nest (higher vseqr holds lower vseqr handles) for layered SoC control.
+
+## ChipSutra emit notes
+- Single-IF smoke: **no** virtual sequencer.
+- Multi-IF: create vseqr in env, wire in `connect_phase`, virtual seq with `` `uvm_declare_p_sequencer `` — see `uvm_virtual_sequence.txt`.
+- Test: `m_vseq.start(m_env.m_vseqr)` + objections.
+- Passive agents: leave handle null and guard in vseq, or omit that IF from the scenario.

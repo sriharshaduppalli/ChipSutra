@@ -1,0 +1,81 @@
+# UVM Transaction / sequence_item
+# One operation as data: create, randomize, pass sequencer -> driver.
+# ChipSutra original wording. Curriculum: ChipVerify Defining the transaction class.
+# Chapter DUT: uvm_first_tb_dut.txt. Base object: uvm_object.txt.
+
+## Why uvm_sequence_item (not bare uvm_object)
+- Transactions are data (`uvm_object` family) but travel sequencer -> driver.
+- `uvm_sequence_item` adds sequencer/sequence bookkeeping fields `uvm_object` lacks.
+- Rule: **anything sent to a driver extends `uvm_sequence_item`**.
+- Plain configs/status (never on seq_item_port) may extend `uvm_object` only.
+
+## Field design
+- Mirror interface / protocol: names + widths match DUT IF (e.g. `reg_if`).
+- **Request** fields: `rand` (what TB asks for).
+- **Response** fields: not `rand` (monitor/driver fill after transfer).
+- Never invent ports — match user RTL / chapter IF.
+
+## Chapter example: reg_transaction
+Matches `reg_if` / `reg_block` (16x8, 4-bit addr):
+
+```systemverilog
+class reg_transaction extends uvm_sequence_item;
+  rand bit       wr_en;
+  rand bit       rd_en;
+  rand bit [3:0] addr;
+  rand bit [7:0] wdata;
+       bit [7:0] rdata;   // response — NOT rand
+
+  constraint wr_xor_rd_c { wr_en != rd_en; }  // exactly one of write/read
+
+  `uvm_object_utils_begin(reg_transaction)
+    `uvm_field_int(wr_en,  UVM_ALL_ON)
+    `uvm_field_int(rd_en,  UVM_ALL_ON)
+    `uvm_field_int(addr,   UVM_ALL_ON)
+    `uvm_field_int(wdata,  UVM_ALL_ON)
+    `uvm_field_int(rdata,  UVM_ALL_ON)
+  `uvm_object_utils_end
+
+  function new(string name = "reg_transaction");
+    super.new(name);
+  endfunction
+endclass
+```
+
+### Constraint intent
+`wr_en != rd_en` on 1-bit signals => exactly one asserted (never both, never neither).
+Removes DUT ambiguity (chapter RTL prefers write if both high).
+Without constraint, `randomize()` can still succeed but may generate illegal both/neither.
+
+### Macros
+- `` `uvm_object_utils_begin/end ``: factory registration + field automation.
+- `` `uvm_field_int(..., UVM_ALL_ON) ``: print/copy/compare (and pack) for that field.
+- Mandatory `new(string name=...)` calling `super.new(name)` for factory naming.
+
+## Create + randomize (emit pattern)
+```systemverilog
+reg_transaction tr = reg_transaction::type_id::create("tr");
+if (!tr.randomize()) `uvm_error("RAND", "randomize failed")
+```
+
+## Idle / neither (optional exercise)
+If idle cycles needed: add e.g. `rand bit idle` (or encode op enum) and constrain
+so idle XOR write XOR read — never combine idle with wr/rd.
+
+## Protocol UVCs in practice
+AXI/APB/AHB/custom: **one** sequence_item type per protocol transfer with that protocol's fields.
+Same shape; larger field lists.
+
+## Beginner mistakes
+1. Missing `new(string name=...)` — factory/create compile issues.
+2. Marking response (`rdata`) as `rand` — clobbers DUT-filled data.
+3. Extending `uvm_object` or `uvm_component` for driver-bound items.
+4. Noop / missing constraints that allow illegal bus combinations.
+5. Field widths not matching IF/DUT.
+
+## ChipSutra emit notes (methodology=uvm)
+- Always: `extends uvm_sequence_item`, utils begin/end + fields, real constraints, `type_id::create`.
+- Counter/FIFO/AXI Generate: fields = DUT-driven inputs (+ needed responses); constraints legalize stimulus.
+- Scoreboard uses same item type; independent predict — never circular golden.
+- Prefer enum `op_e {WRITE, READ}` when clearer than dual enables — still constrain exclusivity.
+- Short recipe checklist: `uvm_transaction_object.txt`.

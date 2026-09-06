@@ -1,0 +1,10 @@
+==============================================================
+URG Report (Synopsys-style text fixture — not a vendor dump)
+==============================================================
+Line Coverage: 81.25%
+Condition Coverage: 44.00%
+Toggle Coverage: 62.50%
+FSM Coverage: 50.00%
+Assert Coverage: 90.00%
+TOTAL COVERAGE: 65.55%
+==============================================================

@@ -1,0 +1,143 @@
+# SystemVerilog fundamentals — MUST-KNOW for ChipSutra-VLSI
+# Every Pure SV / UVM generate must respect these. Prefer user RTL over examples.
+# Deep detail lives in sibling sv_*_patterns.txt / covergroup_patterns.txt / sva_patterns.txt.
+
+## Quick refresher index
+- One-screen SV cheat sheet + synth rules + pitfalls: `sv_quick_refresher.txt` (ChipVerify Quick Refresher map).
+- Use that file when the user asks for a refresher / cheat sheet; use pillar `sv_*_patterns.txt` for depth.
+- UVM intro (what/why, OVM→UVM, hierarchy, phases, config_db): `uvm_basics_intro.txt` — only when methodology=uvm.
+
+## Must-know map (TB relevance)
+1. Data types — declare TB signals with correct 2/4-state and widths from DUT ports.
+2. Arrays & collections — queues for FIFO goldens; packed/unpacked for buses; associative for sparse maps.
+3. Control flow & loops — fixed-N `for` stimulus; `===`/`!==` in scoreboards; avoid Testcase-1..N unrolling.
+4. Classes & OOP — txn/gen/drv/mon/sb/env/test; `new()`; virtual methods; no UVM unless asked.
+5. Randomization — `rand`/`randc`, `assert(t.randomize())`, seeds via `void'($urandom(SEED))`.
+6. Constraints — real `inside`/`dist`/`soft`/`foreach`; NEVER noop `{ 1; }`.
+7. Covergroups — coverpoint/bins/cross; sample on clock; `ifndef VERILATOR` when OSS-gated.
+8. Assertions (SVA) — clocked `assert/cover property` with `disable iff (!rst_n)`.
+9. Interfaces — DUT signal bundle + modports; virtual IF into classes; never invent ports.
+10. Threads & IPC — `fork/join`, mailbox gen→drv and mon→sb; semaphore/event when needed.
+
+## Data types (must)
+- DUT-facing: `logic` (4-state) with exact `[MSB:LSB]` from RTL.
+- Indexes/error counts: `int` / `integer` OK; initialize `errors = 0`.
+- Use `===`/`!==` when X/Z must fail the check (post-reset, scoreboard).
+- `enum`/`typedef`/`struct packed` only when RTL/spec defines them — do not invent opcodes.
+Forbidden: bare `reg count` when DUT has `[3:0] count`; `bit` on monitored outs that hide X.
+
+## Arrays & collections (must)
+- Fixed unpacked: `logic [7:0] mem [0:255];`
+- Dynamic: `logic [7:0] dyn[]; dyn = new[N];`
+- Queue (FIFO golden): `logic [W-1:0] q[$];` push_back / pop_front; `q.size()`.
+- Associative: `logic [31:0] map[int];` for sparse address models.
+Forbidden: tracking FIFO depth with `expected_count++/--` when a queue exists.
+
+## Control flow & loops (must)
+- Stimulus: `for (int i = 0; i < N; i++) begin ... @(posedge clk); #1; check; end`
+- `repeat (N) @(posedge clk);` for reset wait.
+- `unique`/`priority` case — DUT style; TB prefers simple `if`/`case`.
+- ONE PASS/FAIL `$display` after the loop (never inside).
+Forbidden: 32 copy-pasted directed blocks; missing `#1` settle before sample.
+
+## Classes & OOP (must for Pure SV default)
+- DUT/DUV = user's RTL module (Design Under Test / Design Under Verification) — never invent ports.
+- Layered stack: interface → generator → driver → monitor → scoreboard → env → test → top.
+  - interface: container for DUT I/O so components reuse one bundle (modports DRV/MON).
+  - generator: creates valid txn class objects → mailbox to driver.
+  - driver: pin-wiggles DUT via virtual IF / tasks (hides timing).
+  - monitor: passive sample of outputs → packets to scoreboard.
+  - scoreboard: independent reference model + compare (never noop `return 1`).
+  - env: builds/connects components for reuse/scale; test configures knobs and starts env.
+- Abstraction: hide `#` pin timing in tasks/driver so tests focus on when/why (see layered_tb_components.txt).
+- `function new(...);` constructs; mailboxes connect layers; virtual interface for pin world.
+- Methods use only args + own members (class scoping).
+- `function bit check(...)` — never `task check` with `return`.
+Forbidden: `uvm_*` in Pure SV mode; class instantiated like a module `my_test t(vif);`.
+
+## Randomization (must)
+- Mark stimulus fields `rand` / `randc`; call `assert(txn.randomize()) else $fatal(...)`.
+- Seed once: `void'($urandom(SEED));` for reproduce.
+- `$urandom` / `$urandom_range` only for procedural smoke style.
+Forbidden: randomize without `new()`; unconstrained rand that invents illegal protocol beats.
+
+## Constraints (must)
+- Real constraints: `inside`, ranges, `dist`, `soft`, `foreach`, implications `->`.
+- Keep solvable; use `solve a before b` when order matters.
+Forbidden: `constraint legal_c { 1; }` noop; contradicting hard constraints that always fail.
+
+## Covergroups (must when functional coverage requested / premium TB)
+- `covergroup cg @(posedge clk); coverpoint <sig>; cross ...; endgroup`
+- `bins`, `illegal_bins`, `ignore_bins` from legal protocol — never invent bus states.
+- Guard for Verilator: `` `ifndef VERILATOR ... `endif `` when OSS sim cannot compile CG.
+Forbidden: coverpoints on signals not in DUT/IF; sampling without clocking event.
+
+## Assertions / SVA (must for assertions module; optional in TB)
+- Concurrent: `assert property (@(posedge clk) disable iff (!rst_n) ... );`
+- `cover property` for reachability; `assume` only for environment/formal.
+- Immediate `assert (expr)` OK for TB checks / randomize.
+Forbidden: unclocked concurrent asserts; invented signals in properties.
+
+## Interfaces (must for layered Pure SV)
+- `interface dut_if(input logic clk); ... modport DRV/...; modport MON/...; endinterface`
+- Top: `dut_if vif(clk);` DUT ports tied to `vif.*`; classes take `virtual dut_if`.
+Forbidden: inventing IF signals not on DUT; driving DUT outputs through IF.
+
+## Threads & IPC (must for layered env.run)
+- `fork gen.run(); drv.run(n); mon.run(n); sb.run(n); join`
+- `mailbox #(txn)` for gen2drv / drv2sb; `mailbox #(mon_pkt)` for mon2sb — separate `new()`.
+Forbidden: `a=b=c=new()` sharing one mailbox; unbounded `wait` without timeout on handshakes.
+
+## Functions vs tasks (must)
+- ChipVerify: `function` returns a value and **must not** consume time (no `@`/`#`/`wait`/`fork`); cannot call tasks.
+- Default args pass **by value**; `ref` needs `function automatic` / automatic task.
+- ChipSutra: `function bit check` / `function void predict`; timeful `run`/`reset` are **tasks**. Detail: `sv_functions_patterns.txt`.
+
+## `define macros (advanced; use sparingly)
+- ChipVerify: text substitution; args/defaults; SV `` `"..." `" `` for arg-in-string; `` `` `` token paste; `` `ifdef `` flags.
+- ChipSutra: prefer parameters; allow UVM utils macros and `` `ifdef VERILATOR ``; avoid custom macro soup. Detail: `sv_advanced_features_patterns.txt`.
+
+## Callbacks (advanced; extensibility)
+- ChipVerify: registerable callback objects or empty `virtual` pre_/post_ hooks so tests extend behavior without editing base driver/env.
+- ChipSutra smoke: skip callbacks; emit hooks/`uvm_callback` when user asks for inject/logging extensibility. Detail: `sv_advanced_features_patterns.txt`.
+
+## Packages (advanced; shared types)
+- ChipVerify: `package`...`endpackage` shares typedef/enum/functions; `import pkg::*` or `pkg::item`; local names beat wildcard; enum labels need import/`pkg::LABEL`.
+- ChipSutra single-file smoke: types inline; emit packages for multi-file/UVM/shared protocol types. Detail: `sv_advanced_features_patterns.txt`.
+
+## Scope resolution :: , extern, local/protected (advanced)
+- ChipVerify: `extern` → `Class::method` out-of-body; `local` = this class only; `protected` = class + subclasses; default = public.
+- Also: `pkg::name`, statics, UVM `config_db`/`type_id::create`, `std::randomize`.
+- ChipSutra Pure SV smoke: methods **inline**, members usually public; emit `extern`/`local`/`protected` when user asks or building extensible VIP.
+- Detail: `sv_advanced_features_patterns.txt`.
+
+## Program block (know; rarely emit)
+- ChipVerify: `program`/`endprogram` is a TB container that runs in the **reactive region** to cut DUT/TB races and hold tasks/classes/`initial`.
+- ChipSutra default still emits `module <dut>_tb` (Verilator-friendly layered stack). Emit `program` only if the user asks.
+- Deep detail: `sv_advanced_features_patterns.txt` (What is a program block / syntax / vs ChipSutra default).
+
+## Plusargs (optional regression knobs)
+- ChipVerify: `$test$plusargs("FLAG")` for presence; `$value$plusargs("NAME=%d", v)` for `+NAME=value` (case-sensitive, prefix match, no spaces around `=`).
+- Use to avoid recompile for `+SEED=` / `+N=` / `+TEST=` when the user asks; default smoke may keep fixed seed/N.
+- Detail: `sv_plusargs_patterns.txt`.
+
+## File operations (optional logs / vectors)
+- ChipVerify: `$fopen`/`$fclose` (fd); modes `r/w/a/r+/w+/a+`; write `$fdisplay`/`$fwrite`; read `$fgets` / `$feof` loop; parse `$fscanf`; know MCD (OR channels / stdout LSB).
+- Default smoke uses `$dumpfile` only; emit file I/O when user wants stimulus/golden/log files. Always `$fclose` before `$finish`.
+- Detail: `sv_file_ops_patterns.txt`.
+
+## Worked TB examples (ChipVerify)
+- Example 1 `reg_ctrl`: ready-based regfile; stim-in-test variant; per-addr scoreboard. Detail: `sv_tb_example_reg_ctrl.txt`.
+- Example 2 `switch`: generator + event sync; semaphore dual-thread monitor; addr-range route golden. Detail: `sv_tb_example_switch.txt`.
+- Example Adder: combo adder; TB clock for sync; independent `{carry,sum}=a+b`; mutate DUT to prove SB. Detail: `sv_tb_example_adder.txt`.
+- ChipSutra: same roles; prefer generator+fixed-N; match user port names.
+
+## ChipSutra generate checklist
+- [ ] Exact DUT ports/widths
+- [ ] Legal reset + post-reset output check
+- [ ] Independent golden (no circular)
+- [ ] Real constraints + randomize
+- [ ] Layered components when methodology=Pure SV class-based
+- [ ] Top is `module` TB (not `program`) unless user requested program block
+- [ ] $dumpfile/$dumpvars/$finish
+- [ ] Optional covergroup / SVA only with real signals

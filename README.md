@@ -6,7 +6,7 @@
 
 **Generate UVM testbenches, SVA assertions, coverage plans, and debug hints for your Verilog/SystemVerilog/VHDL designs — automatically, in seconds, with zero API keys.**
 
-[**🚀 Try live**](https://chipsutra-verify.emergent.host) · [**📥 Self-host**](#-quick-start-30-seconds) · [**📚 Docs**](./SELF_HOST.md) · [**🗺️ Roadmap**](./ROADMAP.md) · [**✅ Supported features**](./docs/SUPPORTED_FEATURES.md) · [**🏭 Industry EDA gaps**](./docs/INDUSTRY_EDA_GAPS.md) · [**🤖 Local LLM**](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM) · [**🎯 LLM accuracy**](./docs/LLM_ACCURACY.md) · [**🔄 LLM sync**](./docs/LLM_SYNC.md)
+[**🚀 Try live**](https://chipsutra.org/) · [**📥 Self-host**](#-quick-start-30-seconds) · [**📚 Docs**](./SELF_HOST.md) · [**🗺️ Roadmap**](./ROADMAP.md) · [**✅ Supported features**](./docs/SUPPORTED_FEATURES.md) · [**🏭 Industry EDA gaps**](./docs/INDUSTRY_EDA_GAPS.md) · [**🤖 Local LLM**](https://github.com/sriharshaduppalli/ChipSutra-VLSI-LLM) · [**🎯 LLM accuracy**](./docs/LLM_ACCURACY.md) · [**🔄 LLM sync**](./docs/LLM_SYNC.md)
 
 [![License: MIT+attribution](https://img.shields.io/badge/License-MIT%20+%20attribution-emerald)](./LICENSE)
 [![Made in India](https://img.shields.io/badge/Made%20in-India-orange)](https://github.com/sriharshaduppalli/ChipSutra)
@@ -66,6 +66,15 @@ chmod +x scripts/setup.sh scripts/bootstrap.sh
 .\scripts\bootstrap.ps1
 docker compose up --build
 ```
+
+**Skip the local backend rebuild** (pull GHCR `:edge` / a release tag). Omit `--build`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+# CHIPSUTRA_TAG=1.2.0 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+```
+
+NVIDIA GPU for Ollama: add `-f docker-compose.gpu.yml`. STA demo liberty: [docs/STA_LIBERTY.md](./docs/STA_LIBERTY.md). 60-second first project: **Projects → 60s wizard (counter)**.
 
 Then open **http://localhost:3000**. Sign up with any email → upload RTL → click **Generate**.
 
@@ -399,7 +408,7 @@ See **[docs/CONTRIBUTOR_GUIDE.md](./docs/CONTRIBUTOR_GUIDE.md)** and **[docs/SUP
 
 ## 📞 Contact
 
-- 🌐 Website: **https://chipsutra-verify.emergent.host**
+- 🌐 Website: **https://chipsutra.org**
 - 🐛 Issues: https://github.com/sriharshaduppalli/ChipSutra/issues
 - 📧 Email: `verification@chipsutra.ai`
 

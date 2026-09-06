@@ -1,0 +1,56 @@
+# UVM Testbench Example 1 (reg/memory)
+# Classic UVM stack for a simple register/memory DUT. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Testbench Example 1.
+# Pair with: uvm_first_tb_dut.txt, uvm_transaction.txt, uvm_tb_example_pattern.txt,
+# uvm_guide_using_vip.txt. Compare mentally to Pure SV layered TB for same DUT.
+
+## What it verifies
+Simple addressable memory/register file: write stores `wdata` at `addr`; read returns
+stored data (or a known uninitialized default, e.g. `0x1234` in this demo).
+Handshake: `sel` + wait `ready` (driver). Same shape as ChipVerify first-TB / Pure SV lab.
+
+## Component map
+```
+tb_top: clk + reg_if + DUT + config_db(vif) + run_test
+  test
+    env
+      agent: sequencer#(reg_item) + driver + monitor
+      scoreboard (analysis_imp ← mon_ap)
+```
+
+| Class | Key behavior |
+|-------|----------------|
+| `reg_item` | rand `addr`/`wdata`/`wr`; `rdata` not rand; field macros + `convert2str` |
+| `gen_item_seq` | `rand num`; loop create → `start_item` → randomize → `finish_item` |
+| Driver | `get_next_item` → assert `sel`/addr/wr/wdata → wait `ready` → deassert `sel` → `item_done` |
+| Monitor | On `sel`: capture txn; if read, wait a clk for `rdata`; `mon_analysis_port.write` |
+| Agent | build sqr/drv/mon; `drv.seq_item_port.connect(sqr.seq_item_export)` |
+| Scoreboard | Array/ref model: write stores; read compares vs stored `wdata` or first-read default |
+| Env | create agent+sb; `a0.m0.mon_analysis_port.connect(sb0.m_analysis_imp)` |
+| Test | get vif → set to `e0.a0.*`; reset on vif; constrain `num`; `seq.start(e0.a0.s0)` |
+
+## Scoreboard golden
+```
+if (wr)  refq[addr] = item;           // store write
+if (!wr) compare rdata to refq[addr].wdata
+         or to default if never written
+```
+Independent memory model — not DUT internals. Matches ChipSutra “real predict” rule.
+
+## Emit / style notes vs teaching shortcuts
+| Teaching demo | Prefer for ChipSutra Generate |
+|---------------|-------------------------------|
+| Monitor `reg_item item = new` | `type_id::create` (factory) |
+| Connect `a0.m0.mon_ap` from env | Promote `ap` on agent (`uvm_guide_reusable_vip.txt`) |
+| Reset via test poking vif | OK for smoke; or reset sequence |
+| Soft `num` in sequence + test constrain | Keep — good reuse pattern |
+
+## ChipSutra emit notes
+- Default smoke shape for CSR/memory-like user DUTs: this stack + user widths/ports.
+- Generate MUST emit this full graph (item→drv/mon/sqr/agent/sb/env/test/seq/top),
+  not a mix of later tutorial pages (subscriber, TLM get/put, RAL).
+- Always: factory create, config_db vif, objections, `get_next_item`/`item_done`.
+- Constrain `wr`/`addr` legal for DUT depth; match `ADDR_WIDTH`/`DATA_WIDTH`/`DEPTH`.
+- Chapter `reg_if` / `reg_block` contract: `uvm_first_tb_dut.txt` when teaching that DUT.
+- Do not invent RAL for this simple memory unless user supplies a CSR map.
+- Related: FSM pattern `uvm_tb_example_pattern.txt`; switch `uvm_tb_example2.txt`.

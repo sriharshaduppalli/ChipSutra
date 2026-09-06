@@ -1,0 +1,71 @@
+# UVM Sequence Library
+# Specialized sequence that picks and runs registered sequence types by mode.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Sequence Library.
+# Pair with: uvm_sequence_usage.txt, uvm_sequence_start.txt, arbitration next.
+
+## What it is
+`uvm_sequence_library #(REQ,RSP)` extends `uvm_sequence #(REQ,RSP)`.
+It holds a queue of registered sequence **types**, then when started selects and
+executes them repeatedly according to `selection_mode` and min/max random counts.
+Good for regression diversity without hardcoding every scenario in one `body()`.
+
+## Selection modes
+| Mode | Behavior |
+|------|----------|
+| `UVM_SEQ_LIB_RAND` | Random pick each iteration |
+| `UVM_SEQ_LIB_RANDC` | Random without replacement until all used, then reshuffle |
+| `UVM_SEQ_LIB_ITEM` | Execute a single item style path |
+| `UVM_SEQ_LIB_USER` | Call overridable `select_sequence()` for custom index |
+
+## How to define
+```systemverilog
+class my_seq_lib extends uvm_sequence_library #(my_item);
+  `uvm_object_utils(my_seq_lib)
+  `uvm_sequence_library_utils(my_seq_lib)   // required infrastructure
+
+  function new(string name = "my_seq_lib");
+    super.new(name);
+    init_sequence_library();
+  endfunction
+endclass
+```
+Always: both utils macros + `init_sequence_library()` in `new` (after static/typewide adds as needed).
+
+## Registering sequences
+**Static** (inside sequence class):
+```systemverilog
+`uvm_add_to_seq_lib(my_seq1, my_seq_lib)
+```
+
+**Typewide / dynamic** (library ctor or test):
+```systemverilog
+add_typewide_sequences({mem_seq1::get_type(), mem_seq2::get_type()});
+// or per instance:
+seq_lib.add_sequence(data_err_seq::get_type());
+```
+
+## Configure and start
+```systemverilog
+m_seq_lib0.selection_mode = UVM_SEQ_LIB_RANDC;
+m_seq_lib0.min_random_count = 5;
+m_seq_lib0.max_random_count = 10;
+m_seq_lib0.add_typewide_sequence(seq1::get_type());
+// ...
+m_seq_lib0.init_sequence_library();
+
+// Option A: explicit
+seq_lib.start(data_sequencer);
+
+// Option B: default_sequence for a phase
+uvm_config_db#(uvm_sequence_base)::set(
+  this, "m_top_env.m_seqr0.main_phase", "default_sequence", m_seq_lib0);
+```
+Library `start` is blocking until configured iterations finish.
+
+## ChipSutra emit notes
+- Smoke / single directed test: **one** sequence + `seq.start(sqr)` — no library.
+- Emit library when user asks for random regression mix / many peer sequences.
+- Prefer `UVM_SEQ_LIB_RANDC` for even coverage of registered types; set sensible min/max counts.
+- Objections: still needed around `start` or via default_sequence + starting_phase pattern.
+- Nested virtual sequences ≠ sequence library (library = pick-from-list on **one** sequencer).
+- Arbitration of concurrent sequences: `uvm_sequence_arbitration.txt`.

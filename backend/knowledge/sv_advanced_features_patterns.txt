@@ -1,0 +1,384 @@
+# SystemVerilog advanced features (deep RAG)
+# Curriculum map: ChipVerify Advanced Features (package, extern, DPI, callback, macros).
+# Original ChipSutra wording. Use when scaling beyond single-file TB.
+
+## Why packages (ChipVerify)
+- Verilog limitation: module objects are local — shared functions/types must be copy-pasted; hierarchical refs are verification-only / not synthesizable hardware sharing.
+- SystemVerilog `package`...`endpackage` is a separate namespace at the same level as top modules — share typedefs, enums, parameters, tasks/functions across modules/interfaces/programs.
+- Packages cannot contain hierarchical references except those created inside the package or imported.
+- Curriculum: ChipVerify — SystemVerilog Package.
+
+## Package syntax and example
+```systemverilog
+package my_pkg;
+  typedef enum bit [1:0] { RED, YELLOW, GREEN, RSVD } e_signal;
+  typedef struct {
+    bit [3:0] signal_id;
+    bit       active;
+    bit [1:0] timeout;
+  } e_sig_param;
+  // Without `automatic`, package subroutines are static lifetime
+  function int calc_parity();
+    $display("Called from somewhere");
+  endfunction
+endpackage
+```
+
+## Package import
+```systemverilog
+import my_pkg::*;              // wildcard — makes referenced items visible
+import my_pkg::e_signal;       // specific item
+import my_pkg::GREEN;          // enum label (labels not auto-imported with type-only import)
+```
+- Wildcard import: only items **actually used** become visible (others stay unimported).
+- Importing only `e_signal` does **not** import enum labels — import each label or use `::*` / `my_pkg::GREEN`.
+- Without import or `pkg::` qualification → undeclared identifier errors.
+
+## Package search order
+1. Local declarations in the module/interface (highest priority)
+2. Explicit `import pkg::item` (beats wildcard for that name)
+3. Wildcard `import pkg::*` (extends name search into the package)
+4. `$unit` compilation-unit scope
+- If local enum and package enum both define `READ`, bare `READ` uses **local**; use `my_pkg::READ` for the package value.
+
+## Nested package reference
+- Packages may `import` other packages (`Y` imports `X`, `Z` imports `Y`).
+- Import is not transitive for all names: `Z` importing `Y` does not automatically see `X::word` unless `X` is imported/qualified in `Z`.
+- Prefer `X::display()` / `Y::lb` for clarity across nested packages.
+- Local names inside a package win over imported names when both exist.
+
+## Package design / synthesis notes
+- Synthesizable package contents typically: parameters/localparams/constants, `typedef`s, **automatic** tasks/functions, import of other packages.
+- Synthesis replicates package functions/tasks as if defined in the module; package functions should be `automatic` and avoid static vars for synth.
+- Package **variables** shared across importers (one module writes, another reads) are for simulation — **not synthesizable** inter-module communication (use ports).
+- ALU pattern: `package alu_pkg; typedef enum ... alu_op_t; endpackage` then `import alu_pkg::*;` or `alu_pkg::ADD` in the DUT/TB.
+
+## Packages ChipSutra guidance
+- Default single-file Pure SV TB: types inline — no package required.
+- Emit `*_pkg.sv` when multi-file, shared protocol typedefs, or UVM (`import uvm_pkg::*;`).
+- Prefer `automatic` for package helpers used in TB/RTL.
+- Avoid inventing packages the compile command does not include.
+
+## What is extern (ChipVerify)
+- Long `class`...`endclass` bodies bury the member list under huge method implementations.
+- `extern` on a method **declaration** means: prototype stays in the class; **implementation is outside** the class body.
+- Out-of-body definition uses scope resolution: `function return_type ClassName::method(...); ... endfunction`
+- Also works with `extern task`, `extern virtual function`, etc.
+- Curriculum: ChipVerify — SystemVerilog 'extern'.
+
+## extern example
+```systemverilog
+class ABC;
+  extern function void display();
+endclass
+
+function void ABC::display();
+  $display("Hello world");
+endfunction
+
+module tb;
+  initial begin
+    ABC abc = new();
+    abc.display();  // call via handle (dot), not ::
+  end
+endmodule
+```
+- Prototype in class → scannable API; body after `endclass` → easier navigation for large drivers/scoreboards.
+
+## extern ChipSutra guidance
+- Default Generate: keep layered TB methods **inline** (small classes, single-file Verilator smoke).
+- Emit `extern` + `Class::method` when the user asks, or when splitting a large VIP-style class for readability.
+- Prototype signature must match the out-of-body definition (name, args, return type, `virtual`/`static` qualifiers).
+- Call instance methods with `handle.method()`; use `Class::` only for the definition (and for statics).
+
+## local vs protected (ChipVerify)
+- Access qualifiers control visibility of class properties/methods (encapsulation).
+- Default (no qualifier) = **public** — accessible via handle from outside.
+- **`local`**: only methods of *this* class. Not visible outside; **not** visible to subclasses.
+- **`protected`**: methods of this class **and subclasses** (inherited). Not visible from unrelated outside code via a handle.
+- Nonlocal methods that use `local` members can still be inherited/overridden by children (the method is public; the local data stays hidden).
+- Curriculum: ChipVerify — SystemVerilog local vs protected.
+
+## local - outside class (error)
+```systemverilog
+class ABC;
+  byte public_var;
+  local byte local_var;
+  function void display();
+    $display("public_var=0x%0h, local_var=0x%0h", public_var, local_var);
+  endfunction
+endclass
+// OK: abc.display();  abc.public_var
+// ERROR: abc.local_var  — CLSNLO / access to local member not allowed
+```
+
+## local - child class (error)
+```systemverilog
+class ABC; local byte local_var; endclass
+class DEF extends ABC;
+  function void show();
+    $display("%0h", local_var); // ERROR — child cannot see base local
+  endfunction
+endclass
+```
+
+## protected - outside class (error)
+```systemverilog
+class ABC;
+  byte public_var;
+  protected byte protected_var;
+  function void display(); ... endfunction
+endclass
+// OK: abc.display(); abc.public_var
+// ERROR: abc.protected_var — CLSNPO / access to protected member not allowed
+```
+
+## protected - child class (OK)
+```systemverilog
+class ABC; protected byte protected_var; endclass
+class DEF extends ABC;
+  function void show();
+    $display("%0h", protected_var); // OK — subclass can see protected
+  endfunction
+endclass
+```
+
+## local/protected ChipSutra guidance
+- Default layered smoke TB: leave members public (simpler single-file generate).
+- When user asks for encapsulation or base/extended agents: `local` for private scoreboard state; `protected` for fields shared with child driver/monitor overrides.
+- Prefer public `predict`/`check`/`connect` APIs; hide internal `expected` / queues as `local` or `protected` if extending.
+- Don't over-qualify tiny generated classes — hurts readability with no reuse win.
+
+## What is a callback (ChipVerify)
+- Give a function to another component; at a hook point it "calls back" your function without knowing its body — loose coupling.
+- SystemVerilog style: a class defines **placeholder virtual methods** (hooks); users **extend** and override; the base env **registers** and invokes them.
+- Benefit: change TB behavior (error inject, logging, protocol tweak) without editing the original driver/env source.
+- Curriculum: ChipVerify — SystemVerilog Callback.
+
+## Callback steps (register / implement / invoke)
+```systemverilog
+class MyCallback;
+  virtual function void callback_function(); endfunction  // 1. placeholder
+endclass
+
+class MyTest;
+  MyCallback cb;
+  function void register_callback(MyCallback callback);  // 2. register
+    cb = callback;
+  endfunction
+  function void execute();
+    if (cb != null) cb.callback_function();              // 4. invoke
+  endfunction
+endclass
+
+class UserCallback extends MyCallback;                   // 3. implement
+  function void callback_function();
+    $display("User-defined callback called!");
+  endfunction
+endclass
+// tb: test.register_callback(user_cb); test.execute();
+```
+
+## Callback vs regular methods
+| | Callback | Regular method |
+|--|----------|----------------|
+| Binding | Registered at runtime (or overridden virtual hook) | Called by fixed name in source |
+| Coupling | Loose — invoker only knows a hook exists | Tight — caller knows exact function |
+| Change behavior | New registered/extended class; base untouched | Edit call sites or rewrite the method |
+
+## Virtual empty hooks (poor-man's callback)
+- Place empty `virtual task pre_*/post_*` at key points; child class overrides — no separate callback object.
+
+```systemverilog
+class MyTest;
+  virtual task body();
+    pre_err_callback();
+    err_inj_seq();
+    post_err_callback();
+  endtask
+  virtual task pre_err_callback(); endtask   // empty hook
+  virtual task post_err_callback(); endtask
+endclass
+class MyTestExt extends MyTest;
+  virtual task pre_err_callback(); /* before inject */ endtask
+  virtual task post_err_callback(); /* after inject */ endtask
+endclass
+```
+- ChipSutra Pure SV: prefer `pre_drive` / `post_drive` / `pre_predict` virtual hooks on driver/scoreboard base classes when user asks for extensibility.
+- UVM: prefer `uvm_callback` / factory override for production VIP; simple virtual hooks for small Pure SV stacks.
+  Details: `uvm_callback.txt`.
+
+## Callbacks ChipSutra guidance
+- Default generated layered TB: no callback machinery (keep smoke small).
+- Emit registerable callbacks or virtual hooks when user asks for error injection, scoreboard side-band, or reusable VIP without forking the base file.
+- Always null-check registered callback handles before invoke.
+
+## What is `define (ChipVerify)
+- Compiler directive for **global text substitution** before compile — not a function/task.
+- Classic uses: widths/constants, feature flags with `` `ifdef ``, small reusable snippets.
+- Prefer `parameter`/`localparam` for RTL constants when possible (typed, scoped); keep macros for UVM utils / compile switches.
+- Curriculum: ChipVerify — SystemVerilog `define Macro.
+
+## `define without / with default arguments
+```systemverilog
+`define WIDTH 16
+`define EN_ADDR
+wire [`WIDTH-1:0] addr;
+`ifdef EN_ADDR
+  // optional generate ...
+`endif
+
+`define ADD(name, a, b) $display("%s a=%0d b=%0d sum=%0d", name, a, b, a+b);
+`ADD("ADDER", 3, 4)     // text-replaced; whitespace OK before '('
+// Missing required args / too many args → macro errors
+
+`define ADD(name="INST", a=5, b) $display(...);
+`ADD("ADDER", 3, 4)
+`ADD(, 3, 1)            // name defaults to INST
+`ADD(, , 5)             // name=INST, a=5, b=5
+```
+- Formal args in parentheses after the macro name; defaults fill missing trailing/omitted actuals.
+
+## SystemVerilog string / token tricks
+- Inside ordinary `"..."` in macro text, formal args are **not** substituted (literal string).
+- SV: `` `" ... `" `` (grave before quotes) enables argument substitution inside the string.
+- Embedded quotes: escape with `\`; for substituted quoted tokens use `` `" `` / `` ``" `` patterns carefully (easy to get wrong — prefer `$sformatf` in TB code).
+- Token paste: `` `` `` (double grave) concatenates identifiers: `` `define CONCAT(mod,sig) assign ``mod.``sig = 1; ``
+- Keywords may appear as macro args (e.g. `` `PATH(module, wire) `` → ``module.wire``).
+
+## `define ChipSutra guidance
+- Default Generate: avoid custom macros; use `parameter`/`localparam` and normal functions.
+- Allowed/required: UVM `` `include "uvm_macros.svh" ``, `` `uvm_object_utils ``, `` `uvm_component_utils `` when methodology=UVM.
+- Feature flags: `` `ifdef VERILATOR `` around covergroups / unsupported constructs is OK.
+- Do not invent a soup of `` `define `` helpers for layered Pure SV smoke — hurts Verilator debug and readability.
+
+## `define anti-patterns
+- Treating macros like functions (expecting hierarchical names / typed args).
+- Unbalanced args (missing required, too many).
+- Building identifiers with Verilog-only concat (needs SV `` `` ``).
+- Hiding complex stimulus in macros instead of classes/tasks.
+
+## DPI-C (advanced)
+- `import "DPI-C" function int c_add(int a, int b);`
+- Use for reference models / crypto / file parsers — not for ChipSutra default codegen.
+- When user supplies DPI, call from scoreboard predict; don't invent C side.
+
+## What is a program block (ChipVerify)
+- A `module` builds synthesizable / hierarchical design structure (nets, instances, procedural HDL).
+- A testbench is a full verification environment — it must initialize and synchronize carefully to avoid races with the DUT.
+- SystemVerilog `program` ... `endprogram` was introduced to:
+  1. Provide an entry point for testbench execution.
+  2. Hold TB data: tasks, class objects, functions.
+  3. Avoid DUT/TB races by running in the **reactive region** of the simulation cycle.
+- Reactive region runs late in the timestep (after design statements), so the TB sees updated DUT values → more deterministic across simulators.
+- Curriculum: ChipVerify — SystemVerilog Program Block.
+
+## Program block syntax
+```systemverilog
+program [name] [port_list];
+  // tasks, classes, initial blocks, ...
+endprogram
+
+program test1 (input clk, reset);
+  initial ...
+endprogram
+
+program test2 (interface wb_if);
+  initial ...
+endprogram
+
+program test3;
+  initial ...
+endprogram
+```
+- Programs may nest inside modules/interfaces; multiple programs in one module can share that module's locals.
+
+## Program block nesting example
+```systemverilog
+module tb;
+  bit [3:0] mode;   // shared by nested programs
+  program p1;
+    // can see mode
+  endprogram
+  program p2;
+    // can see mode
+  endprogram
+endmodule
+```
+
+## Program block vs ChipSutra default
+- ChipSutra **default Pure SV TB uses `module <dut>_tb`**, not `program`, because:
+  - Verilator / OSS flows have incomplete or awkward `program` support.
+  - Layered class TB (IF/gen/drv/mon/sb/env/test) already lives in a module top with `always #5 clk`.
+  - Race avoidance in our stack: drive after `@(posedge)`, sample with `#1`, independent scoreboard — not program reactive region.
+- Emit `program` **only if the user explicitly asks** for a program-block TB (e.g. legacy flow / interview / ChipVerify lab).
+- Never mix program and module both driving the same interface without clocking / clear ownership.
+- Prefer `program automatic` if you must emit one (avoid static lifetime surprises).
+
+## Scope resolution operator :: (ChipVerify)
+- `::` refers to an identifier **inside a named scope** (class, package, covergroup/coverpoint/cross, typedef).
+- LHS: class type / package / covergroup type / coverpoint or cross / typedef name.
+- RHS: variable, method, parameter, enum label, etc.
+- Why: same names in different scopes collide; `::` uniquely qualifies the member.
+- Also used for: static vars/methods from outside the class; `extern` out-of-body method defs; package types without `import`; disambiguating after `import pkg::*`.
+- Curriculum: ChipVerify — SystemVerilog Scope Resolution Operator.
+
+## Scope resolution - extern methods
+```systemverilog
+class ABC;
+  int data;
+  extern virtual function void display();
+endclass
+function void ABC::display();
+  $display("data = 0x%0h", data);
+endfunction
+```
+- ChipSutra default: keep small generated methods **inline** in the class; use `extern` + `Class::method` when the user asks or classes grow large.
+
+## Scope resolution - static members
+```systemverilog
+class ABC;
+  static int data;
+  static function void display(); ... endfunction
+endclass
+// Before or without handles:
+ABC::data = 32'hface_cafe;
+ABC::display();
+```
+- All instances share one `static` variable; reading `a1.data` / `a2.data` sees the same storage.
+
+## Scope resolution - packages
+```systemverilog
+package my_pkg;
+  typedef enum bit {FALSE, TRUE} e_bool;
+endpackage
+module tb;
+  bit val;
+  initial val = my_pkg::TRUE;  // compile package; import optional if fully qualified
+endmodule
+```
+- UVM: `uvm_config_db#(virtual if)::set/get`, `type_id::create`, `uvm_pkg::...`.
+
+## Scope resolution - avoid namespace collision
+```systemverilog
+import my_pkg::*;
+typedef enum bit {TRUE, FALSE} e_bool; // opposite encoding in local scope
+val = my_pkg::TRUE;  // package's TRUE
+val = TRUE;          // local TRUE — may differ!
+```
+- Prefer explicit `pkg::name` when local and imported names clash.
+- ChipSutra: avoid shipping two conflicting enums; one typedef in a package or top is enough for smoke TBs.
+
+## ChipSutra guidance
+- Default emit: single module TB or compact UVM files — packages only if multi-file/UVM.
+- Use `::` for UVM factory/config_db and `std::randomize` when needed; for Pure SV layered smoke, simple class methods usually need no `::`.
+- Macros: UVM utils only; no custom `` `define `` soup.
+- DPI/callbacks: only when user/spec requests.
+
+## Anti-patterns
+- Inventing DPI C functions the user didn't provide.
+- `` `include `` of huge unrelated headers.
+- program + module both driving same IF without clocking discipline.
+- Empty packages imported everywhere (noise).
+- Relying on bare `TRUE` after `import pkg::*` when a local enum also defines `TRUE`.
+- Writing `handle::method()` for instance methods — use `handle.method()`; reserve `::` for types/scopes/statics.

@@ -1,0 +1,79 @@
+# UVM Object Copy / Clone
+# Deep-copy fields via field macros or do_copy; clone = create + copy.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Object Copy/Clone.
+# Pair with: uvm_object.txt, uvm_object_print.txt, uvm_object_compare.txt.
+
+## API
+```systemverilog
+dst.copy(src);                    // copy src fields into existing dst
+uvm_object h = src.clone();       // allocate new object, copy contents
+$cast(dst, src.clone());          // typed handle after clone
+```
+- `copy` calls `do_copy` (customize the hook).
+- `clone` creates via factory then copies — no need to pre-create the destination.
+- Nested objects (`uvm_field_object` / nested `copy`) must be handled for a deep copy.
+
+## Automation macros path
+Register fields with matching `uvm_field_*` and `UVM_DEFAULT` so copy/print/compare share them:
+
+```systemverilog
+`uvm_object_utils_begin(Object)
+  `uvm_field_enum(e_bool, m_bool, UVM_DEFAULT)
+  `uvm_field_int(m_mode, UVM_DEFAULT)
+  `uvm_field_sarray_int(m_data, UVM_DEFAULT)
+  `uvm_field_queue_int(m_queue, UVM_DEFAULT)
+  `uvm_field_string(m_name, UVM_DEFAULT)
+  `uvm_field_object(m_pkt, UVM_DEFAULT)
+`uvm_object_utils_end
+```
+```systemverilog
+obj2.copy(obj1);   // nested Packet fields copied when registered
+```
+Macros add code/overhead — OK for small teaching txns; prefer `do_copy` for large objects.
+
+## Manual do_copy
+When not using field automation for copy:
+
+```systemverilog
+virtual function void do_copy(uvm_object rhs);
+  Object _obj;
+  super.do_copy(rhs);
+  if (!$cast(_obj, rhs)) return;
+  m_bool  = _obj.m_bool;
+  m_mode  = _obj.m_mode;
+  m_data  = _obj.m_data;
+  m_queue = _obj.m_queue;
+  m_name  = _obj.m_name;
+  m_pkt.copy(_obj.m_pkt);   // deep copy nested object (not handle assign)
+endfunction
+```
+- `$cast` rhs to concrete type before field access.
+- Always call `super.do_copy` first.
+- Nested: call `nested.copy(...)` — do not only assign the handle (shallow).
+- Without field macros, `print()` may be empty — use `convert2string` / `do_print`.
+
+## clone vs copy
+| Need | Use |
+|------|-----|
+| Destination already exists | `dst.copy(src)` |
+| Need a new independent object | `$cast(dst, src.clone())` |
+
+`clone` still relies on `do_copy` / field macros for field transfer.
+
+## Shallow vs deep
+- Handle assign (`dst.m_pkt = src.m_pkt`) shares one object — not a deep copy.
+- Field macros with `uvm_field_object` / nested `copy` deep-copy registered sub-objects.
+- Scoreboards that store expected txns usually need clone (or create+copy), not shared handles.
+
+## Beginner mistakes
+1. Forgetting `$cast` in `do_copy`.
+2. Skipping `super.do_copy`.
+3. Nested handle assign instead of `m_pkt.copy(...)`.
+4. Using `clone` without `$cast` to the concrete type.
+5. Expecting `print()` after dropping field macros without `convert2string`/`do_print`.
+
+## ChipSutra emit notes
+- Smoke sequence_items: field macros enable copy/print/compare together.
+- Monitor → scoreboard: clone the transaction before queueing if driver may reuse the item.
+- Hand `do_copy` only when user asks custom policy or large objects.
+- Pair print/compare: `uvm_object_print.txt`, `uvm_object_compare.txt`.

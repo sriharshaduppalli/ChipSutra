@@ -1,0 +1,76 @@
+# UVM Component [uvm_component]
+# Fixed-job, fixed-place TB infrastructure (driver, monitor, agent, env, test, scoreboard).
+# ChipSutra original wording. Curriculum: ChipVerify UVM Component.
+# Contrast data: uvm_object.txt / uvm_transaction.txt. Hierarchy overview: uvm_class_hierarchy.txt.
+
+## Object vs component
+| | uvm_object / sequence_item | uvm_component |
+|--|----------------------------|---------------|
+| Lifetime | Create, use, discard | Built once; lives whole sim |
+| Place | No fixed parent | Exactly one parent; hierarchy |
+| Constructor | `new(string name="")` | `new(string name, uvm_component parent)` |
+| Factory macro | `` `uvm_object_utils `` (+ fields) | `` `uvm_component_utils `` (no field list usually) |
+| Create children | n/a | In `build_phase` via `type_id::create(name, this)` |
+
+Log paths like `uvm_test_top.env.agent.driver` are the literal parent chain — not a cosmetic naming style.
+
+## Minimal component shape
+```systemverilog
+class my_component extends uvm_component;
+  `uvm_component_utils(my_component)
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    // create children here with type_id::create("child", this)
+  endfunction
+endclass
+```
+- Always pass `parent` to `super.new`.
+- `` `uvm_component_utils `` = factory registration (overrides later); rarely need field macros on components.
+
+## Building hierarchy (pattern everywhere)
+```systemverilog
+function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  c1 = child_block::type_id::create("c1", this);  // this = parent
+endfunction
+```
+Repeated for: test->env, env->agent, agent->driver/monitor/sequencer.
+
+## Why build_phase, not new()
+- UVM phases all components in fixed order; hierarchy must exist before connect/run.
+- Creating children in constructors races on construction order — forbidden for ChipSutra emit.
+- Later: `connect_phase` wires TLM; `run_phase` does timed work; `end_of_elaboration_phase` safe for lookups/`print_topology`.
+
+## Hierarchy navigation (know; use sparingly in smoke)
+| Method | Use |
+|--------|-----|
+| `get_parent()` | Immediate parent |
+| `get_full_name()` | Dotted hierarchical path |
+| `get_children(ref q[$])` | Immediate children |
+| `get_child(name)` / `has_child` / `get_num_children` | By instance name |
+| `lookup(path)` | Nested path from caller (needs full relative path) |
+| `get_depth()` | Distance from uvm_top |
+
+`lookup("mon")` fails if monitor is under agent; use `lookup("agent.mon")` from that parent.
+Prefer config_db + handles over deep lookup for ChipSutra smoke TBs.
+
+## Beginner mistakes
+1. Component `new` with only `name` (object-style) — breaks hierarchy.
+2. Creating children inside `new()` instead of `build_phase`.
+3. Skipping `super.build_phase(phase)`.
+4. Using `` `uvm_object_utils `` on a component (or vice versa).
+5. Treating txn as component or driver as sequence_item.
+
+## ChipSutra emit notes (methodology=uvm)
+- Every drv/mon/sqr/agent/env/test/sb: `` `uvm_component_utils `` + two-arg `new` + create children in `build_phase`.
+- Always `super.<phase>(phase)` when overriding phases.
+- Instance names passed to `create` become hierarchy segments in logs.
+- Always pass `this` as parent — omit/`null` orphans under `uvm_top` (`uvm_root.txt`).
+- Do not build/connect in `run_phase`.
+- Full phase map: `uvm_phases.txt`.
+- Driver specialization: `uvm_driver.txt`. Monitor next.

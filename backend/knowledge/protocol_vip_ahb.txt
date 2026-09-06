@@ -1,0 +1,37 @@
+# AHB-Lite / AHB5 VIP emit guide (ChipSutra)
+# Distilled for TB emit from ARM AMBA AHB IHI 0033C. Prefer user RTL names.
+# ChipSutra eval `ahb_slave` is a minimal AHB-Lite single-cycle subordinate.
+
+## ahb_lite transfer
+- Clock HCLK; reset HRESETn active-low. Sample all controls on posedge HCLK.
+- Every transfer has a one-cycle **address phase** then a **data phase**.
+  The address phase cannot be waited; the subordinate must sample HADDR/HTRANS/
+  HWRITE/HSIZE/HSEL on that posedge. The data phase may insert wait states by
+  driving HREADYOUT LOW.
+- Pipeline: the address phase of transfer N overlaps the data phase of N-1.
+  HWDATA/HRDATA on cycle T belong to the address issued on cycle T-1.
+- HTRANS[1:0]: IDLE=2'b00, BUSY=2'b01, NONSEQ=2'b10, SEQ=2'b11.
+  Singles are NONSEQ (burst of length one). SEQ only for remaining burst beats.
+  Subordinates must ignore IDLE/BUSY with a zero-wait OKAY response.
+- HSEL: keep asserted for the selected subordinate during its data phase.
+- HREADY vs HREADYOUT: the subordinate drives HREADYOUT; the manager samples
+  HREADY (interconnect AND of HREADYOUT). If the DUT only has HREADY as an
+  input, the TB drives it HIGH unless testing wait states.
+- HRESP: OKAY=2'b00. ERROR is a two-cycle response — do not invent ERROR
+  sequences unless the DUT has HRESP and the user asks.
+- Writes: present HADDR/HTRANS=NONSEQ/HWRITE=1 in the address phase; present
+  HWDATA in the **next** cycle (data phase). Do not drop HWRITE in the same
+  timeslot as the address posedge (Verilator class-driver race). After the
+  address posedge, #1 then change HTRANS to IDLE for a single transfer.
+- Reads: NONSEQ with HWRITE=0; HRDATA is valid in the data phase when HREADY
+  is HIGH. Compare against an independent mem model, not against HWDATA.
+
+## ahb5 extras
+- Exclusive/secure/HNONSEC/HEXCL only if those ports exist in RTL — never invent.
+- HWSTRB (byte strobes on write data) only if the DUT has the port.
+
+## ahb scoreboard
+- model_reg[HADDR word index] updated after the write data phase completes
+  (HREADY HIGH). Read check: HRDATA === model after the read data phase.
+- UVM: driver NONSEQ write then read with HREADY waits; monitor completes on
+  HREADY. No interconnect decode map unless the user provides it.

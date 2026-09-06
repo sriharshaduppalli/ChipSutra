@@ -63,10 +63,47 @@ def test_resolve_model_non_ollama_passthrough():
     assert r["reason"] == "non_ollama_passthrough"
 
 
-def test_resolve_model_ollama_defaults():
+def test_resolve_model_ollama_defaults(monkeypatch):
+    monkeypatch.delenv("OLLAMA_MODEL", raising=False)
+    monkeypatch.delenv("CHIPSUTRA_MODEL_7B", raising=False)
+    monkeypatch.delenv("CHIPSUTRA_MODEL_3B", raising=False)
     r = resolve_model(provider="ollama", requested_model="", model_tier="3b", ollama_url="")
-    assert r["model"] == model_3b()
+    assert r["model"] == "chipsutra-vlsi:7b"
     assert "ollama" in r["provider"]
+
+
+def test_resolve_prefers_7b_when_listed(monkeypatch):
+    from llm_router import resolve_model
+
+    monkeypatch.setenv("CHIPSUTRA_PREFER_7B", "true")
+    monkeypatch.setattr(
+        "llm_router._installed_names",
+        lambda url: ["chipsutra-vlsi:3b", "chipsutra-vlsi:7b"],
+    )
+    r = resolve_model(
+        provider="ollama",
+        requested_model="chipsutra-vlsi:3b",
+        model_tier="7b_preferred",
+        ollama_url="http://127.0.0.1:11434",
+    )
+    assert r["model"] == "chipsutra-vlsi:7b"
+    assert "7b" in r["reason"]
+
+
+def test_resolve_honors_explicit_3b_tier(monkeypatch):
+    monkeypatch.setenv("CHIPSUTRA_PREFER_7B", "true")
+    monkeypatch.setattr(
+        "llm_router._installed_names",
+        lambda url: ["chipsutra-vlsi:3b", "chipsutra-vlsi:7b"],
+    )
+    r = resolve_model(
+        provider="ollama",
+        requested_model="chipsutra-vlsi:7b",
+        model_tier="3b",
+        ollama_url="http://127.0.0.1:11434",
+    )
+    assert r["model"] == "chipsutra-vlsi:3b"
+    assert r["reason"] == "tier_3b"
 
 
 def test_prewarm_status_shape():

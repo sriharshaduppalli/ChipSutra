@@ -1,0 +1,67 @@
+# UVM Object Pack / Unpack
+# Serialize class fields to bit/byte/int streams for DPI, files, sockets, co-sim.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Object Pack/Unpack.
+# Pair with: uvm_object.txt. Most smoke TBs never need pack — use when crossing SV boundary.
+
+## When to use
+- Data must leave SV class domain: DPI/C model, file replay, SPI/I2C byte stream, bus monitor rebuild.
+- In-TB driver/monitor/scoreboard paths usually keep objects as classes — no pack required.
+
+## Method pairs
+| Pack | Unpack | Destination |
+|------|--------|-------------|
+| `pack` | `unpack` | `bit` array — exact bit count |
+| `pack_bytes` | `unpack_bytes` | `byte` array — pad to next byte |
+| `pack_ints` | `unpack_ints` | `int` array — pad to next 32-bit word |
+
+Same payload bits; padding zeros only for alignment (no meaning).
+
+## Automation (field macros)
+```systemverilog
+`uvm_object_utils_begin(Packet)
+  `uvm_field_int(m_addr,  UVM_DEFAULT)
+  `uvm_field_int(m_wdata, UVM_DEFAULT)
+  // order listed = pack AND unpack order
+`uvm_object_utils_end
+
+pkt.pack(m_bits);
+pkt.pack_bytes(m_bytes);
+pkt.pack_ints(m_ints);
+n = pkt2.unpack(m_bits);  // n = bits consumed, NOT a field value
+```
+- Field order in utils_begin/end must match on pack and unpack sides.
+- Example: 4+4+4+1 = 13 bits -> `pack` length 13; `pack_bytes` needs 2 bytes (pad 3); `pack_ints` one int (pad 19).
+
+## Return value trap
+- Every pack/unpack returns **int bit count processed**.
+- Never treat return as `m_addr` / payload — read fields after unpack (`pkt.m_addr`).
+- Hex `0xd` for 13-bit Packet is coincidence (13 == 0xd), not address data.
+
+## Manual hooks (prefer for large / hot objects)
+```systemverilog
+virtual function void do_pack(uvm_packer packer);
+  super.do_pack(packer);
+  packer.pack_field_int(m_addr, $bits(m_addr));
+  // ...
+endfunction
+
+virtual function void do_unpack(uvm_packer packer);
+  super.do_unpack(packer);   // must be do_unpack, not do_pack
+  m_addr = packer.unpack_field_int($bits(m_addr));
+  // ...
+endfunction
+```
+- Call matching super (`do_pack`/`do_unpack`) — wrong super compiles, silently skips base logic.
+- Field macros add sim overhead on many-field objects; hand `do_pack`/`do_unpack` better when hot.
+
+## Beginner mistakes
+1. Using unpack return as field data.
+2. Different field order on pack vs unpack.
+3. `super.do_pack` inside `do_unpack` (or reverse).
+4. Packing everything in smoke TB when objects never leave SV.
+
+## ChipSutra emit notes
+- Default methodology=uvm smoke: **omit** pack/unpack unless user asks DPI/file/serial bridge.
+- If emitting: same field order both sides; document bit width; check unpack bit count vs expected.
+- Prefer `` `uvm_object_utils `` + fields for small teaching examples; hand hooks for large txns.
+- Never invent pack APIs outside Accellera (`pack`/`unpack`/`do_pack`/`uvm_packer`).

@@ -1,0 +1,30 @@
+{
+  "scale": "block",
+  "enable_ral": true,
+  "ip_hjson": null,
+  "protocol_knobs": {
+    "spi_mode": 0,
+    "uart_dir": "tx",
+    "i2c_role": "slave"
+  },
+  "memory_map": [
+    { "name": "REGS", "base": "0x0", "size": "0x1000" }
+  ],
+  "csr_list": [
+    {
+      "name": "CTRL",
+      "addr": "0x0",
+      "reset": "0x0",
+      "access": "rw",
+      "width": 32,
+      "fields": [{ "name": "ENABLE", "lsb": 0, "width": 1, "access": "rw" }]
+    },
+    { "name": "STAT", "addr": "0x4", "reset": "0x0", "access": "ro", "width": 32 }
+  ],
+  "topology": {
+    "agents": [],
+    "address_map": [],
+    "clocks": [],
+    "interconnect": ""
+  }
+}

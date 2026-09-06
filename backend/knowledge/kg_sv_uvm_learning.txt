@@ -4,7 +4,22 @@
 ## KG overview — verification learning spine
 ChipSutra verification knowledge is a directed graph: SV language → OOP/random → UVM → reuse/scalability → testcase strategy → inbuilt functions/constructs.
 Learning order (L1→L4): syntax → stimulus/check → architecture → closure/scale.
-Always: exact DUT ports; Verilator-friendly SV by default; UVM only when asked; independent golden models (never exp=count+1).
+Always: exact DUT ports; Verilator-friendly SV by default; UVM/OVM/VMM only when methodology asks; independent golden models (never exp=count+1).
+External curriculum map (study order): ChipVerify SV + UVM tutorials — https://chipverify.com/tutorials/systemverilog — also see verification_methodologies_curriculum.txt (methodologies ladder).
+MUST-KNOW pillars (every generate): data types, arrays/collections, control-flow loops,
+classes/OOP, randomization, constraints, covergroups, assertions/SVA, interfaces, threads/IPC —
+see sv_fundamentals_must_know.txt and matching sv_*_patterns.txt / covergroup_patterns.txt / sva_patterns.txt.
+
+## Methodology selection — SV / UVM / OVM / VMM
+- User picks methodology; do not silently swap UVM for pure SV (or the reverse).
+- Ladder: Vera/e (hist) → VMM → OVM → UVM (IEEE 1800.2). ChipSutra ids: sv|uvm|ovm|vmm.
+- sv: module TB, clock/reset, $urandom or class CRV, independent golden, dump/$finish.
+- uvm: real uvm_* agent/env/test + config_db vif + start_item/finish_item / get_next_item/item_done.
+- ovm: legacy ovm_* only; compact env; comment methodology=ovm.
+- vmm: legacy channel/xactor style; comment methodology=vmm.
+- UVM architecture/RAL/TLM smoke vs advanced: `uvm_users_guide_emit.txt` (Accellera UG 1.2 concepts, original wording).
+- Mix OVM+VMM only if the user asks: interconnected adapters (`ovm_vmm_interop_emit.txt`); never wrap/hide VIP; never mix uvm_* with ovm_*.
+Forbidden: mixing uvm_* with ovm_*; fake UVM APIs; inventing CSR RAL without a map; emitting Accellera UBus as a protocol.
 
 ## L1 — Standard SystemVerilog syntax (must know)
 - Modules, ports (input/output/inout), parameters/localparams, generate, packages, imports.
@@ -14,6 +29,7 @@ Always: exact DUT ports; Verilator-friendly SV by default; UVM only when asked; 
 - Operators: logical/bitwise/reduction/concat/replicate; ===/!== vs ==/!=; inside; streaming.
 - Interfaces + modports; virtual interfaces in TB/UVM.
 - Tasks/functions (automatic); void'(); $cast; type().
+- Deep refs: sv_datatypes_control_patterns.txt, sv_arrays_collections_patterns.txt, sv_oop_classes_patterns.txt.
 Forbidden in TB codegen: inventing ports; chat prose after endmodule; broken clocks (use always #period clk=~clk).
 
 ## L1 — SV constructs for testbenches
@@ -42,6 +58,13 @@ Forbidden in TB codegen: inventing ports; chat prose after endmodule; broken clo
 - Stability: seed via +ntb_random_seed / void'($urandom(seed)); log seed in TB.
 - Coverage-driven: randomize until coverpoints hit; avoid unrolled Testcase 1..N walls.
 - Counter pattern: enable=$urandom_range(0,1); expected independent; check count===expected each cycle.
+- Deep reference: sv_constraints_patterns.txt (randc, implication, foreach, solve before, anti-patterns).
+
+## L2 — Interfaces and clocking (TB connectivity)
+- Bundle DUT pins in `interface` with `logic` (4-state); parameterize widths.
+- `modport` views for DUT / TB / monitor; virtual interface + config_db for class/UVM.
+- Clocking blocks for skew-safe drive/sample; pure SV smoke may skip IF and use named ports.
+- Deep reference: sv_interfaces_patterns.txt.
 
 ## L2 — Reusable techniques (block → IP)
 - Layer TB: clock/reset IF → driver → monitor → scoreboard → sequence library.
@@ -93,6 +116,8 @@ Forbidden fake APIs: .put() as UVM, .configure(vif), cast(rhs), driver.start(thi
 - Power/DFT awareness: retention/isolation as constraints when UPF given (don't invent).
 - Chiplet/D2D: treat links as VIP unless RTL ports given (UCIe/BoW concepts only).
 - Coverage closure: hole → new constrained sequence → re-sim → merge coverage (ChipSutra coverage loop).
+- Techniques: sim (ChipSutra default); formal on control/reset/security SVA; emulation for OS boot; FPGA proto for real cables. Not alternatives.
+- Stages: block isolation (highest coverage) → subsystem interfaces → SoC end-to-end. Later stages do not replace earlier ones. Bug cost rises each stage.
 
 ## L4 — Quality gates for generated TB (ChipSutra)
 - Exact DUT instance and port map from parsed RTL.
@@ -126,6 +151,10 @@ Forbidden fake APIs: .put() as UVM, .configure(vif), cast(rhs), driver.start(thi
 - Markdown essay after `endmodule` -> strip / regenerate.
 - FIFO TB that only toggles wr_en without a queue model -> incomplete; add q[$] scoreboard.
 - AXI TB that randomizes all s_axi_* every cycle without handshakes -> illegal; use AW+W then B, AR then R.
+- AXI VALID that waits for READY before asserting -> deadlock; assert VALID independently, hold until handshake.
+- AHB TB that drops HWRITE/HTRANS in the same timeslot as the address posedge -> writes never land; #1 after posedge, hold HWRITE through data phase.
+- AHB TB that presents HWDATA on the address-phase cycle -> data belongs to the previous address.
+- APB TB that changes PSEL/PENABLE/PADDR while PREADY is LOW in ACCESS -> illegal; hold until PREADY.
 - Ignoring WIDTH/DEPTH parameters (hardcoding depth=16 on DEPTH=8 DUT) -> mismatch full/empty.
 
 ## Protocol goldens — competitive block smoke
@@ -133,4 +162,16 @@ Forbidden fake APIs: .put() as UVM, .configure(vif), cast(rhs), driver.start(thi
 - Sync FIFO (FWFT): queue mirror; clamp stimulus on full/empty; check empty/full/count/rd_data.
 - Parity: `parity === ^data` when valid.
 - AXI4-Lite slave (small aperture): model_reg[addr[3:2]]; complete B before next write; check RDATA.
+- AHB-Lite slave: NONSEQ address phase then data phase; HWDATA on the data-phase cycle; independent mem model.
+- APB slave: SETUP then ACCESS; hold controls while PREADY LOW; model_reg on completing write.
 - Prefer Fast-random skeleton for these patterns; use LLM/UVM for agents, virtual sequences, RAL.
+
+## AMBA emit rules (IHI 0022L / 0033C / 0024E — distilled, not copied)
+- AXI: transfer only when VALID&&READY at posedge ACLK. Transmitter must not wait for READY before VALID; hold VALID until handshake. VALID LOW in reset. BRESP/RRESP OKAY=2'b00. Do not invent AXI5-only pins (BCOMP, credits, wakeup) unless RTL has them.
+- AHB: 1-cycle address phase (cannot wait) overlapping previous data phase. HWDATA is data-phase. HTRANS NONSEQ for singles. After address posedge, #1 then change HWRITE/HTRANS.
+- APB: SETUP then ACCESS; complete when PREADY=1. While PREADY=0 in ACCESS, hold PSEL/PENABLE/PADDR/PWRITE/PWDATA. PSTRB LOW on reads. PSLVERR valid only last ACCESS cycle.
+- AXI4 burst / ACE / CHI: require user VIP. Do not use the Lite 4-reg golden when AWLEN exists. Do not invent snoop or CHI flit timing.
+- Serial knobs: SPI mode 0–3 from user CPOL/CPHA; I2C master vs 7/10-bit; UART RX baud_div from user — never invent baud.
+- CAN/I3C: idle/SOF smoke or I2C-compatible fallback. CCC/IBI/bit-time only with user ports or knobs.
+- Scale: block=pin smoke; ip=reusable agent+user RAL; processor=ISA+maps; subsystem/SoC/chiplet=user topology only.
+- Off-chip / D2D / DRAM / net I/O: PCIe CXL UCIe DDR Ethernet USB MIPI are VIP-bound — never invent timings.

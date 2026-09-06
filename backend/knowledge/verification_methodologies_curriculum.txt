@@ -1,0 +1,200 @@
+# Verification languages & TB methodologies (RAG)
+# Curriculum spine aligned with industry teaching paths such as ChipVerify
+# (https://chipverify.com/tutorials/systemverilog and UVM tutorials).
+# Original ChipSutra wording — do not paste third-party tutorial text verbatim.
+# Prefer user RTL/spec over examples.
+
+## Why SystemVerilog for verification
+- HDL (Verilog/VHDL) describes synthesizable hardware; HVL features in SystemVerilog
+  add OOP, constrained-random, coverage, assertions, and IPC for complex TB construction.
+- Pure Verilog TB worked for small designs; modern IPs need CRV, functional coverage,
+  self-checking scoreboards, and reusable layered components.
+- Older HVLs (Vera, e) still exist historically; verifying Verilog RTL in SystemVerilog
+  is the industry default because one language family covers both DUT and TB.
+
+## What a testbench must do (any methodology)
+1. Instantiate the DUT with an exact named port map (never invent ports).
+2. Generate clocks and apply a legal reset sequence.
+3. Drive inputs with directed and/or randomized legal stimulus.
+4. Observe outputs and compare to an independent golden / scoreboard.
+5. Dump waves (`$dumpfile`/`$dumpvars` or simulator equivalent) and finish cleanly.
+Failure modes to avoid: driving DUT outputs, circular goldens (exp = dut_out + 1),
+missing clock generators, X on checked outputs after reset without diagnosis.
+
+## Pure SV TB (ChipSutra default / Verilator-friendly)
+- Default = LAYERED class TB (NO UVM): interface → generator → driver → monitor →
+  scoreboard → env → test → top (`always #5 clk=~clk`, virtual IF, mailboxes).
+- Procedural smoke (optional): single `module *_tb` + `$urandom` loop when user asks.
+- Driven nets: `logic` with exact widths; never invent ports; independent golden.
+- Keep self-checking and seed logging (`void'($urandom(SEED))`).
+- Must-know SV pillars: see `sv_fundamentals_must_know.txt` (types, arrays, OOP,
+  randomize, constraints, covergroups, SVA, interfaces, IPC).
+Maps to ChipSutra methodology=`sv`.
+
+## Methodology ladder (pick what the user asks)
+History (short): Vera/e → Synopsys VMM → Accellera OVM (2008) → UVM (2011, IEEE 1800.2).
+ChipSutra UI: `sv` | `uvm` | `ovm` | `vmm`.
+- `sv`: fastest local path; skeleton + lint; OSS simulators (Verilator/Icarus-friendly subset).
+- `uvm`: industry standard class library; agents/sequences/config_db/factory/RAL.
+- `ovm`: legacy precursor to UVM; use only when user requires OVM APIs (`ovm_*`).
+- `vmm`: legacy Synopsys-style channels/xactors; use only when user requires VMM.
+Never mix `uvm_*` and `ovm_*` macros in one TB. Prefer migrating OVM→UVM when possible.
+
+## UVM essentials (when methodology=uvm)
+- Hierarchy: test → env → agent(s) → sequencer/driver/monitor + scoreboard/coverage.
+- Transaction = `uvm_sequence_item` with `rand` fields matching DUT-relevant inputs.
+- Phases: build → connect → run (time-consuming) → extract/check/report.
+- Connect pin world via virtual interface + `uvm_config_db#(virtual if)::set/get`.
+- Stimulus: sequence `start_item`/`finish_item`; driver `get_next_item`/`item_done`.
+- Monitor publishes via analysis port; scoreboard compares predicted vs observed.
+- Messaging: `` `uvm_info/`uvm_error/`uvm_fatal `` — not bare `$display` only.
+- Factory + config_db enable reuse; RAL when CSR map is provided (do not invent regs).
+Forbidden fake APIs: `.put()` as UVM, `.configure(vif)`, `driver.start(this)`, invented phases.
+Note: full UVM often needs commercial simulators; ChipSutra does not Verilator-gate UVM.
+
+## OVM essentials (when methodology=ovm)
+- Same layered idea as UVM with `ovm_*` base classes/macros and `run_test()`.
+- Components: sequence_item, sequencer, driver, monitor, agent, env, test, top.
+- Prefer compact legacy skeleton; comment `// ChipSutra methodology=ovm (legacy)`.
+- Do not emit UVM-only features (RAL packages, uvm_reg) unless user insists and maps them.
+- OVM+VMM in one env: interconnected adapters only (`ovm_vmm_interop_emit.txt`); do not invent wrappers.
+
+## VMM essentials (when methodology=vmm)
+- Transaction as `vmm_data` (or equivalent); channels between atomic generators and xactors.
+- Driver/monitor as xactors; env wires channels + scoreboard; top starts env.
+- Comment `// ChipSutra methodology=vmm (legacy)`; VCS-oriented assumptions OK.
+- Keep compact; legal randomized stimulus; exact DUT ports.
+- Channel↔TLM / notify↔analysis mapping when mixing with OVM: `ovm_vmm_interop_emit.txt`.
+
+## Learning path (external curriculum map)
+Recommended study order for humans (and for expanding this RAG over time):
+1. Digital fundamentals → 2. Verilog RTL → 3. Verification concepts →
+4. SystemVerilog (types, OOP, random, constraints, coverage, SVA, interfaces, IPC) →
+5. UVM (components, phases, sequences, config_db, coverage, RAL).
+Accellera UVM User’s Guide 1.2 is the apply-the-library map (`uvm_users_guide_emit.txt`); UG 1.1 is older.
+VIP Recommended Practices 1.0 + OVM-VMM interop kit: mix only when asked (`ovm_vmm_interop_emit.txt`).
+Primary open tutorial map: https://chipverify.com/tutorials/systemverilog
+UVM path: https://chipverify.com/tutorials/uvm
+When adding new RAG chunks, prefer short imperative rules + anti-patterns, not essay copies.
+
+## SV language pillars used by every solid TB
+- Types: `logic`/`bit`, enums, structs, queues `$`, dynamic/associative arrays.
+- OOP: class, extends, virtual methods, handles vs objects, shallow vs deep copy.
+- Random: see `sv_constraints_patterns.txt` — `rand`/`randc`, constraints, soft, dist, foreach.
+- Interfaces: see `sv_interfaces_patterns.txt` — modports, clocking, virtual IF + config_db.
+- Coverage: see `covergroup_patterns.txt` — bins/cross/closure loop.
+- Assertions: see `sva_patterns.txt` — concurrent props, bind, formal-friendly bounds.
+- Threads/IPC: fork/join*, events, semaphores, mailboxes (layered SV / VIP glue).
+
+## Deep curriculum cross-links (ChipVerify topic map)
+Full SV tutorial hub: https://chipverify.com/tutorials/systemverilog
+UVM hub: https://chipverify.com/tutorials/uvm
+
+| ChipVerify pillar | ChipSutra RAG file |
+|-------------------|--------------------|
+| Intro / why SV + TB | verification_methodologies_curriculum.txt |
+| Data types + control flow | sv_datatypes_control_patterns.txt |
+| Arrays / queues / assoc | sv_arrays_collections_patterns.txt |
+| Classes & OOP | sv_oop_classes_patterns.txt |
+| Randomization | sv_randomization_patterns.txt |
+| Constraints | sv_constraints_patterns.txt |
+| Functional coverage | covergroup_patterns.txt |
+| Assertions | sva_patterns.txt |
+| Interfaces / modports / clocking | sv_interfaces_patterns.txt |
+| Threads & IPC | sv_threads_ipc_patterns.txt |
+| Advanced (pkg/DPI/macros) | sv_advanced_features_patterns.txt |
+| TB templates / components | dv_tb_templates.txt |
+| UVM intro / OVM→UVM / pillars | uvm_basics_intro.txt |
+| UVM class hierarchy (component vs object) | uvm_class_hierarchy.txt |
+| UVM install / `$UVM_HOME` / Accellera | uvm_installation.txt |
+| Hello UVM (minimal test+env+top) | uvm_hello.txt |
+| UVM class library (core types index) | uvm_class_library.txt |
+| First TB DUT + reg_if contract | uvm_first_tb_dut.txt |
+| uvm_object (factory / utils) | uvm_object.txt |
+| sequence_item / transaction | uvm_transaction.txt |
+| uvm_component (hierarchy / build) | uvm_component.txt |
+| uvm_driver (vif + handshake) | uvm_driver.txt |
+| uvm_monitor (analysis port) | uvm_monitor.txt |
+| uvm_subscriber (coverage listen) | uvm_subscriber.txt |
+| uvm_sequencer (pull / connect) | uvm_sequencer.txt |
+| uvm_sequence (body / start_item) | uvm_sequence.txt |
+| sequence lifecycle / objections | uvm_sequence_usage.txt |
+| uvm_scoreboard (predict/compare) | uvm_scoreboard.txt |
+| uvm_agent (active/passive VIP) | uvm_agent.txt |
+| uvm_env (agent + scoreboard) | uvm_env.txt |
+| uvm_test (start sequence / reuse) | uvm_test.txt |
+| UVM testbench top (IF/DUT/run_test) | uvm_tb_top.txt |
+| UVM base class chain (void..root) | uvm_base_classes.txt |
+| uvm_root / uvm_top | uvm_root.txt |
+| uvm_object pack/unpack | uvm_object_pack.txt |
+| uvm_object compare | uvm_object_compare.txt |
+| uvm_object print | uvm_object_print.txt |
+| uvm_object copy/clone | uvm_object_copy.txt |
+| UVM utility & field macros | uvm_utility_field_macros.txt |
+| UVM field macros (type catalog) | uvm_field_macros.txt |
+| UVM phases (build/run/cleanup) | uvm_phases.txt |
+| UVM objection (end-of-test) | uvm_objection.txt |
+| UVM user-defined phases | uvm_user_phases.txt |
+| UVM factory override | uvm_factory_override.txt |
+| Configure UVM components | uvm_configure_components.txt |
+| UVM resource database | uvm_resource_db.txt |
+| UVM config_db API | uvm_config_db.txt |
+| uvm_config_db examples / paths | uvm_config_db_examples.txt |
+| UVM TLM intro | uvm_tlm.txt |
+| UVM TLM blocking put | uvm_tlm_blocking_put.txt |
+| UVM TLM blocking get | uvm_tlm_blocking_get.txt |
+| UVM TLM FIFO | uvm_tlm_fifo.txt |
+| UVM TLM hierarchical example | uvm_tlm_example.txt |
+| UVM TLM analysis port | uvm_tlm_analysis.txt |
+| UVM TLM sockets (TLM2) | uvm_tlm_sockets.txt |
+| UVM TLM `_decl` macros | uvm_tlm_decl.txt |
+| UVM TLM nonblocking put | uvm_tlm_nonblocking_put.txt |
+| UVM TLM port/export/imp chains | uvm_tlm_port_export_imp.txt |
+| UVM TLM nonblocking get | uvm_tlm_nonblocking_get.txt |
+| UVM sequence start() flow | uvm_sequence_start.txt |
+| UVM sequence macros (uvm_do expand) | uvm_sequence_macros.txt |
+| UVM `uvm_do*` catalog | uvm_do.txt |
+| UVM `uvm_send*` / pre-existing items | uvm_send.txt |
+| UVM virtual sequence | uvm_virtual_sequence.txt |
+| UVM virtual sequencer | uvm_virtual_sequencer.txt |
+| UVM sequence library | uvm_sequence_library.txt |
+| UVM sequence arbitration | uvm_sequence_arbitration.txt |
+| UVM reporting classes | uvm_reporting_classes.txt |
+| UVM reporting functions | uvm_reporting_functions.txt |
+| UVM printer (table/tree/line) | uvm_printer.txt |
+| UVM comparer policy | uvm_comparer.txt |
+| UVM callback | uvm_callback.txt |
+| UVM event | uvm_event.txt |
+| UVM event pool | uvm_event_pool.txt |
+| UVM RAL intro | uvm_ral.txt |
+| UVM RAL model classes | uvm_ral_classes.txt |
+| UVM RAL environment | uvm_ral_env.txt |
+| UVM RAL connect (set_sequencer) | uvm_ral_connect.txt |
+| UVM RAL backdoor | uvm_ral_backdoor.txt |
+| UVM RAL end-to-end example | uvm_ral_example.txt |
+| UVM get_next_item handshake | uvm_get_next_item.txt |
+| UVM transaction object recipe | uvm_transaction_object.txt |
+| UVM get/put handshake | uvm_get_put.txt |
+| UVM HDL access routines | uvm_hdl_access.txt |
+| UVM singleton object | uvm_singleton.txt |
+| UVM guide: reusable VIP | uvm_guide_reusable_vip.txt |
+| UVM guide: using UVCs | uvm_guide_using_vip.txt |
+| UVM TB example (pattern detect) | uvm_tb_example_pattern.txt |
+| UVM TB example 1 (reg/mem) | uvm_tb_example1.txt |
+| UVM TB example 2 (switch) | uvm_tb_example2.txt |
+| UVM components/phases/RAL | uvm_patterns.txt |
+| Methodologies SV/UVM/OVM/VMM | verification_methodologies_curriculum.txt |
+
+Author new RAG as original imperative bullets; never paste tutorial pages wholesale.
+
+## ChipVerify coverage status
+All major ChipVerify SystemVerilog tutorial pillars above have a dedicated or shared RAG file.
+Intentionally light / out-of-scope for codegen: interview Q banks, browser lab UX, vendor GUI steps.
+Verification-planning terms also appear in vlsi_protocols_compact.txt / glossary.
+
+## ChipSutra product mapping
+- Methodology selector → prompt block + rules + engine (skeleton vs LLM).
+- Pure SV smoke/random → `tb_skeleton` + `tb_lint` quality gate.
+- UVM/OVM/VMM → LLM + methodology rules; higher `num_predict`; no SV lint as final gate.
+- Always RAG-inject this file (and kg_sv_uvm_learning) when prompt mentions
+  uvm/ovm/vmm/methodology/testbench/agent/sequence.

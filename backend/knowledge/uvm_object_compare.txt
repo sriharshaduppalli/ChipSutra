@@ -1,0 +1,68 @@
+# UVM Object Compare
+# Deep field compare via field macros or do_compare. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Object Compare. Pair with: uvm_object.txt, uvm_object_print.txt, uvm_object_copy.txt.
+
+## API
+```systemverilog
+bit same = obj2.compare(obj1);           // true if all registered/hook fields match
+bit same = obj2.compare(obj1, comparer); // optional uvm_comparer policy
+```
+- `compare` calls `do_compare` (not virtual on the public API — customize the hook).
+- Nested objects (`uvm_field_object`) compare recursively when registered.
+- Mismatches log via comparer (`MISCMP` messages) when using automation.
+
+## Automation macros path
+Register fields so compare (and print/copy) know them:
+
+```systemverilog
+`uvm_object_utils_begin(Object)
+  `uvm_field_enum(e_bool, m_bool, UVM_DEFAULT)
+  `uvm_field_int(m_mode, UVM_DEFAULT)
+  `uvm_field_string(m_name, UVM_DEFAULT)
+  `uvm_field_object(m_pkt, UVM_DEFAULT)
+`uvm_object_utils_end
+```
+- Use matching field macros: int / enum / string / object / array variants.
+- Nested `Packet` needs its own field registration for nested compare.
+- Macros add code/overhead — OK for small teaching txns; prefer hooks for large objects.
+
+## Manual do_compare
+When not using field automation for compare:
+
+```systemverilog
+virtual function bit do_compare(uvm_object rhs, uvm_comparer comparer);
+  Object _obj;
+  bit res;
+  if (!$cast(_obj, rhs)) return 0;
+  res = super.do_compare(_obj, comparer)
+        && (m_name == _obj.m_name)
+        && (m_mode == _obj.m_mode)
+        && (m_bool == _obj.m_bool)
+        && m_pkt.do_compare(_obj.m_pkt, comparer);
+  return res;
+endfunction
+```
+- `$cast` rhs to concrete type before field access.
+- Always call `super.do_compare` and AND with local field checks.
+- Nested objects: call their `do_compare` (or compare fields).
+- Without field macros, `print()` may be empty — implement `convert2string` / `do_print`.
+
+## Scoreboard vs object.compare
+| Use | Pattern |
+|-----|---------|
+| Protocol scoreboard | Independent predict + field/`!==` checks (usual ChipSutra path) |
+| Object equality / VIP utils | `txn.compare(expected)` or `do_compare` |
+
+Do not replace scoreboard golden with blind `compare` to DUT-derived objects (circular).
+
+## Beginner mistakes
+1. Forgetting `$cast` in `do_compare` — cannot read child fields from `uvm_object` rhs.
+2. Skipping `super.do_compare`.
+3. Nested object not registered / not compared — silent false match on parent-only fields.
+4. Expecting `print()` after dropping field macros without `convert2string`/`do_print`.
+
+## ChipSutra emit notes
+- Smoke sequence_items: `` `uvm_object_utils_begin/end `` + field macros is enough (enables compare/print/copy).
+- Hand `do_compare` only when user asks custom policy or large objects.
+- Scoreboards: keep explicit predict/compare; optional `compare` for cloned expected txns.
+- Policy tuning (`show_max`, verbosity, `result` trap): `uvm_comparer.txt` — default comparer OK for smoke.

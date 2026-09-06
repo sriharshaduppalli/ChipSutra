@@ -1,0 +1,71 @@
+# UVM Verification Testbench Example (pattern detector)
+# End-to-end FSM DUT + UVM TB map and bug-hunt lessons. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Verification Testbench Example.
+# Pair with: uvm_guide_using_vip.txt, uvm_scoreboard.txt, uvm_get_next_item.txt,
+# uvm_tb_example1.txt, uvm_tb_example2.txt.
+
+## Spec
+DUT: serial pattern detector (e.g. `1011`). Each clock samples `in`; `out==1` when
+pattern recognized (FSM). Classic overlap bugs: after partial match, next bit may
+restart / continue differently than a naive “restart to IDLE”.
+
+Test plan scenarios include streams like `011011011010`, `101011100`, `111011011`.
+
+## TB architecture
+```
+tb: clk + des_if + DUT + config_db vif + run_test
+  test (base_test / test_1011)
+    env
+      agent: sequencer#(Item) + driver + monitor
+      scoreboard (analysis_imp)
+```
+
+| Piece | Role |
+|-------|------|
+| `Item` | `rand bit in`; `bit out`; dist constraint; `convert2str` |
+| `gen_item_seq` | `rand num` items; `start_item` / randomize / `finish_item` |
+| Driver | `get_next_item` → `@(vif.cb); vif.cb.in <= item.in` → `item_done` |
+| Monitor | On clk + rstn: sample `in`/`out` → `mon_analysis_port.write` |
+| Scoreboard | Shift `act_pattern` with `in`; independent ref vs `out` (1-cycle lag) |
+| Agent | sqr↔drv; env connects `mon_ap` → sb |
+| Base test | set vif to `e0.a0.*`; set `ref_pattern` in config_db; reset; `seq.start` |
+
+IF: `des_if` with clocking `cb` (drive `in`, sample `out`). Prefer clocking in driver/mon.
+
+## Scoreboard idea (independent golden)
+```
+act_pattern = (act_pattern << 1) | item.in;
+// first compare item.out vs exp_out (from *previous* cycle match)
+// then: if act_pattern matches ref_pattern -> exp_out=1 else 0  // checked next cycle
+```
+- Golden is **bit-shift match**, not a copy of DUT FSM states.
+- Latency: pattern match implies `out` high on the **next** check edge — compare before updating `exp_out`.
+- `ref_pattern` from config_db so the same env can target other LENGTH patterns.
+
+## Config / reuse knobs
+- Pattern via `uvm_config_db#(bit[LENGTH-1:0])` — not hardcoded only in DUT.
+- Sequence `num` soft constraint; derived test tightens (`[300:500]`).
+- Base test applies reset on vif; derived tests only change pattern / stimulus volume.
+
+## Industry lesson (design iterations)
+Same TB + same test, successive DUT FSM fixes:
+| Version | Typical bug theme | Errors trend |
+|---------|-------------------|--------------|
+| v1.0 | S1 + `1` went IDLE (should stay S1) | many |
+| v1.1 | S101 + `0` went IDLE (should S10 — overlap “10”) | fewer |
+| v1.2 | S1011 always IDLE (should S1 if next `1`) | fewer |
+| v1.3 | S1011 + `0` → IDLE (should S10) | few |
+| v1.4 | Overlaps correct | **0** for that seed |
+
+Message: keep TB fixed; iterate DUT; then **many seeds** before declare clean.
+Overlapping pattern FSMs are easy to get wrong — scoreboard must model overlap,
+not only “reset to IDLE after match”.
+
+## ChipSutra emit notes
+- Use as checklist for serial/FSM DUTs: mon→sb with independent shift/FSM predict.
+- Prefer user DUT ports/timing; do not force `det_1011` names on unrelated RTL.
+- Smoke: shorter `num`, same structure (item/seq/drv/mon/sb/agent/env/test/top).
+- Always: factory create, config_db vif, objections, `` `uvm_info/`uvm_error `` not `$display`.
+- Promote mon ap to agent in reusable VIP style (`uvm_guide_reusable_vip.txt`) —
+  this example connects `a0.m0` directly (teaching shortcut).
+- Multi-seed regression is part of the story — one seed ≠ tapeout.

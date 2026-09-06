@@ -1,0 +1,72 @@
+# UVM Callback
+# Extensible hooks without editing VIP source. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Callback.
+# Pair with: uvm_monitor.txt, uvm_factory_override.txt, uvm_event.txt,
+# sv_advanced_features_patterns.txt (Pure SV hooks).
+
+## What / why
+`uvm_callback` is the base for **user-defined callback classes**. A VIP author defines
+an application callback type with empty virtual methods (the callback interface).
+Users extend that type and override methods to inject behavior **without changing**
+the original component source.
+
+Decouples: code that **triggers** an action vs code that **defines** the action.
+Use when customization or dynamic behavior is needed (error inject, extra checks,
+protocol side-band) while keeping the VIP reusable.
+
+vs factory override: override replaces a whole type; callbacks add optional hooks
+at registered points inside an existing instance.
+
+## Macros
+Register pair (component/object type `T` + callback type `CB`):
+```systemverilog
+`uvm_register_cb(my_monitor, my_monitor_cb)
+```
+Expands to a static `uvm_callbacks#(T,CB)::m_register_pair(...)`.
+
+Invoke all registered callbacks for a method:
+```systemverilog
+`uvm_do_callbacks(my_monitor, my_monitor_cb, call_pre_check())
+```
+Iterates `uvm_callback_iter#(T,CB)` on `this` and calls `cb.METHOD` for each.
+
+## Pattern (monitor pre/post check)
+1. **Callback base** — empty virtual hooks:
+```systemverilog
+class my_monitor_cb extends uvm_callback;
+  `uvm_object_utils(my_monitor_cb)
+  virtual function void call_pre_check(); endfunction
+  virtual function void call_post_check(); endfunction
+endclass
+```
+2. **User callback** — override hooks (`` `uvm_info ``, inject, etc.).
+3. **Component** — register + do callbacks around core logic:
+```systemverilog
+class my_monitor extends uvm_monitor;
+  `uvm_component_utils(my_monitor)
+  `uvm_register_cb(my_monitor, my_monitor_cb)
+  function void check_transaction();
+    `uvm_do_callbacks(my_monitor, my_monitor_cb, call_pre_check())
+    // normal check ...
+    `uvm_do_callbacks(my_monitor, my_monitor_cb, call_post_check())
+  endfunction
+endclass
+```
+4. **Test** — create + add callback to the instance:
+```systemverilog
+my_cb = custom_monitor_cb::type_id::create("my_cb");
+uvm_callbacks#(my_monitor)::add(mon, my_cb);
+```
+
+## ChipSutra emit notes
+- Smoke / default Generate: **no** callback machinery — keep VIP simple.
+- Emit callbacks when user asks for VIP extensibility, error injection, or
+  extra checks without forking the monitor/driver base file.
+- Prefer factory override when the whole component type must change; callbacks
+  when only sparse hooks are needed.
+- Pure SV layered TB: virtual `pre_*`/`post_*` hooks — see `sv_advanced_features_patterns.txt`.
+- Always register (`uvm_register_cb`) before `` `uvm_do_callbacks ``; add from test/env
+  after the target component exists.
+- Verilator / limited UVM: callbacks may be unsupported or fragile — prefer explicit
+  virtual methods if the flow is Verilator-first.
+- VIP reuse context: `uvm_guide_reusable_vip.txt` (Guideline 5).

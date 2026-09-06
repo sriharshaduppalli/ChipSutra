@@ -1,0 +1,74 @@
+# UVM Subscriber [uvm_subscriber]
+# Analysis-port listener: receive monitor broadcasts; typical home for functional coverage.
+# ChipSutra original wording. Curriculum: ChipVerify Subscriber.
+# Pair with: uvm_monitor.txt. Scoreboard often uses analysis_imp similarly.
+
+## Role
+- Listener on `uvm_analysis_port`: each `write` on the port calls every connected subscriber.
+- `uvm_subscriber #(T)` = `uvm_component` + built-in `analysis_export` + pure virtual `write(T t)`.
+- Natural home for **coverage sampling**; scoreboards may use subscriber or dedicated analysis_imp.
+- Monitor does not change when more listeners attach — fan-out is TLM connect, not monitor edits.
+
+## Base shape
+```systemverilog
+virtual class uvm_subscriber #(type T = int) extends uvm_component;
+  uvm_analysis_imp #(T, this_type) analysis_export;  // built in base new()
+  pure virtual function void write(T t);             // must implement
+endclass
+```
+Derived `new` only needs `super.new(name, parent)` — export already constructed.
+
+## Coverage subscriber example
+```systemverilog
+class reg_coverage extends uvm_subscriber #(reg_transaction);
+  `uvm_component_utils(reg_coverage)
+  reg_transaction trans;
+
+  covergroup cg_reg_transaction;
+    coverpoint trans.addr;
+    coverpoint trans.wr_en;
+    coverpoint trans.rd_en;
+  endgroup
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+    cg_reg_transaction = new();
+  endfunction
+
+  virtual function void write(reg_transaction t);
+    trans = t;
+    cg_reg_transaction.sample();
+  endfunction
+endclass
+```
+Keep covergroups lean in smoke TBs; bins/cross in dedicated coverage work.
+
+## connect_phase wiring
+Owner (agent or env) connects once:
+
+```systemverilog
+virtual function void connect_phase(uvm_phase phase);
+  super.connect_phase(phase);
+  m_monitor.mon_analysis_port.connect(m_coverage.analysis_export);
+  // also: m_monitor.mon_analysis_port.connect(m_scoreboard.analysis_export);
+endfunction
+```
+- Same monitor port can connect to **multiple** exports (coverage + scoreboard) — no monitor change.
+- Missing connect => silent zero coverage (no compile error) — verify wiring early.
+
+## Why not plain uvm_component?
+You can hand-add `uvm_analysis_imp` + `write`. Prefer `uvm_subscriber` for intent and required `write()`.
+
+## Beginner mistakes
+1. Not implementing `write()` — will not compile (pure virtual).
+2. Forgetting connect_phase — coverage stuck at 0.
+3. Putting functional scoreboard predict inside coverage subscriber by default — split roles.
+4. Expecting factory create for analysis_export — base class owns it.
+
+## ChipSutra emit notes (methodology=uvm)
+- Compact smoke: scoreboard with analysis_imp is enough (`uvm_scoreboard.txt`); add `uvm_subscriber` coverage when user asks covergroups.
+- Always connect monitor `ap` -> sb (and coverage if present) in env/agent `connect_phase`.
+- Analysis port broadcast details: `uvm_tlm_analysis.txt`.
+- Sample covergroups in `write()` or after storing txn handle coverpoints see.
+- Pure SV layered: mailbox to scoreboard / coverage class — no analysis_port.
+- User DUT: coverpoints on meaningful txn fields only.

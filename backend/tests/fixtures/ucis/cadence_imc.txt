@@ -1,0 +1,7 @@
+IMC Coverage Summary (Cadence-style text fixture — not a vendor dump)
+------------------------------------------------
+Block Coverage: 70.00%
+Expression Coverage: 33.33%
+Toggle Coverage: 91.00%
+Overall Coverage: 64.78%
+------------------------------------------------

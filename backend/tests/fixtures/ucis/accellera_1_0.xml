@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ucis xmlns="http://www.accellera.org/XMLSchema/UCIS/1.0">
+  <instanceCoverages name="top.u_fifo" moduleName="sync_fifo">
+    <covergroupCoverages name="cg_fifo" coveredBins="6" totalBins="10"/>
+    <coverpointCoverages name="cp_depth" coveredBins="9" totalBins="10"/>
+    <crossCoverages name="cx_rw" coveredBins="2" totalBins="8"/>
+    <toggleCoverage name="tg_wr" pct="40.0"/>
+  </instanceCoverages>
+</ucis>

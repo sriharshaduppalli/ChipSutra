@@ -1,0 +1,52 @@
+// ChipSutra test fixture — OpenTitan/reggen-shaped, not an OT IP copy
+{
+  name: uart_mini
+  regwidth: 32
+  registers: [
+    { name: INTR_STATE
+      swaccess: rw1c
+      fields: [
+        { bits: "0"
+          name: TX_WATERMARK
+          resval: 0
+        }
+        { bits: "1"
+          name: RX_WATERMARK
+        }
+      ]
+    }
+    { name: CTRL
+      swaccess: rw
+      fields: [
+        { bits: "0"
+          name: ENABLE
+          resval: 1
+        }
+        { bits: "7:1"
+          name: RSVD
+        }
+      ]
+    }
+    { reserved: 1 }
+    { name: STATUS
+      swaccess: ro
+      fields: [
+        { bits: "0"
+          name: TXIDLE
+        }
+      ]
+    }
+    { skipto: "0x20" }
+    { multireg: {
+        name: DATA
+        count: 2
+        swaccess: rw
+        fields: [
+          { bits: "7:0"
+            name: VALUE
+          }
+        ]
+      }
+    }
+  ]
+}

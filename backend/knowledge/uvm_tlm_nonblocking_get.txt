@@ -1,0 +1,82 @@
+# UVM TLM Nonblocking Get Port
+# try_get / can_get — consumer pull without stalling inside a get task.
+# ChipSutra original wording. Curriculum: ChipVerify UVM TLM Non-blocking Get Port.
+# Pair with: uvm_tlm_blocking_get.txt, uvm_tlm_nonblocking_put.txt, uvm_tlm.txt.
+
+## Blocking vs nonblocking get
+| | Blocking | Nonblocking |
+|--|----------|-------------|
+| Port | `uvm_blocking_get_port #(T)` | `uvm_nonblocking_get_port #(T)` |
+| Imp | `uvm_blocking_get_imp #(T,IMP)` | `uvm_nonblocking_get_imp #(T,IMP)` |
+| Call | `get(pkt)` task — waits | `try_get(pkt)` / `can_get()` **functions** |
+| Imp body | `task get(output T t)` | `function bit try_get(output T t)` + `function bit can_get()` |
+
+Connect: `consumer.m_get_port.connect(producer.m_get_imp)`.
+Match NB↔NB (or blocking↔blocking) — do not mix families.
+
+## Who does what
+| Side | Type | Action |
+|------|------|--------|
+| Consumer (requestor) | `uvm_nonblocking_get_port` | `try_get` / poll `can_get` |
+| Producer (supplier) | `uvm_nonblocking_get_imp` | Implement `try_get` + `can_get` |
+
+Pull model (same as blocking get): consumer initiates; producer fills `output` txn.
+
+## APIs
+```systemverilog
+bit ok = m_get_port.try_get(pkt);  // 1 = got packet, 0 = none available
+bit rdy = m_get_port.can_get();    // 1 = producer ready to supply
+```
+Imp must define both functions. Prefer `type_id::create` inside `try_get` over bare `new()`.
+
+## Minimal pattern
+```systemverilog
+// Consumer
+uvm_nonblocking_get_port #(Packet) m_get_port;
+m_get_port = new("m_get_port", this);
+if (m_get_port.try_get(pkt))
+  `uvm_info("COMPB", "got packet", UVM_LOW)
+
+// Producer
+uvm_nonblocking_get_imp #(Packet, componentA) m_get_imp;
+m_get_imp = new("m_get_imp", this);
+virtual function bit try_get(output Packet pkt);
+  pkt = Packet::type_id::create("pkt");
+  assert(pkt.randomize());
+  return 1;  // or 0 if not ready / empty
+endfunction
+virtual function bit can_get();
+  return 1;
+endfunction
+
+// Parent
+compB.m_get_port.connect(compA.m_get_imp);
+```
+
+## can_get then try_get
+```systemverilog
+while (!m_get_port.can_get()) #10;  // must advance time or hang
+m_get_port.try_get(pkt);
+```
+Still check `try_get` return. Prefer FIFO / blocking get over tight polls when waiting for data.
+
+## vs smoke TB
+| Need | Prefer |
+|------|--------|
+| Driver pulls items | `seq_item_port.get_next_item` (blocking handshake) |
+| Monitor pushes | `analysis_port.write` |
+| Teaching NB pull / readiness | `uvm_nonblocking_get_port` |
+| Rate mismatch buffer | `uvm_tlm_fifo` + blocking get/put |
+
+## Beginner mistakes
+1. Implementing `task get` on an NB get_imp — need `try_get`/`can_get` functions.
+2. Connecting NB get_port to blocking get_imp.
+3. Printing/using `pkt` after failed `try_get` (handle may be stale/null).
+4. `while (!can_get());` with no delay → zero-time hang.
+5. Bare `pkt = new()` in producer — prefer factory create.
+
+## ChipSutra emit notes
+- Default Generate: no NB get ports; keep sqr/drv and analysis paths.
+- Demo only when user asks; document return codes + timed polls.
+- Blocking get: `uvm_tlm_blocking_get.txt`. NB put: `uvm_tlm_nonblocking_put.txt`.
+- TLM chapter overview: `uvm_tlm.txt`.

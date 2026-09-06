@@ -38,7 +38,148 @@ module counter_rtl_tb;
 endmodule
 ```
 
-## UVM (only when user asks)
-- Real APIs only: config_db, get_next_item/item_done, start_item/finish_item.
-- Forbidden: `.put()`, `.configure(vif)`, `cast(rhs)`, `driver.start(this)`.
-- Randomize sequence_item fields that mirror DUT ports; constrain legal ranges.
+## UVM (only when user asks / methodology=uvm)
+- Hierarchy: test → env → agent (sequencer, driver, monitor) → scoreboard/coverage.
+- Item: `uvm_sequence_item` with rand fields matching DUT-driven inputs.
+- Driver: `get_next_item` → drive pins → `item_done`. Sequence: `start_item`/`finish_item`.
+- Monitor: sample pins → `ap.write(txn)`. Scoreboard: analysis imp/fifo compare vs predict.
+- config_db for virtual interface; factory `type_id::create`; `` `uvm_component_utils ``.
+- Top: instantiate DUT + IF, `uvm_config_db::set`, `run_test();`.
+- MUST emit `interface <dut>_if` (virtual if is not a type without it) and `uvm_sequencer#(txn)`.
+- connect_phase: `drv.seq_item_port.connect(sqr.seq_item_export);` `mon.ap.connect(sb.imp);`
+- Legal SV: `virtual function void` / `virtual task` — NEVER `virtual void` or `endprotected`.
+- Monitor extends `uvm_monitor` + `analysis_port.write`. Subscriber is for scoreboard/coverage only.
+- Sequence: `class <dut>_seq extends uvm_sequence#(txn); task body();` — never `uvm_sequence#(T) seq = new()`.
+- Scoreboard: `uvm_analysis_imp` + `write()`. Never `seq_item_port.get`. Reset is `rst_n`, not `enable==0`.
+- Forbidden fake APIs: `.put()`, `.configure(vif)`, `cast(rhs)`, `driver.start(this)`.
+- Forbidden TLM: `seq_item_port.connect(monitor.analysis_export)` / agent port to scoreboard.
+
+## UVM phases (deep)
+- build (top-down) → connect (bottom-up) → end_of_elaboration → start_of_simulation
+  → run (time) → extract → check → report → final.
+- Construct children in `build_phase`; TLM connects in `connect_phase`.
+- Always `super.phase(phase)` when overriding.
+- Phase lifecycle map (build/run/cleanup + sub-phases): `uvm_phases.txt`.
+- End-of-test: raise/drop objections in run_phase — details `uvm_objection.txt` (or default sequence + drain).
+
+## UVM reporting
+- `` `uvm_info(ID, msg, verbosity) `` / `` `uvm_warning `` / `` `uvm_error `` / `` `uvm_fatal ``.
+- Prefer these over bare `$display` in UVM components; filter via plusargs/verbosity.
+- Fatal on null vif / failed config_db get.
+
+## UVM factory & overrides
+- Create via factory so tests can `set_type_override` / `set_inst_override`.
+- Use overrides for error-injector driver variants — don't edit base VIP.
+- Register types with utils macros or risk silent create failures.
+
+## UVM TLM paths
+- `uvm_analysis_port` → `analysis_export` / `analysis_imp` / `tlm_analysis_fifo`.
+- Non-blocking monitor→scoreboard; blocking put/get ports for sequencer↔driver (seq_item_pull).
+- Do not replace UVM TLM with ad-hoc mailboxes unless pure SV layered TB.
+
+## UVM RAL (when CSR map provided)
+- Concepts (why RAL / block / map): `uvm_ral.txt`.
+- Field/reg/block + desired/mirrored: `uvm_ral_classes.txt`.
+- Adapter / predictor / reg_env: `uvm_ral_env.txt`.
+- Connect map/sequencer + mon→predictor: `uvm_ral_connect.txt`.
+- Backdoor HDL paths / `UVM_BACKDOOR`: `uvm_ral_backdoor.txt`.
+- End-to-end APB RAL checklist: `uvm_ral_example.txt`.
+- `uvm_reg_block` / `uvm_reg` / `uvm_reg_field` + map; frontdoor via adapter.
+- `write`/`read`/`mirror`/`predict`; built-in sequences when map exists.
+- Never invent register addresses — require user map/IP-XACT/doc.
+
+## UVM + ChipVerify learning order
+1. SV OOP + interfaces + constraints → 2. Hello UVM top/run_test → 3. item/driver
+→ 4. sequencer/monitor/scoreboard → 5. phases/config_db → 6. coverage/RAL.
+Intro curriculum (what/why/OVM→UVM/7 pillars/prereqs): `uvm_basics_intro.txt`.
+Class hierarchy (component vs object, TLM/sequence map): `uvm_class_hierarchy.txt`.
+Install / Accellera / `$UVM_HOME` / Verilator limits: `uvm_installation.txt`.
+Minimal runnable smoke (test+env+`run_test`, no DUT): `uvm_hello.txt`.
+Core class index (which `uvm_*` to emit): `uvm_class_library.txt`.
+Chapter DUT contract (`reg_block` + `reg_if`, 1-cycle read latency): `uvm_first_tb_dut.txt`.
+`uvm_object` / factory / `` `uvm_object_utils ``: `uvm_object.txt`.
+`uvm_sequence_item` + field macros + constraints: `uvm_transaction.txt`.
+Transaction object checklist: `uvm_transaction_object.txt`.
+`uvm_component` hierarchy / build_phase: `uvm_component.txt`.
+`uvm_driver` vif + get_next_item/item_done: `uvm_driver.txt`.
+get_next_item handshake deep-dive: `uvm_get_next_item.txt`.
+get/put + get_response (alternate): `uvm_get_put.txt`.
+`uvm_monitor` + analysis_port.write: `uvm_monitor.txt`.
+`uvm_subscriber` + connect analysis_export: `uvm_subscriber.txt`.
+`uvm_sequencer` pull + seq_item_port.connect: `uvm_sequencer.txt`.
+`uvm_sequence` body + start_item/finish_item: `uvm_sequence.txt`.
+Sequence start + objections + default_sequence: `uvm_sequence_usage.txt`.
+Scoreboard reference model + analysis_imp: `uvm_scoreboard.txt`.
+Agent active/passive + internal connects: `uvm_agent.txt`.
+Environment owns agent+sb: `uvm_env.txt`.
+Test builds env + starts sequence: `uvm_test.txt`.
+TB top IF+DUT+config_db+run_test: `uvm_tb_top.txt`.
+Base class chain (void/object/report/component/root): `uvm_base_classes.txt`.
+`uvm_root` / `uvm_top` singleton + find: `uvm_root.txt`.
+Object pack/unpack streams: `uvm_object_pack.txt`.
+Object compare / do_compare: `uvm_object_compare.txt`.
+uvm_comparer policy / MISCMP: `uvm_comparer.txt`.
+Object print / do_print / sprint / convert2string: `uvm_object_print.txt`.
+uvm_printer styles / knobs: `uvm_printer.txt`.
+Object copy / do_copy / clone: `uvm_object_copy.txt`.
+Utility + field macros (factory utils, flags, radix): `uvm_utility_field_macros.txt`.
+Field macro type catalog (int/enum/object/queue/aa): `uvm_field_macros.txt`.
+UVM phases (build/connect/run/cleanup): `uvm_phases.txt`.
+UVM objection (raise/drop/drain/auto): `uvm_objection.txt`.
+User-defined phases (advanced; avoid for smoke): `uvm_user_phases.txt`.
+Factory type/instance override: `uvm_factory_override.txt`.
+Configure components (knobs / config_db / cfg object): `uvm_configure_components.txt`.
+Resource database (pool/scope; prefer config_db): `uvm_resource_db.txt`.
+uvm_config_db set/get API: `uvm_config_db.txt`.
+config_db path examples + TRACE: `uvm_config_db_examples.txt`.
+UVM TLM intro (txn ports / smoke map): `uvm_tlm.txt`.
+TLM blocking put port/imp: `uvm_tlm_blocking_put.txt`.
+TLM blocking get port/imp: `uvm_tlm_blocking_get.txt`.
+TLM FIFO (uvm_tlm_fifo): `uvm_tlm_fifo.txt`.
+TLM hierarchical put/get/FIFO example: `uvm_tlm_example.txt`.
+TLM analysis port (write broadcast): `uvm_tlm_analysis.txt`.
+TLM2 sockets (b_transport; advanced): `uvm_tlm_sockets.txt`.
+TLM `_decl` multi-imp macros: `uvm_tlm_decl.txt`.
+TLM nonblocking put (try_put/can_put): `uvm_tlm_nonblocking_put.txt`.
+TLM port→export→imp hierarchy: `uvm_tlm_port_export_imp.txt`.
+TLM nonblocking get (try_get/can_get): `uvm_tlm_nonblocking_get.txt`.
+Sequence `start()` lifecycle: `uvm_sequence_start.txt`.
+Sequence macros (`uvm_do*` expand): `uvm_sequence_macros.txt`.
+`uvm_do*` / `uvm_do_on*` catalog: `uvm_do.txt`.
+`uvm_send*` / `uvm_create` (pre-existing): `uvm_send.txt`.
+Virtual sequence (multi-IF): `uvm_virtual_sequence.txt`.
+Virtual sequencer (handle holder): `uvm_virtual_sequencer.txt`.
+Sequence library (RAND/RANDC mix): `uvm_sequence_library.txt`.
+Sequence arbitration modes: `uvm_sequence_arbitration.txt`.
+Reporting classes (macros vs $display): `uvm_reporting_classes.txt`.
+Reporting functions / verbosity: `uvm_reporting_functions.txt`.
+uvm_printer (table/tree/line): `uvm_printer.txt`.
+uvm_comparer policy: `uvm_comparer.txt`.
+UVM callback (register_cb / do_callbacks): `uvm_callback.txt`.
+UVM event (wait_trigger / wait_ptrigger): `uvm_event.txt`.
+UVM event pool (named lookup): `uvm_event_pool.txt`.
+UVM RAL intro (regs/blocks/maps): `uvm_ral.txt`.
+UVM RAL classes (field/reg/block): `uvm_ral_classes.txt`.
+UVM RAL env (adapter/predictor): `uvm_ral_env.txt`.
+UVM RAL connect (set_sequencer): `uvm_ral_connect.txt`.
+UVM RAL backdoor: `uvm_ral_backdoor.txt`.
+UVM RAL example (APB traffic): `uvm_ral_example.txt`.
+get_next_item handshake: `uvm_get_next_item.txt`.
+Transaction object recipe: `uvm_transaction_object.txt`.
+get/put handshake: `uvm_get_put.txt`.
+HDL access (deposit/force/read): `uvm_hdl_access.txt`.
+Singleton (static get): `uvm_singleton.txt`.
+Reusable VIP guidelines: `uvm_guide_reusable_vip.txt`.
+Using UVCs in an env: `uvm_guide_using_vip.txt`.
+Pattern-detect TB example: `uvm_tb_example_pattern.txt`.
+Reg/memory TB example 1: `uvm_tb_example1.txt`.
+Addr-switch TB example 2: `uvm_tb_example2.txt`.
+External: https://chipverify.com/tutorials/uvm
+
+## First-TB chapter map (ChipVerify order)
+dut/IF (`uvm_first_tb_dut`) -> object -> txn -> component -> driver -> monitor ->
+subscriber -> sequencer -> sequence (+ usage) -> scoreboard -> agent -> env -> test -> top.
+
+## OVM / VMM (legacy methodology only)
+- OVM: `ovm_*` mirrors UVM shape; migrate to UVM when allowed.
+- VMM: channels/xactors — only if methodology=vmm.

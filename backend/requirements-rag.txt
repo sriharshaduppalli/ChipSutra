@@ -1,0 +1,4 @@
+# Optional RAG embedders (not required for hashed-tfidf fallback).
+# Install: pip install -r requirements-rag.txt
+sentence-transformers>=3.0.0,<6
+# torch comes as a dependency (CPU wheel by default from PyPI)

@@ -1,0 +1,80 @@
+# Understanding the UVM Resource Database
+# Global typed name/value store with scope; config_db sits on top.
+# ChipSutra original wording. Curriculum: ChipVerify Understanding the resource database.
+# Pair with: uvm_configure_components.txt, uvm_config_db.txt (API/examples next).
+
+## What it is
+Central repository (`uvm_resource_pool`) where components **set** and **get** typed values
+by name (and type), with a **scope** regex controlling visibility.
+Replaces fragile globals / hard-coded hierarchical paths for VIP reuse.
+
+## Access APIs
+| Class | Role |
+|-------|------|
+| `uvm_resource_db#(T)` | General set/get by name or type; looser hierarchy |
+| `uvm_config_db#(T)` | Convenience layer on resource_db for **component** config + hierarchical paths |
+
+ChipSutra smoke: prefer **`uvm_config_db`** for vif + knobs. Use raw resource_db only when user asks or for non-hierarchical shared resources.
+
+## What is a resource
+Parameterized container holding any SV type: `int`, `bit`, class handle, queue, **virtual interface**, …
+
+| Field | Meaning |
+|-------|---------|
+| Name | Lookup key for get |
+| Value | Stored data |
+| Scope | Regex / hierarchical visibility rule |
+| Type | Parameterized type of the value |
+
+## Pool structure
+- Indexed **by name** and **by type**; each key holds a queue of resources.
+- Earlier entries in a queue typically win when multiple match (precedence).
+- Scope filters which gets succeed for a given caller.
+- Pool records get history (success + fail) — dump for debug at end of sim.
+
+## Why it exists (vs plain SV)
+- Runtime-configurable TB (not only parameters/`define`).
+- Scoped sharing (not unsafe globals).
+- Pass virtual interfaces from module top into class TB.
+- Reusable VIP fetches settings by name.
+- Debug: dump / `+UVM_CONFIG_DB_TRACE` (and related plusargs).
+
+## Example patterns (usually via config_db)
+
+### Virtual interface (most common)
+```systemverilog
+// tb_top — before run_test
+uvm_config_db#(virtual ubus_if)::set(null, "*", "vif", vif);
+// or: uvm_coreservice_t::get().get_root() as context + "*"
+
+// driver/monitor build_phase
+if (!uvm_config_db#(virtual dut_if)::get(this, "", "vif", vif))
+  `uvm_fatal("NOVIF", {"vif missing for ", get_full_name()})
+```
+
+### Simple knob
+```systemverilog
+// test
+uvm_config_db#(int)::set(this, "*", "transaction_count", 1000);
+// component
+if (!uvm_config_db#(int)::get(this, "", "transaction_count", num_transactions))
+  num_transactions = 500;  // default
+```
+
+### RAL: disable built-in reg tests for a block
+```systemverilog
+uvm_config_db#(bit)::set(this, {regmodel.blk.get_full_name(), ".*"}, "NO_REG_TESTS", 1);
+```
+
+## Beginner mistakes
+1. Wrong name or type parameter on get → miss / fatal.
+2. Scope too narrow — child cannot see parent set.
+3. Set after child already built — construction knobs missed.
+4. Relying on globals instead of config_db for vif.
+5. Assuming last-set always wins — queue precedence + scope matter.
+
+## ChipSutra emit notes
+- Always: top `set` vif before `run_test`; drv/mon `get` in `build_phase` with `` `uvm_fatal `` if missing.
+- Knobs/config class: `uvm_configure_components.txt`.
+- Detailed set/get signatures: `uvm_config_db.txt`.
+- Do not emit low-level `uvm_resource_pool` APIs in smoke TB.

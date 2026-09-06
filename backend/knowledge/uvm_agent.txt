@@ -1,0 +1,87 @@
+# UVM Agent [uvm_agent]
+# Reusable VIP unit: sequencer + driver + monitor (+ optional coverage); active/passive.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Agent.
+# Wires: uvm_driver, uvm_monitor, uvm_sequencer, uvm_subscriber. Scoreboard usually in env.
+
+## Role
+- Encapsulates protocol interface VIP: instantiate + connect children.
+- Main knob: **active** (drive DUT) vs **passive** (observe only).
+- Reuse: multiple agent instances (one active drive, one passive watch) without duplicating wiring.
+
+## Active vs passive
+| Mode | Builds | Purpose |
+|------|--------|---------|
+| Active (`UVM_ACTIVE`) | sequencer + driver + monitor (+ cov) | Drive + observe |
+| Passive (`UVM_PASSIVE`) | monitor (+ cov) only | Check/coverage; another master drives bus |
+
+```systemverilog
+if (get_is_active()) begin
+  // create sequencer + driver
+end
+// always create monitor (and optional coverage)
+```
+
+## Class skeleton
+```systemverilog
+class reg_agent extends uvm_agent;
+  `uvm_component_utils(reg_agent)
+  reg_driver    m_driver;
+  reg_monitor   m_monitor;
+  reg_sequencer m_sequencer;
+  reg_coverage  m_coverage;
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    if (get_is_active()) begin
+      m_sequencer = reg_sequencer::type_id::create("m_sequencer", this);
+      m_driver    = reg_driver::type_id::create("m_driver", this);
+    end
+    m_monitor  = reg_monitor::type_id::create("m_monitor", this);
+    m_coverage = reg_coverage::type_id::create("m_coverage", this);
+  endfunction
+
+  virtual function void connect_phase(uvm_phase phase);
+    super.connect_phase(phase);
+    if (get_is_active())
+      m_driver.seq_item_port.connect(m_sequencer.seq_item_export);
+    m_monitor.mon_analysis_port.connect(m_coverage.analysis_export);
+  endfunction
+endclass
+```
+- `connect_phase` guards **must match** `build_phase` — never connect null driver/sqr.
+- Monitor->coverage connect is unconditional (both always built in this pattern).
+- Scoreboard usually lives in **env** and connects to `m_monitor.mon_analysis_port` there — see `uvm_env.txt`.
+
+## Configuring is_active
+Built into `uvm_agent` (`uvm_active_passive_enum`, default `UVM_ACTIVE`).
+Base retrieves config before derived `build_phase`; use `get_is_active()`.
+
+```systemverilog
+uvm_config_db#(int)::set(this, "path_to_agent", "is_active", UVM_PASSIVE);
+uvm_config_db#(int)::set(this, "path_to_agent", "is_active", UVM_ACTIVE);
+```
+No need to redeclare `is_active` or get it yourself in smoke agents.
+
+## Optional knobs
+- `enable_coverage`: skip creating coverage when 0 (practice exercise pattern).
+- Forward vif: often set for `"*"` under agent so driver/monitor both get IF.
+
+## Beginner mistakes
+1. Always building driver/sequencer (breaks passive).
+2. Connecting driver port when passive (null handle).
+3. Skipping agent and wiring driver in env only — loses reusable VIP packaging.
+4. Putting scoreboard inside agent when env owns multiple agents (usually env-level).
+
+## ChipSutra emit notes (methodology=uvm)
+- Smoke: one **active** agent with sqr+drv+mon; coverage optional; scoreboard in env.
+- Always: `get_is_active()` guards on build+connect for drive path.
+- `drv.seq_item_port.connect(sqr.seq_item_export)`; mon ap -> cov and/or env scoreboard.
+- Passive agent when user asks observe-only / second interface watcher.
+- Pure SV layered: env owns gen/drv/mon (no uvm_agent) but same logical grouping.
+- Knobs / config class overview: `uvm_configure_components.txt`.
+- TLM chapter intro: `uvm_tlm.txt`.
+- Reusable VIP packaging rules: `uvm_guide_reusable_vip.txt`.

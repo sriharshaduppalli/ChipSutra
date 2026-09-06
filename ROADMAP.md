@@ -1,6 +1,6 @@
 # Public roadmap — ChipSutra
 
-Last updated: 2026-07-29
+Last updated: 2026-08-15
 
 ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement). This roadmap splits **Community (open source)** from **Enterprise (commercial, future)**.
 
@@ -35,9 +35,17 @@ ChipSutra is an **AI verification copilot** (not a full sign-off EDA replacement
 - [x] **Closed-loop UX**: Generate hole tests + Apply seeds → Regression from Coverage page
 - [x] **Auto-attach** Verilator/sim log into Generate `tool_log` after Simulate finishes
 - [x] OpenSTA run path (SDC + TCL + liberty upload; mock if `sta`/liberty missing)
+- [x] **Open Lab** one-click lint→sim→synth→STA (`POST /api/lab/stream` + UI)
 - [x] Golden DUT suite: `counter`, `fifo`, `axi_lite_slave` (+ TBs)
 - [x] Optional **Redis** rate limiter (`REDIS_URL` + compose `--profile redis`)
 - [x] GHCR publish workflow on `main` / `v*` tags (see `.github/workflows/docker-publish.yml`)
+- [x] GHCR compose overlay (`docker-compose.ghcr.yml`) + GPU overlay (`docker-compose.gpu.yml`)
+- [x] First-project wizard (`POST /projects/quickstart` + 60s UI)
+- [x] Formal pack from Spec IR (`POST /formal/pack`) + CEX → Debug
+- [x] Simulator adapter interface (Verilator; Questa/VCS/Xcelium Enterprise stubs)
+- [x] Multi-revision LEC UI (gold vs gate file ids on eqy)
+- [x] Optional AsFigo SVALint / FCOVLint PATH adapters + native SVA/FCOV lint
+- [x] AsFigo SVCK / FPGALint / MathLib / IVL_UVM / Fast-Track SVA catalog hooks
 
 ## In progress (Community — next 90 days)
 
@@ -48,21 +56,22 @@ Architecture spine for advanced DV / sign-off readiness:
 - [x] DV Planner module (`backend/dv_planner.py`) + eval suite script
 - [x] Verilator verify loop on TB generate + skeleton repair fallback (`dv_verify.py`)
 - [x] Ollama pre-warm on startup + 3B/7B model router (`llm_router.py`) + Generate progress SSE
-- [ ] Spec→RTL checklist guardrails (clocks/reset/I/O)
-- [ ] Debug log classifier pack (compile / assert / timeout / X)
-- [ ] Default self-host docs/compose to pull GHCR `:edge` / release tags
-- [ ] Demo liberty fixture or documented sky130 path for non-mock STA smoke
-- [ ] Embedding / `sentence-transformers` optional extra + index warm at boot
+- [x] Spec→RTL checklist guardrails (clocks/reset/I/O)
+- [x] Debug log classifier pack (compile / assert / timeout / X)
+- [x] Default self-host docs/compose to pull GHCR `:edge` / release tags
+- [x] Demo liberty fixture or documented sky130 path for non-mock STA smoke
+- [x] Embedding / `sentence-transformers` optional extra + index warm at boot
 
 ### Phase 2–3 (31–90) — Close loop + sign-off board
-- [ ] Auto-repair from sim fail; protocol packs (APB/AXIS/UART)
-- [ ] Spec IR → RTL + SVA; Sign-off dashboard + evidence ZIP
-- [ ] LoRA dataset from fail→fix; nightly DV eval in CI
-- [ ] CI webhook worker: PR diff → lint → optional AI review comment
-- [ ] UCIS fixture corpus in CI for vendor dialect drift
-- [ ] Screen recording / first-project wizard polish
+- [x] Auto-repair from sim fail; protocol packs (APB/AXIS/UART)
+- [x] Spec IR → RTL + SVA; Sign-off dashboard + evidence ZIP
+- [x] LoRA dataset from fail→fix; nightly DV eval in CI
+- [x] CI webhook worker: PR diff → lint → optional AI review comment
+- [x] UCIS fixture corpus in CI for vendor dialect drift
+- [x] Screen recording / first-project wizard polish
 
 Industry gap matrix: **[docs/INDUSTRY_EDA_GAPS.md](./docs/INDUSTRY_EDA_GAPS.md)**.
+Optional SVA/FCOV linters: **[docs/ASFIGO_LINTERS.md](./docs/ASFIGO_LINTERS.md)**.
 
 ## Enterprise backlog (not in OSS unless contributed)
 

@@ -1,0 +1,76 @@
+# UVM Register Backdoor Access
+# HDL path slices, UVM_BACKDOOR vs frontdoor. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Register Backdoor Access.
+# Pair with: uvm_ral_env.txt, uvm_ral_connect.txt, uvm_ral_classes.txt.
+
+## Frontdoor vs backdoor
+| Path | How | Sim time | Verifies |
+|------|-----|----------|----------|
+| **Frontdoor** (default) | `write`/`read` → adapter → bus agent → DUT pins | Bus cycles | Protocol + decode + reg logic |
+| **Backdoor** | Deposit/sample HDL signals via simulator DB | ~zero | Signal value only — **skips** bus/control path |
+
+Frontdoor is the recommended way to verify register access (matches real SW).
+Backdoor is a **helper**: force known state, peek RO status, speed setup — not a substitute
+for frontdoor coverage of the bus path. Side-effects that need a real write may not fire.
+
+```systemverilog
+reg.write(status, data);                      // frontdoor (UVM_DEFAULT_DOOR / FRONTDOOR)
+reg.write(status, data, UVM_BACKDOOR);
+reg.read(status, rdata, UVM_BACKDOOR);
+```
+
+## HDL paths (required for backdoor)
+Simulator must know the hierarchical path to each register signal.
+Split paths across hierarchy for reuse:
+- TB top → subsystem → block → register slice
+- Rehosting the IP: update only the outer `add_hdl_path` segment
+
+Common APIs:
+```systemverilog
+// On a reg_block / sub-block:
+add_hdl_path("DUT");           // or configure(parent, "DUT")
+add_hdl_path("tb");            // outermost TB segment
+
+// On a uvm_reg (leaf signal name relative to concatenated path):
+ctrl.add_hdl_path_slice("ctl_reg", 0, ctrl.get_n_bits());
+```
+Full path example: `"tb"` + `"DUT"` + slice `"ctl_reg"` → `tb.DUT.ctl_reg`.
+
+Paths can be added in model `build()` or later by automation that parses designer HDL lists.
+
+## Hierarchy sketch
+```systemverilog
+// leaf block: slices + local add_hdl_path("DUT")
+class ral_block_traffic_cfg extends uvm_reg_block;
+  virtual function void build();
+    // create/configure/build regs ...
+    ctrl.add_hdl_path_slice("ctl_reg", 0, ctrl.get_n_bits());
+    add_hdl_path("DUT");
+  endfunction
+endclass
+
+// system block: outer path
+class ral_sys_traffic extends uvm_reg_block;
+  function void build();
+    cfg.configure(this, "DUT");
+    cfg.build();
+    add_hdl_path("tb");
+    default_map.add_submap(cfg.default_map, 'h0);
+  endfunction
+endclass
+```
+
+## Sequence mix (typical)
+1. Frontdoor write + frontdoor read — prove bus path.
+2. Backdoor write + frontdoor read — deposit then observe via bus.
+3. Frontdoor write + `#1` + backdoor read — allow DUT update before peek.
+
+After frontdoor write, a small delay before backdoor read may be needed so RTL has updated.
+
+## ChipSutra emit notes
+- Prefer frontdoor for CSR tests; emit backdoor only when user asks (force/peek/speed).
+- Never invent HDL paths — require user/RTL hierarchical names.
+- Verilator / limited DPI: backdoor often unsupported — warn and use frontdoor only.
+- Backdoor does **not** replace adapter/predictor setup for frontdoor tests.
+- Document that control/side-effect logic may not run on backdoor write.
+- Raw DPI helpers (`uvm_hdl_deposit` / `read` / `force`): `uvm_hdl_access.txt`.

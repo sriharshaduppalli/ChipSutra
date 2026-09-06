@@ -1,0 +1,64 @@
+# UVM Environment [uvm_env]
+# Owns agents + scoreboard (and more); wires reusable TB structure once for all tests.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Environment.
+# Pair with: uvm_agent.txt, uvm_scoreboard.txt. Test instantiates env — does not rebuild VIP.
+
+## Role
+- Bundle reusable verification components + default connects for an application/block.
+- Small chapter env: one `reg_agent` + one `reg_scoreboard`.
+- Larger: multiple agents (multi-IF DUT), shared sb/coverage; envs nest inside chip-level envs.
+- Why not build agents in every test: hierarchy/connect written once; tests only create env + configure/start sequences.
+
+## Class skeleton
+```systemverilog
+class reg_env extends uvm_env;
+  `uvm_component_utils(reg_env)
+  reg_agent      m_agent;
+  reg_scoreboard m_scoreboard;
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    m_agent      = reg_agent::type_id::create("m_agent", this);
+    m_scoreboard = reg_scoreboard::type_id::create("m_scoreboard", this);
+  endfunction
+
+  virtual function void connect_phase(uvm_phase phase);
+    super.connect_phase(phase);
+    m_agent.m_monitor.mon_analysis_port.connect(m_scoreboard.ap_imp);
+  endfunction
+endclass
+```
+- `uvm_env` is thin over `uvm_component` — extend for intent/reuse.
+- Create in `build_phase`; wire only in `connect_phase`.
+- Agent-internal connects (drv-sqr, mon-cov) stay in **agent** `connect_phase` — env does not redo them.
+
+## Ownership rules
+| Connection | Where |
+|------------|--------|
+| Driver <-> sequencer | Agent |
+| Monitor -> agent coverage | Agent |
+| Monitor -> scoreboard | **Env** (env owns both agent + sb) |
+| Multi-agent / nested envs | Parent env |
+
+Env only connects handles it **directly owns**.
+
+## Nesting / reuse (practice)
+- Block env (e.g. DMA) verified alone; later instantiated inside SoC env unchanged.
+- Optional env config object via config_db when many knobs exist.
+
+## Beginner mistakes
+1. Instantiating agent+sb in every test instead of one env.
+2. Reaching into agent to rewire agent-internal TLM from env.
+3. `create` in connect_phase — children must exist before connect.
+4. Forgetting mon->sb connect — silent no checking.
+
+## ChipSutra emit notes (methodology=uvm)
+- Hierarchy: test -> env -> agent(sqr,drv,mon) + scoreboard; top sets vif into config_db.
+- One active agent + sb in smoke; connect `agent.monitor.ap` -> `sb.ap_imp`.
+- Tests create env in build_phase; start sequences on `env.m_agent.m_sequencer` — see `uvm_test.txt`.
+- Pure SV layered: `env` class owns gen/drv/mon/sb the same way (no uvm_env base).
+- Multi-UVC integration checklist: `uvm_guide_using_vip.txt`.

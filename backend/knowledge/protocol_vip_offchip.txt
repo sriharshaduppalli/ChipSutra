@@ -1,0 +1,30 @@
+# Off-chip interconnect VIP emit (ChipSutra)
+# PCIe / CXL. Distilled emit bounds. Never copy PCI-SIG / CXL Consortium text.
+# Never invent Gen speed, lane count, credit, or completion-timeout numbers.
+
+## pcie
+- Roles from user topology only: endpoint / root-complex / switch. Do not guess.
+- Pin-level Gen3+ is VIP-bound. ChipSutra emits a TLP-level outline, not a PHY.
+- TLP classes (MRd/MWr/CfgRd/CfgWr/Cpl/CplD/Msg) only as txn fields when the user BFM exists.
+- Tag / completer-ID / length from user VIP. Do not invent a config-space map.
+- LTSSM: name states as cover items if RTL exposes ltssm/link_up. Do not invent a state machine.
+- If only an AXI/APB CSR window exists, treat as that bus + user csr_list. Not a PCIe PHY TB.
+- Credits / ASPM / LTR / ATS: mention as cover holes; do not emit sequences without user VIP.
+- Verilator Pure SV: $display + errors++; no $error. No UVM sign-off.
+
+## pcie_ep
+- Same as pcie. User knob pcie_role=endpoint or topology.role=endpoint.
+- Config reads/writes only if user listed a cfg BFM or cfg_* ports.
+
+## pcie_rc
+- Same as pcie. User knob pcie_role=rc or root_complex.
+- Enumerate only from user address_map. Do not invent BARs.
+
+## cxl
+- CXL.io / .cache / .mem from user topology.modes only. Do not invent .cache snoop timing.
+- Usually VIP + BFM. Outline virtual-seq only when scale=subsystem|soc and user listed agents.
+- If RTL is an AXI/APB device with "cxl" in the name, still use the observed bus + user map.
+
+## offchip_vip_bound
+- Full PCIe/CXL link (LTSSM, training, credits, CXL.cache) requires user VIP.
+- ChipSutra emits agent/txn outline + cover list. Never invent timings or a config map.

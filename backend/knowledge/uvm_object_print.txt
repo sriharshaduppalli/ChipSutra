@@ -1,0 +1,85 @@
+# UVM Object Print
+# Print object fields via field macros, do_print, sprint, or convert2string.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Object Print.
+# Pair with: uvm_object.txt, uvm_object_compare.txt, uvm_object_copy.txt.
+
+## Why print matters
+`uvm_object` is the common base for data and (via report/component) hierarchy classes.
+Shared ops: print, copy, compare, pack. Smoke debug usually needs print / convert2string.
+
+## Field macros + print()
+Register each field with the matching `uvm_field_*` macro and `UVM_DEFAULT`
+(include in print/copy/compare/record):
+
+```systemverilog
+`uvm_object_utils_begin(Object)
+  `uvm_field_enum(e_bool, m_bool, UVM_DEFAULT)
+  `uvm_field_int(m_mode, UVM_DEFAULT)
+  `uvm_field_sarray_int(m_data, UVM_DEFAULT)   // static array
+  `uvm_field_queue_int(m_queue, UVM_DEFAULT)   // queue
+  `uvm_field_string(m_name, UVM_DEFAULT)
+`uvm_object_utils_end
+```
+
+```systemverilog
+obj.randomize();
+obj.print();   // default table: Name | Type | Size | Value
+```
+- Static arrays and queues print element-by-element when registered.
+- Macros expand a lot of code — fine for small txns; prefer hooks for heavy objects.
+
+## do_print (preferred over heavy macros for large objects)
+`print()` calls `do_print(uvm_printer printer)`. Implement the hook; keep `` `uvm_object_utils `` for factory:
+
+```systemverilog
+virtual function void do_print(uvm_printer printer);
+  super.do_print(printer);
+  printer.print_string("m_bool", m_bool.name());
+  printer.print_field_int("m_mode", m_mode, $bits(m_mode), UVM_HEX);
+  printer.print_string("m_name", m_name);
+endfunction
+```
+- Call `super.do_print` first.
+- Use printer helpers that match the type (`print_field_int`, `print_string`, …).
+- Only listed fields appear — omit arrays if not needed for debug.
+
+## sprint
+Same formatting as `print()`, but returns a `string` (no automatic report):
+
+```systemverilog
+`uvm_info(get_type_name(), $sformatf("Contents:\n%s", obj.sprint()), UVM_LOW)
+```
+Use when embedding the table inside a custom message.
+
+## convert2string
+Fully custom one-line (or multi-line) string — not the UVM table layout:
+
+```systemverilog
+virtual function string convert2string();
+  string s;
+  $sformat(s, "m_name=%s m_bool=%s m_mode=0x%0h", m_name, m_bool.name(), m_mode);
+  return s;
+endfunction
+```
+Call from `` `uvm_info `` / scoreboard messages. Ideal for monitor/scoreboard logs.
+
+## Which to emit
+| Need | Prefer |
+|------|--------|
+| Quick smoke txn dump | field macros + `print()` / `sprint()` |
+| Large object / perf | `do_print` + `` `uvm_object_utils `` only |
+| Compact log line | `convert2string` |
+| Scoreboard mismatch msg | `convert2string` or selected fields |
+
+## Beginner mistakes
+1. `print()` with no field macros and no `do_print` → empty / useless dump.
+2. Wrong field macro for arrays (`uvm_field_int` on a queue) → missing elements.
+3. Calling `convert2string` without putting the string in a report macro.
+4. Forgetting `super.do_print(printer)`.
+
+## ChipSutra emit notes
+- methodology=uvm smoke: `` `uvm_object_utils_begin/end `` + field macros enables print/copy/compare together.
+- Driver/monitor debug: `convert2string` on sequence_items in `` `uvm_info ``.
+- Do not dump full topology via object print in every phase — use `print_topology` for hierarchy.
+- Printer styles / knobs / nested `print_object`: `uvm_printer.txt`.
+- Pair compare: `uvm_object_compare.txt`.

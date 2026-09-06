@@ -1,0 +1,80 @@
+# How to use uvm_printer
+# Table / tree / line printers, knobs, print() styles. ChipSutra original wording.
+# Curriculum: ChipVerify How to use uvm_printer.
+# Pair with: uvm_object_print.txt (macros / do_print / sprint), uvm_field_macros.txt.
+
+## Why uvm_printer
+Random TBs create many objects; dumping fields with hand-written `$display` / custom
+`display()` per class does not scale. UVM puts print on `uvm_object` and formats via
+`uvm_printer`. Field macros or `do_print` feed the printer — no per-class ad-hoc print API.
+
+```systemverilog
+// uvm_object (sketch)
+function void print(uvm_printer printer = null);
+  if (printer == null) printer = uvm_default_printer;
+  // ...
+endfunction
+```
+
+## Styles
+| Printer | Global handle | Look |
+|---------|---------------|------|
+| Table (default) | `uvm_default_table_printer` | Name / Type / Size / Value columns |
+| Tree | `uvm_default_tree_printer` | Nested `{ }` blocks |
+| Line | `uvm_default_line_printer` | One compact line |
+
+```systemverilog
+uvm_table_printer uvm_default_table_printer = new();
+uvm_tree_printer  uvm_default_tree_printer  = new();
+uvm_line_printer  uvm_default_line_printer  = new();
+uvm_printer uvm_default_printer = uvm_default_table_printer;  // default style
+```
+
+```systemverilog
+obj.print();                          // table via uvm_default_printer
+obj.print(uvm_default_line_printer);
+obj.print(uvm_default_tree_printer);
+```
+
+## Conditions (what gets printed)
+`print()` only shows useful fields if you do one or both:
+
+1. **Field macros** inside `` `uvm_object_utils_begin/end `` — automates print/copy/compare/etc.
+2. **`do_print(uvm_printer printer)`** — call printer helpers (`print_int`, `print_object`, …).
+
+Both together: macros emit registered fields; `do_print` **appends** extras.
+Nested child objects must be constructed (`new` / `type_id::create`) or nested dumps are empty.
+
+```systemverilog
+virtual function void do_print(uvm_printer printer);
+  printer.print_int("mode", mode, $bits(mode));
+  printer.print_object("m_color", m_color);  // nest another uvm_object
+endfunction
+```
+
+## Knobs
+Every printer has `knobs` (`uvm_printer_knobs`). Common tweaks:
+
+```systemverilog
+tprinter.knobs.full_name  = 1;     // path-relative names
+tprinter.knobs.size       = 0;     // hide Size column
+tprinter.knobs.depth      = 1;     // nest depth limit
+tprinter.knobs.reference  = 2;     // object-handle policy
+tprinter.knobs.type_name  = 0;     // hide Type column
+tprinter.knobs.indent     = 4;     // spaces (default often 2)
+tprinter.knobs.hex_radix  = "0x";  // instead of 'h
+```
+Use a **local** `uvm_table_printer` instance when you need custom knobs; avoid surprising
+global `uvm_default_printer` changes in shared VIP unless intentional.
+
+## Nested example (pattern)
+- Leaf txn fields via field macros.
+- Child handle via `` `uvm_field_object `` **or** `printer.print_object` in `do_print`.
+- Derived class can add fields only in `do_print` while base uses macros.
+
+## ChipSutra emit notes
+- Smoke txn: field macros + occasional `obj.print()` / `sprint()` inside `` `uvm_info `` — leave default table.
+- Compact monitor/SB logs: prefer `convert2string` (`uvm_object_print.txt`), not full table every beat.
+- Multi-style demos / knobs: debug only — do not change `uvm_default_printer` in generated smoke.
+- Depth/size knobs for deep nested configs when dumps become huge.
+- Compare policy: `uvm_comparer.txt`.

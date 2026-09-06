@@ -1,0 +1,69 @@
+# UVM Event
+# uvm_event vs SV event; wait_trigger vs wait_ptrigger races. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Event.
+# Pair with: uvm_event_pool.txt, sv_threads_ipc_patterns.txt, uvm_callback.txt.
+
+## What / when
+`uvm_event` extends `uvm_object` (via `uvm_event_base`) wrapping an SV `event` with extras:
+- Named storage in `uvm_event_pool`
+- Optional typed data on trigger (`uvm_event #(T)`)
+- Callbacks on the event
+- Waiter count / on-off state tracking
+
+Prefer **plain SV `event`** unless you need those extras — `uvm_event` adds sim overhead.
+Once triggered, state stays active until **reset**; use that for `wait_on` / `wait_off`.
+
+```systemverilog
+uvm_event m_event;
+// build_phase or object ctor:
+m_event = new();
+```
+
+## Main methods
+| Method | Behavior |
+|--------|----------|
+| `trigger()` | Fire the event (optional data for typed events) |
+| `wait_trigger()` | Block until next trigger — **same-delta race** with `trigger` possible |
+| `wait_ptrigger()` | Persistent wait — safer for same-time trigger/wait |
+| `wait_on()` | Wait until event is “on”; returns immediately if already triggered |
+| `wait_off()` | If on, wait until reset; if never triggered, return immediately |
+| `reset()` | Clear active state / trigger time |
+| `get_trigger_time()` | Last trigger time; `0` if never triggered or after reset |
+
+## Timing cases (ChipVerify experiments)
+| Order | Wait API | Result |
+|-------|----------|--------|
+| wait then later trigger | `wait_trigger` | OK — waiter unblocks |
+| trigger then later wait | `wait_trigger` | **Hang** — missed the edge |
+| same time (delta race) | `wait_trigger` | Often **hang** / race |
+| wait then later trigger | `wait_ptrigger` | OK |
+| trigger then later wait | `wait_ptrigger` | Still **hang** if wait starts much later (not sticky across long delay without wait_on) |
+| same time | `wait_ptrigger` | OK — race fixed vs `wait_trigger` |
+
+Practical rules:
+1. Start waiters **before** producers when using `wait_trigger`.
+2. Prefer `wait_ptrigger` when trigger and wait may share a time/delta.
+3. For “already happened?” semantics, use `wait_on` / check state, not a late `wait_trigger`.
+4. Always `raise_objection` around forked waiters or the phase may end early / timeout on hang.
+
+## Minimal pattern
+```systemverilog
+fork
+  begin
+    m_event.wait_ptrigger();
+    // react
+  end
+  begin
+    #100;
+    m_event.trigger();
+  end
+join
+```
+
+## ChipSutra emit notes
+- Smoke TB: **no** `uvm_event` — use clocking, seq_item handshakes, or plain SV events if needed.
+- Emit `uvm_event` only when user asks for named cross-component sync, event data, or pool lookup.
+- Default to `wait_ptrigger` (or `wait_on`) over `wait_trigger` to avoid same-delta hangs.
+- Do not use events as a scoreboard substitute — still compare data (`uvm_scoreboard.txt`).
+- Named global events: `uvm_event_pool.txt`.
+- Pure SV IPC: `sv_threads_ipc_patterns.txt`.

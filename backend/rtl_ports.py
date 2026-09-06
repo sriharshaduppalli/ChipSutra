@@ -96,6 +96,21 @@ def resolve_width_expr(width: str, params: Optional[Dict[str, int]] = None) -> T
             msb = max(_clog2(n) - 1, 0)
             return f"[{msb}:0]", msb + 1
 
+    # [$clog2(DEPTH):0] — holds 0..DEPTH (one extra bit vs clog2-1)
+    m = re.match(
+        r"\[\s*\$clog2\s*\(\s*(\w+)\s*([+-]\s*\d+)?\s*\)\s*:\s*0\s*\]",
+        w,
+        re.I,
+    )
+    if m:
+        base = params.get(m.group(1))
+        if base is not None:
+            adj = m.group(2) or ""
+            adj = adj.replace(" ", "")
+            n = base + int(adj) if adj else base
+            msb = max(_clog2(n), 1)
+            return f"[{msb}:0]", msb + 1
+
     # [WIDTH-1:0]
     m = re.match(r"\[\s*(\w+)\s*-\s*1\s*:\s*0\s*\]", w, re.I)
     if m:

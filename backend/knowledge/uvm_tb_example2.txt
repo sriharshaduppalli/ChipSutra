@@ -1,0 +1,67 @@
+# UVM Testbench Example 2 (address switch)
+# Packet switch: route by addr range to port A or B. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Testbench Example 2.
+# Pair with: uvm_tb_example1.txt, uvm_tb_example_pattern.txt, uvm_monitor.txt,
+# uvm_scoreboard.txt, uvm_guide_using_vip.txt.
+
+## Spec
+DUT takes input `addr`/`data` with `vld`, steers the packet to **port A** or **port B**
+by address range (demo: `addr inside {[0:'h3f]}` → A, else → B). Outputs appear one
+cycle after input sample in this teaching monitor.
+
+Compare to Pure SV layered TB for the same switch design.
+
+## Component map
+```
+tb_top: switch_if + DUT + config_db + run_test
+  test → env → agent (sqr/drv/mon) + scoreboard
+```
+
+| Class | Role |
+|-------|------|
+| `switch_item` | rand `addr`/`data`; observed `addr_a/data_a`, `addr_b/data_b` (not rand) |
+| Driver | `vld`+addr+data one cycle, then clear `vld` |
+| Monitor | See below — pairs in+out into one item |
+| Scoreboard | If addr in A-range, expect A outputs match input; else B |
+| Agent/Env/Test/Seq | Same skeleton as Example 1 |
+
+## Monitor strategy (combined txn)
+Teaching approach: one analysis item carries **input + both outputs** so SB is simple.
+```
+on vld: capture addr/data
+wait 1 clk
+capture addr_a/data_a, addr_b/data_b
+ap.write(item)
+```
+Demo uses **two forked** `sample_port` threads + a `semaphore` so overlapping
+transfers can be tracked. Alternative (cleaner VIP): separate in/out monitors or
+queues in the scoreboard — complexity moves to SB, monitor stays thin
+(`uvm_guide_reusable_vip.txt`).
+
+## Scoreboard golden
+```systemverilog
+if (item.addr inside {[0:'h3f]})
+  check item.addr_a/data_a == item.addr/data;
+else
+  check item.addr_b/data_b == item.addr/data;
+```
+Independent range rule from the spec — not a copy of DUT RTL.
+
+## Tradeoff: fat txn vs thin ports
+| Approach | Pros | Cons |
+|----------|------|------|
+| One item with in+out fields (this example) | Trivial SB `write` | Couples latency into monitor; harder reuse |
+| Separate in/out analysis streams | Thin monitors | SB must match/queue by time or ID |
+
+Prefer thin monitors + SB matching for reusable VIP; combined item OK for smoke demos.
+
+## ChipSutra emit notes
+- Same UVM graph as Example 1 (`uvm_tb_example1.txt`) — only the golden and IF ports change.
+- Use for multi-output / steer-by-address user DUTs — adapt thresholds to **user** spec.
+- Smoke monitor: one thread, two-phase sample. Dual-thread + semaphore is optional teaching, not default.
+- Factory `type_id::create` for items (demo `new` in monitor is a shortcut — avoid).
+- Promote mon `ap` to agent for cleaner env connects.
+- Constrain `addr` to exercise both ranges in smoke.
+- Do not invent dual-port switch topology if user DUT is single-port.
+- Stack twins: memory Example 1 (`uvm_tb_example1.txt`), FSM pattern
+  (`uvm_tb_example_pattern.txt`).

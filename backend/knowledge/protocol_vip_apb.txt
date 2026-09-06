@@ -1,0 +1,31 @@
+# APB3 / APB4 VIP emit guide (ChipSutra)
+# Distilled for TB emit from ARM AMBA APB IHI 0024E. Match user capitalization
+# (PSEL vs psel). No invented register map.
+
+## apb3 transfer
+- Clock PCLK; reset PRESETn active-low. All signals sampled on posedge PCLK.
+- Two phases, minimum two cycles:
+  - SETUP: PSEL=1, PENABLE=0. PADDR, PWRITE, and PWDATA (writes) must be valid.
+  - ACCESS: PSEL=1, PENABLE=1. Completer asserts PREADY when it accepts the beat.
+- Idle: PSEL=0 and PENABLE=0. Do not assert PENABLE unless PSEL is already HIGH.
+- Writes: PWRITE=1; Completer captures PWDATA on the ACCESS cycle where PREADY=1.
+- Reads: PWRITE=0; sample PRDATA on that same completing ACCESS cycle.
+- Wait states: during ACCESS, Completer may hold PREADY LOW. While PREADY is LOW,
+  hold PSEL, PENABLE, PADDR, PWRITE, PWDATA (and PSTRB/PPROT if present) unchanged.
+- PREADY may be X/any when PENABLE is LOW. Fixed two-cycle peripherals tie PREADY HIGH.
+- Always wait PREADY with a timeout. After ACCESS, drop PENABLE (and PSEL unless
+  back-to-back to the same select).
+
+## apb4 extras
+- PSTRB: one bit per byte of PWDATA. Honor strobes in the model. Drive all PSTRB
+  bits LOW on reads. Optional — omit if the DUT has no PSTRB port.
+- PPROT: privilege/secure/instruction bits — drive 0 unless testing. Optional.
+- PSLVERR: optional. Only valid on the last ACCESS cycle (PSEL && PENABLE && PREADY).
+  Check ===0 on the OK path. Do not invent error injection unless asked.
+  A failing read may still drive PRDATA; do not treat PSLVERR as “ignore RDATA”
+  unless the user scoreboard says so.
+
+## apb scoreboard
+- Independent model_reg[aligned addr]; update only on a completed write ACCESS
+  (PREADY HIGH). Read: PRDATA === model. Never golden = PRDATA alone.
+- UVM txn: addr/wdata/rdata/write; analysis_imp.write; no RAL unless user CSR map.

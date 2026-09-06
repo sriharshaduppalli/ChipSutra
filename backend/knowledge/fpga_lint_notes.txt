@@ -1,0 +1,8 @@
+# FPGA RTL lint notes (ChipSutra original)
+# Optional CLI: https://github.com/AsFigo/FPGALint (repo is a stub; ChipSutra native fpga_lint always runs).
+
+## Synth pitfalls
+- Avoid inferred latches: every `always @(*)` if needs an else / default assignment.
+- Do not leave `initial` blocks in synthesizable RTL (TB-only).
+- Vendor primitives (IBUF, BUFG, MMCM, DSP48) need a wrapper and a foundry/FPGA flow — not Verilator sign-off.
+- `real` types are simulation-only.

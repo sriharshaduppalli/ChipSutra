@@ -1,0 +1,26 @@
+# RAL emit rules (ChipSutra)
+# Only when the user supplies csr_list / a register map. Never invent CSRs.
+
+## ral
+- Emit a register model only for names and offsets in the user csr_list.
+- Pure SV: named `*_reg_model` with predict_write / expected_read. Not uvm_reg on Verilator.
+- UVM: uvm_reg + uvm_reg_field + uvm_reg_block + default_map.add_reg. Adapter/predictor sketch.
+- RO: ignore predict_write. WO: write-only; read returns 0 unless user said otherwise.
+- Unmapped addresses: do not create a register. Leave default / no-update.
+- Reset values only from the user map. Empty reset → 0.
+
+## uvm_ral
+- Same as ral. Commercial simulator. lock_model() after add_reg.
+- set_sequencer + adapter in connect_phase. Predictor bus_in from monitor analysis_port.
+- Sequences: model.REG.write(status, data) / read / mirror / update.
+
+## ralgen / reggen
+- OpenTitan `ralgen` is a FuseSoC wrapper around `reggen`/`topgen` plus `dv_base_reg`.
+- ChipSutra does not invoke FuseSoC or depend on `lowrisc:dv:dv_base_reg`.
+- Point `ip_hjson` at a reggen IP HJSON (same file ralgen would take). Import named registers only.
+- `top_hjson` may supply base addresses for a memory_map. It does not invent per-IP CSRs.
+- Do not vendor OpenTitan generated RAL packages. Emit ChipSutra SV/UVM models from the imported map.
+
+## ral_bounds
+- No IP-XACT invention. No backdoor HDL path unless the user gave one.
+- Do not copy a tutorial traffic-light map onto a different DUT.

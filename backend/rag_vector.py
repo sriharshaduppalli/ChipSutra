@@ -19,10 +19,12 @@ import math
 import os
 import re
 from collections import Counter
-from typing import Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 DEFAULT_DIM = 512
-DEFAULT_ST_MODEL = "all-MiniLM-L6-v2"
+# Strong small retrieval model (CPU-friendly). Override with RAG_VECTOR_MODEL.
+# Alternatives: all-MiniLM-L6-v2 (faster), BAAI/bge-base-en-v1.5 (heavier).
+DEFAULT_ST_MODEL = "BAAI/bge-small-en-v1.5"
 
 _NGRAM = 3
 # Character n-grams give fuzzy matching (fifos ~ fifo) but must not drown out whole words.
@@ -36,6 +38,10 @@ _INDEX_CACHE: Dict[str, dict] = {}
 _ST_MODEL = None
 _ST_FAILED = False
 _NOTE = ""
+_RERANKER = None
+_RERANKER_FAILED = False
+DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-base"
+_WARM: Dict[str, Any] = {"ok": False, "chunks": 0, "backend": None, "error": None, "warmed": False}
 
 
 # =========================
@@ -105,7 +111,11 @@ def embedding_dim() -> int:
         model = _load_st_model()
         if model is not None:
             try:
-                return int(model.get_sentence_embedding_dimension())
+                dim_fn = getattr(model, "get_embedding_dimension", None) or getattr(
+                    model, "get_sentence_embedding_dimension", None
+                )
+                if dim_fn is not None:
+                    return int(dim_fn())
             except Exception:
                 pass
     return _hashed_dim()
@@ -206,13 +216,45 @@ def _chunk_text(chunk: dict) -> str:
     return f"{chunk.get('title', '')}\n{chunk.get('body', '')}".strip()
 
 
-def _cache_key(chunks: Sequence[dict], backend: str, dim: int) -> str:
+def _active_model_id() -> str:
+    if vector_backend() != "sentence-transformers":
+        return ""
+    return os.environ.get("RAG_VECTOR_MODEL", DEFAULT_ST_MODEL)
+
+
+def _cache_key(chunks: Sequence[dict], backend: str, dim: int, model: str = "") -> str:
     h = hashlib.sha256()
-    h.update(f"{backend}|{dim}|".encode("utf-8"))
+    h.update(f"{backend}|{dim}|{model}|".encode("utf-8"))
     for c in chunks:
         h.update(_chunk_text(c).encode("utf-8", errors="ignore"))
         h.update(b"\x00")
     return h.hexdigest()
+
+
+def warm_index() -> dict:
+    """Build (or reuse) the vector index at API boot so first Generate is not cold."""
+    global _WARM
+    try:
+        from rag import load_chunks
+
+        chunks = load_chunks()
+        idx = build_index(list(chunks))
+        _WARM = {
+            "ok": True,
+            "chunks": len(chunks),
+            "backend": idx.get("backend"),
+            "error": None,
+            "warmed": True,
+        }
+    except Exception as e:
+        _WARM = {
+            "ok": False,
+            "chunks": 0,
+            "backend": vector_backend(),
+            "error": str(e)[:240],
+            "warmed": True,
+        }
+    return dict(_WARM)
 
 
 def build_index(chunks: List[dict]) -> dict:
@@ -220,13 +262,20 @@ def build_index(chunks: List[dict]) -> dict:
     chunks = list(chunks or [])
     backend = vector_backend()
     dim = embedding_dim()
-    key = _cache_key(chunks, backend, dim)
+    model = _active_model_id()
+    key = _cache_key(chunks, backend, dim, model)
     cached = _INDEX_CACHE.get(key)
     if cached is not None:
         return cached
 
     texts = [_chunk_text(c) for c in chunks]
-    index: dict = {"vectors": [], "chunks": chunks, "backend": backend, "dim": dim}
+    index: dict = {
+        "vectors": [],
+        "chunks": chunks,
+        "backend": backend,
+        "dim": dim,
+        "model": model,
+    }
     if backend == "disabled" or not chunks:
         _INDEX_CACHE[key] = index
         return index
@@ -295,7 +344,8 @@ def hybrid_search(
     have_kw = bool(keyword_scores) and max(kscores) > 0.0
     have_vec = max(vscores) > 0.0
     if have_kw and have_vec:
-        w_vec, w_kw = 0.6, 0.4
+        # Strong keyword hits (protocol aliases) must not be drowned by embeddings
+        w_vec, w_kw = (0.35, 0.65) if kmax >= 18.0 else (0.55, 0.45)
     elif have_kw:
         w_vec, w_kw = 0.0, 1.0
     else:
@@ -314,12 +364,72 @@ def hybrid_search(
             )
         )
     out.sort(key=lambda c: c["score"], reverse=True)
-    return out[: max(0, top_k)]
+    # Optional cross-encoder pass: pool more candidates, then rerank to top_k.
+    pool_n = max(top_k, min(20, len(out)))
+    return _maybe_cross_rerank(query, out[:pool_n], top_k)
+
+
+def _rerank_enabled() -> bool:
+    return os.environ.get("RAG_RERANK_ENABLED", "false").lower() in ("1", "true", "yes")
+
+
+def _load_reranker():
+    """Lazy-load CrossEncoder; None when disabled or unavailable."""
+    global _RERANKER, _RERANKER_FAILED, _NOTE
+    if not _rerank_enabled() or _RERANKER_FAILED:
+        return None
+    if _RERANKER is not None:
+        return _RERANKER
+    try:
+        from sentence_transformers import CrossEncoder  # type: ignore
+
+        mid = os.environ.get("RAG_RERANK_MODEL", DEFAULT_RERANK_MODEL)
+        _RERANKER = CrossEncoder(mid)
+    except Exception as e:
+        _RERANKER_FAILED = True
+        _NOTE = f"reranker unavailable ({e}); using hybrid scores only"
+        _RERANKER = None
+    return _RERANKER
+
+
+def _maybe_cross_rerank(query: str, candidates: List[dict], top_k: int) -> List[dict]:
+    if not candidates or top_k <= 0:
+        return []
+    model = _load_reranker()
+    if model is None:
+        return candidates[: max(0, top_k)]
+    try:
+        pairs = [
+            (query, f"{c.get('title', '')}\n{c.get('body', '')}".strip()) for c in candidates
+        ]
+        scores = model.predict(pairs)
+        ranked = sorted(
+            zip(scores, candidates),
+            key=lambda x: float(x[0]),
+            reverse=True,
+        )
+        out = []
+        for s, c in ranked[: max(0, top_k)]:
+            row = dict(c)
+            row["rerank_score"] = round(float(s), 6)
+            row["score"] = round(float(s), 6)
+            out.append(row)
+        return out
+    except Exception as e:
+        global _NOTE
+        _NOTE = f"rerank failed ({e}); using hybrid scores only"
+        return candidates[: max(0, top_k)]
 
 
 def clear_cache() -> None:
     """Drop the index cache (env changes / tests)."""
+    global _ST_MODEL, _ST_FAILED, _NOTE, _RERANKER, _RERANKER_FAILED
     _INDEX_CACHE.clear()
+    _ST_MODEL = None
+    _ST_FAILED = False
+    _NOTE = ""
+    _RERANKER = None
+    _RERANKER_FAILED = False
 
 
 def rag_vector_status() -> dict:
@@ -328,14 +438,23 @@ def rag_vector_status() -> dict:
         "enabled": _enabled(),
         "backend": backend,
         "dim": embedding_dim(),
+        "model": _active_model_id() or None,
+        "rerank": _rerank_enabled(),
+        "rerank_model": os.environ.get("RAG_RERANK_MODEL", DEFAULT_RERANK_MODEL)
+        if _rerank_enabled()
+        else None,
         "note": _NOTE
         or (
             "vector RAG disabled (RAG_VECTOR_ENABLED=false)"
             if backend == "disabled"
             else "hashed char-ngram TF-IDF fallback (stdlib only, no downloads)"
             if backend == "hashed-tfidf"
-            else "sentence-transformers embeddings"
+            else f"sentence-transformers embeddings ({_active_model_id()})"
         ),
+        "warmed": bool(_WARM.get("warmed")),
+        "warm_ok": _WARM.get("ok"),
+        "warm_chunks": _WARM.get("chunks"),
+        "warm_error": _WARM.get("error"),
     }
     try:
         from rag import load_chunks

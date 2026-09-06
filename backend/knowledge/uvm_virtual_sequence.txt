@@ -1,0 +1,69 @@
+# UVM Virtual Sequence
+# Container that starts multiple sequences on different sequencers (multi-interface SoC).
+# ChipSutra original wording. Curriculum: ChipVerify UVM Virtual Sequence.
+# Pair with: uvm_virtual_sequencer.txt (next), uvm_sequence_start.txt, uvm_sequence_usage.txt.
+
+## Why
+One agent sequence talks to one sequencer. Multi-protocol SoCs need coordinated
+stimulus on APB + Wishbone + PCIe (etc.) from one place → **virtual sequence**:
+- Extends `uvm_sequence` (often untyped / not tied to one REQ type).
+- Does **not** drive pins itself — only `start`s sub-sequences on real sequencers.
+- Optional partner: **virtual sequencer** holding handles to those sequencers.
+
+## Pattern A — with virtual sequencer (preferred for reuse)
+```systemverilog
+class my_virtual_seq extends uvm_sequence;
+  `uvm_object_utils(my_virtual_seq)
+  `uvm_declare_p_sequencer(my_virtual_sequencer)
+
+  apb_rd_wr_seq m_apb_rd_wr_seq;
+  wb_reset_seq  m_wb_reset_seq;
+  pcie_gen_seq  m_pcie_gen_seq;
+
+  task pre_body();
+    m_apb_rd_wr_seq = apb_rd_wr_seq::type_id::create("m_apb_rd_wr_seq");
+    m_wb_reset_seq  = wb_reset_seq::type_id::create("m_wb_reset_seq");
+    m_pcie_gen_seq  = pcie_gen_seq::type_id::create("m_pcie_gen_seq");
+  endtask
+
+  task body();
+    m_apb_rd_wr_seq.start(p_sequencer.m_apb_seqr);
+    fork
+      m_wb_reset_seq.start(p_sequencer.m_wb_seqr);
+      m_pcie_gen_seq.start(p_sequencer.m_pcie_seqr);
+    join
+  endtask
+endclass
+
+// test
+m_vseq.start(m_env.m_virtual_seqr);  // not null — runs on virtual sqr
+```
+- `` `uvm_declare_p_sequencer `` → typed `p_sequencer` = virtual sequencer.
+- Sub-sequences start on **`p_sequencer.<real_seqr>`**, not on the virtual sqr itself.
+- Parallelism: `fork`/`join` around multiple `start` calls.
+
+## Pattern B — without virtual sequencer
+Hold sequencer handles inside the virtual sequence; assign from the test before start:
+
+```systemverilog
+class my_virtual_seq extends uvm_sequence;
+  apb_sequencer m_apb_seqr;
+  wb_sequencer  m_wb_seqr;
+  // ...
+  task body();
+    m_apb_rd_wr_seq.start(m_apb_seqr);
+  endtask
+endclass
+
+// test run_phase
+m_vseq.m_apb_seqr = m_env.m_apb_agent.m_sequencer;
+m_vseq.start(null);  // no virtual sqr
+```
+Works, but scatters wiring in every test — Pattern A scales better.
+
+## ChipSutra emit notes
+- Single-interface smoke: **no** virtual sequence — one `seq.start(agent.sequencer)`.
+- Multi-agent / multi-IF user request: emit virtual seq (+ virtual sqr in env) Pattern A.
+- Objections: raise/drop around `m_vseq.start(...)` in the test (or vseq `pre_body` if default_sequence style).
+- Do not put DUT pin driving in the virtual sequence.
+- Virtual sequencer details: `uvm_virtual_sequencer.txt`.

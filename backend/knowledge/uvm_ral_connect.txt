@@ -1,0 +1,57 @@
+# Connecting register env
+# Wire bus agent sequencer + monitor to RAL map/predictor. ChipSutra original wording.
+# Curriculum: ChipVerify Connecting register env.
+# Pair with: uvm_ral_env.txt, uvm_ral_classes.txt, uvm_agent.txt, uvm_sequencer.txt.
+
+## Why connect
+`reg_env` builds the model, adapter, and predictor, but does **not** know which
+agent drives the bus until the parent env links them in `connect_phase`.
+
+Two mandatory links:
+1. **Monitor → predictor** — keep mirror in sync with all bus traffic.
+2. **Map → sequencer + adapter** — so `reg.write`/`read` become bus sequence items.
+
+## Parent env pattern
+```systemverilog
+class my_env extends uvm_env;
+  my_agent m_agent;
+  reg_env  m_reg_env;
+
+  virtual function void build_phase(uvm_phase phase);
+    m_agent   = my_agent::type_id::create("m_agent", this);
+    m_reg_env = reg_env::type_id::create("m_reg_env", this);
+  endfunction
+
+  virtual function void connect_phase(uvm_phase phase);
+    // 1) Observed bus transactions update the model
+    m_agent.m_mon.mon_ap.connect(m_reg_env.m_apb2reg_predictor.bus_in);
+
+    // 2) Model frontdoor uses this agent sequencer + adapter
+    m_reg_env.m_ral_model.default_map.set_sequencer(
+      m_agent.m_seqr, m_reg_env.m_reg2apb);
+  endfunction
+endclass
+```
+
+## set_sequencer
+```systemverilog
+default_map.set_sequencer(sequencer, adapter);
+```
+- First arg: bus agent’s `uvm_sequencer` (same one the driver pulls from).
+- Second arg: the `uvm_reg_adapter` that implements `reg2bus`/`bus2reg`.
+- Without this, frontdoor `write`/`read` have nowhere to start items.
+
+## Predictor analysis connect
+```systemverilog
+monitor.analysis_port.connect(predictor.bus_in);
+```
+- Monitor must emit the **same** bus txn type used to parameterize `uvm_reg_predictor #(T)`.
+- Skip only if you rely solely on auto-predict from RAL-initiated accesses and never bypass RAL.
+
+## ChipSutra emit notes
+- Always connect in parent `connect_phase` after both agent and `reg_env` exist.
+- One map ↔ one primary frontdoor agent (multi-map / multi-bus is advanced).
+- Name handles consistently (`m_seqr`, adapter, predictor) with `uvm_ral_env.txt`.
+- Smoke without RAL: no `set_sequencer` / predictor connects.
+- After connect: sequences get model via config_db and call `reg.write`/`read`.
+- Full worked stack: `uvm_ral_example.txt`.

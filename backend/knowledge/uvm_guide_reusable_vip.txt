@@ -1,0 +1,90 @@
+# Guide - Developing Reusable Verification Components
+# VIP portability rules for ChipSutra emit / review. ChipSutra original wording.
+# Curriculum: ChipVerify Guide - Developing Reusable Verification Components.
+# Pair with: uvm_agent.txt, uvm_callback.txt, uvm_factory_override.txt, uvm_config_db.txt,
+# uvm_transaction.txt, uvm_guide_using_vip.txt.
+
+## Why it matters
+Industry VIPs (AXI/PCIe/USB/…) ship once and drop into many SoCs. Hardcoded timing,
+absolute paths, or `new()` instead of factory force every project to fork the VIP.
+Design for reuse from day one.
+
+Smoke ChipSutra TBs stay small — apply these rules when emitting a **reusable agent/VIP**,
+not for one-shot pin smoke.
+
+## 1. Data items (transactions)
+- Always `extends uvm_sequence_item` (+ `` `uvm_object_utils ``).
+- Meaningful protocol fields as `rand`; constrain in sequences/tests — do not hardcode
+  scenario values inside the txn class.
+- Field macros **or** correct `do_copy` / `do_compare` / `do_print` (`$cast` + `super`).
+- Prefer logical base txn + protocol extension (composition/inheritance) when sharing
+  across similar buses.
+
+## 2. Agent portability
+- Honor `is_active`: monitor always; driver+sequencer only if `UVM_ACTIVE`.
+- One **cfg object** (`*_agent_cfg`: vif, is_active, protocol knobs, `en_coverage`) via
+  `uvm_config_db` — not one config_db key per field.
+- Promote monitor analysis port to the **agent** so env connects without digging inside.
+
+```systemverilog
+if (get_is_active() == UVM_ACTIVE) begin
+  drv  = axi_driver::type_id::create("drv", this);
+  seqr = axi_sequencer::type_id::create("seqr", this);
+end
+mon = axi_monitor::type_id::create("mon", this);
+// connect_phase: mon.ap.connect(this.ap);
+```
+
+## 3. Reusable sequences
+- Parameterize with `rand` knobs (`base_addr`, `num_transactions`); tests constrain externally.
+- Prefer small composable sequences over one giant body; compose via virtual sequences.
+- Register with factory so tests can override sequence types.
+
+## 4. Factory everywhere
+- `` `uvm_component_utils `` / `` `uvm_object_utils `` on every class.
+- Create only with `type_id::create` — **never** `new()` for factory-visible types.
+- Downstream projects override driver/seq without forking VIP source
+  (`uvm_factory_override.txt`).
+
+## 5. Callbacks for extension
+- Ship empty `pre_drive` / `post_drive` (etc.) hooks via `uvm_callback` +
+  `` `uvm_register_cb `` / `` `uvm_do_callbacks ``.
+- Reusers `uvm_callbacks#(T,CB)::add` for inject/extra checks without editing VIP
+  (`uvm_callback.txt`). Not required for smoke agents.
+
+## 6. No hardcoded hierarchy
+- Config set from owner context with **relative** paths:
+  `uvm_config_db#(cfg)::set(this, "axi_agent", "cfg", cfg);`
+- Avoid absolute `"uvm_test_top.env...."` strings inside reusable VIP code.
+- Do not `uvm_top.find()` for siblings — use TLM + cfg.
+
+## 7. Monitors vs scoreboards
+- Monitor: sample IF → `ap.write(txn)`; optional **protocol** asserts.
+- Scoreboard: project-specific data check in a subscriber — **never** inside the monitor.
+- Protocol violation ≠ data mismatch ownership.
+
+## 8. Coverage toggles
+- Coverage in subscriber/monitor gated by `cfg.en_coverage` (or similar).
+- Do not force all covergroups on for every integrator.
+
+## 9. Document the VIP contract
+Ship (README / package header): cfg fields + ranges; required config_db keys;
+TLM port types; overridable factory types; callback hooks; IF/clock/reset assumptions.
+
+## Common mistakes
+| Wrong | Right |
+|-------|-------|
+| Global / ctor-assigned vif | cfg + config_db in `build_phase` |
+| `$display` for protocol logs | `` `uvm_info `` with verbosity |
+| Sequencer locked to final txn type with no base | Parameterize on base txn |
+| Reset timing buried in driver, no hook | Callback / virtual task for reset |
+| `new()` for components | `type_id::create` |
+
+## ChipSutra emit notes
+- One-shot Generate smoke: active agent, simple txn, explicit sequences — skip callbacks,
+  sequence libraries, multi-layer txn inheritance unless user asks for reusable VIP.
+- When user says “reusable agent / VIP”: apply guidelines 1–4 + 6–7 as hard rules;
+  5/8/9 when shipping a package.
+- Always: factory create, cfg object, active/passive, mon analysis out, no SB in mon.
+- Cross-check: `uvm_agent.txt`, `uvm_configure_components.txt`, `uvm_monitor.txt`.
+- Integrator side (env/test): `uvm_guide_using_vip.txt`.

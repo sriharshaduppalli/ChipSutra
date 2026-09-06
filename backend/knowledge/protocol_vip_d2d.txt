@@ -1,0 +1,22 @@
+# Die-to-die / chiplet VIP emit (ChipSutra)
+# UCIe / BoW / AIB. Never invent flit length, lane-repair, or D2D timings.
+
+## ucie
+- Ports from RTL only (mainband / sideband / rdi / fdi / ucie_*). No ports → no D2D TB.
+- Outline streaming + sideband only when those ports exist. Require user UCIe VIP for flits.
+- CXL/PCIe-mapped modes: user topology.modes. Do not invent a protocol mux.
+- Reset / sideband / DFT daisy-chain across dies only with user network description.
+- Verilator Pure SV: $display + errors++; no $error.
+
+## bow
+- Bunch-of-Wires: parallel lanes from user interface doc. Do not invent lane count or deskew.
+- Same VIP-bound rule as ucie.
+
+## aib
+- AIB / HBI: advanced-packaging SerDes or parallel — user VIP only.
+- Do not emit a gate-level AIB PHY from a 7B model.
+
+## chiplet
+- scale=chiplet: one top TB; one virtual-seq outline; one scoreboard per die IF the user listed.
+- Missing topology: infer IFs from parsed RTL only; state assumptions in // comments.
+- Never invent a die-to-die address map or UCIe parameter set.

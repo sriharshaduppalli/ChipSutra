@@ -1,0 +1,51 @@
+# UVM Singleton Object
+# One shared instance via static get(). ChipSutra original wording.
+# Curriculum: ChipVerify UVM Singleton Object.
+# Pair with: uvm_config_db.txt, uvm_root.txt, uvm_configure_components.txt.
+
+## What / why
+A **singleton** is a class with at most one instance for the whole simulation.
+Used for shared settings, resources, or a central table of design parameters
+queried from many components.
+
+UVM already has singletons (`uvm_root` / `uvm_top`, global pools). Prefer
+**config_db / cfg objects** for VIP knobs; use a custom singleton only for a
+true process-wide table that does not fit hierarchical config.
+
+## Pattern
+```systemverilog
+class mySingleton;
+  static local mySingleton m_sg;
+  string name;
+
+  static function mySingleton get();
+    if (m_sg == null)
+      m_sg = new();
+    return m_sg;
+  endfunction
+endclass
+
+// anywhere:
+mySingleton sg = mySingleton::get();
+sg.name = "shared";
+```
+- `static local` handle + `static get()` — create once, return same handle.
+- First `get()` constructs; later calls reuse.
+- Test and env both see the same `name` after test sets it (ChipVerify demo).
+
+## Usecase: parameter database
+Central list of SoC / interconnect parameters (widths, types, …) often generated
+from RTL or scripts into a struct array, then loaded into a singleton DB with
+query helpers. Any agent/env calls `car_db::get()` and looks up rows without
+passing handles through every constructor.
+
+Still: keep mutable test-specific knobs on **config objects** via `uvm_config_db`
+so tests stay isolated.
+
+## ChipSutra emit notes
+- Smoke/Generate: **no** custom singleton — use `uvm_config_db` + cfg class.
+- Emit singleton only when user asks for a global parameter DB or shared service.
+- Prefer `uvm_config_db#(cfg)::set/get` for per-test overrides and hierarchy.
+- Built-in globals: `uvm_top` (`uvm_root.txt`), `uvm_event_pool::get_global_pool`.
+- Caution: singletons couple the TB; hard to multi-test / reset cleanly — use sparingly.
+- Do not put per-sequence stimulus state in a singleton.

@@ -1,0 +1,107 @@
+# UVM Register Environment
+# Adapter, predictor, reg_env integration for frontdoor RAL. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Register Environment.
+# Pair with: uvm_ral.txt, uvm_ral_classes.txt, uvm_tlm_analysis.txt, uvm_agent.txt.
+# Connect: uvm_ral_connect.txt. Backdoor: uvm_ral_backdoor.txt.
+
+## Four pieces
+| Piece | Role |
+|-------|------|
+| Register model (`uvm_reg_block`) | Desired/mirrored CSR image |
+| Bus agent | Drive protocol to DUT |
+| Adapter (`uvm_reg_adapter`) | `uvm_reg_bus_op` ↔ bus `sequence_item` |
+| Predictor (`uvm_reg_predictor`) | Bus monitor traffic → update model mirror |
+
+Without adapter+map+sequencer, `reg.write`/`read` do not become bus cycles.
+Without predictor (or auto-predict), bus sequences that bypass RAL leave the model stale.
+
+## uvm_reg_bus_op
+Internal generic op from model `write`/`read`:
+```systemverilog
+typedef struct {
+  uvm_access_e   kind;    // UVM_READ / UVM_WRITE
+  uvm_reg_addr_t addr;
+  uvm_reg_data_t data;
+  int            n_bits;
+  uvm_reg_byte_en byte_en;
+  uvm_status_e   status;  // UVM_IS_OK / UVM_HAS_X / UVM_NOT_OK
+} uvm_reg_bus_op;
+```
+
+## Adapter
+Extend `uvm_reg_adapter`; implement both directions:
+```systemverilog
+class reg2apb_adapter extends uvm_reg_adapter;
+  function new(string name = "reg2apb_adapter");
+    super.new(name);
+    supports_byte_enable = 0;  // set 1 if bus has byte enables
+    provides_responses   = 0;  // set 1 if driver returns separate rsp
+  endfunction
+  virtual function uvm_sequence_item reg2bus(const ref uvm_reg_bus_op rw);
+    bus_pkt pkt = bus_pkt::type_id::create("pkt");
+    pkt.write = (rw.kind == UVM_WRITE);
+    pkt.addr  = rw.addr;
+    pkt.data  = rw.data;
+    return pkt;
+  endfunction
+  virtual function void bus2reg(uvm_sequence_item bus_item, ref uvm_reg_bus_op rw);
+    bus_pkt pkt;
+    if (!$cast(pkt, bus_item)) `uvm_fatal("ADAPT", "cast failed")
+    rw.kind   = pkt.write ? UVM_WRITE : UVM_READ;
+    rw.addr   = pkt.addr;
+    rw.data   = pkt.data;
+    rw.status = UVM_IS_OK;
+  endfunction
+endclass
+```
+- `provides_responses=1` when driver has no rsp → **hang** risk.
+- Match flags to the real agent protocol.
+
+## Predictor
+`uvm_reg_predictor #(BUSTYPE)`: analysis_imp from monitor → adapter → map lookup → update mirror.
+Needed when **non-RAL** sequences also hit the bus (or auto-predict is off).
+
+Integrate:
+1. `uvm_reg_predictor #(bus_pkt) m_pred;`
+2. `create` in `build_phase`
+3. `connect_phase`:
+```systemverilog
+m_pred.map     = m_ral_model.default_map;
+m_pred.adapter = m_apb_adapter;
+m_agent.ap.connect(m_pred.bus_in);
+```
+
+## reg_env sketch
+```systemverilog
+class reg_env extends uvm_env;
+  ral_my_design              m_ral_model;
+  reg2apb_adapter            m_adapter;
+  uvm_reg_predictor#(bus_pkt) m_predictor;
+  // agent often owned by parent env — handle via config or parent
+
+  virtual function void build_phase(uvm_phase phase);
+    m_ral_model = ral_my_design::type_id::create("m_ral_model");
+    m_adapter   = reg2apb_adapter::type_id::create("m_adapter");
+    m_predictor = uvm_reg_predictor#(bus_pkt)::type_id::create("m_predictor", this);
+    m_ral_model.build();
+    m_ral_model.lock_model();  // freeze structure
+    uvm_config_db#(ral_my_design)::set(null, "uvm_test_top", "m_ral_model", m_ral_model);
+  endfunction
+
+  virtual function void connect_phase(uvm_phase phase);
+    m_predictor.map     = m_ral_model.default_map;
+    m_predictor.adapter = m_adapter;
+    // m_agent.ap.connect(m_predictor.bus_in);  // when agent available
+  endfunction
+endclass
+```
+- Custom `build()` on the model is user code (not a UVM phase) — call then `lock_model()`.
+- Publish model on config_db for sequences/tests.
+- Map↔sequencer wiring: `uvm_ral_connect.txt`.
+
+## ChipSutra emit notes
+- Emit RAL env only with user CSR map **and** a known bus agent/txn type.
+- Always pair adapter with correct `supports_byte_enable` / `provides_responses`.
+- Prefer predictor when tests mix RAL and raw bus sequences.
+- Smoke without RAL: skip adapter/predictor entirely.
+- Verilator/limited UVM: often no full RAL — fall back to bus sequences.

@@ -1,0 +1,78 @@
+# UVM Testbench Top
+# Static SV module: clock, IF, DUT, config_db vif set, run_test(). Root of simulation.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Testbench Top.
+# Closes first-TB chapter with: uvm_first_tb_dut, uvm_test, uvm_driver (vif get).
+
+## Role
+- Only non-UVM-class piece of the TB: plain `module` holding DUT + IF + UVM kickoff.
+- Instantiates real hardware; hands virtual IF into UVM before phasing starts.
+- Usually named `tb_top` / `<dut>_tb`.
+
+## Minimal top (chapter reg_*)
+```systemverilog
+module tb_top;
+  import uvm_pkg::*;
+  `include "uvm_macros.svh"
+
+  bit clk;
+  always #10 clk = ~clk;   // or always #5 for ChipSutra SV style
+
+  reg_if    reg_if0 (clk);
+  reg_block dut0    (reg_if0);
+
+  initial begin
+    // MUST be before run_test — build_phase needs vif
+    uvm_config_db#(virtual reg_if)::set(null, "uvm_test_top", "vif", reg_if0);
+    // Prefer blank + cmdline for flexibility:
+    // run_test();
+    run_test("reg_test");
+  end
+
+  // Optional waves
+  initial begin
+    $dumpfile("tb_top.vcd");
+    $dumpvars(0, tb_top);
+  end
+endmodule
+```
+
+## config_db set (before run_test)
+- Driver/monitor `get(this, "", "vif", vif)` need a prior `set`.
+- `set` after `run_test` is useless — `run_test` does not return until sim ends.
+- Scope `"uvm_test_top"` / `"uvm_test_top.*"` patterns: deep dive in config_db articles; smoke often uses broad path like `"*"` or `"uvm_test_top.*"`.
+
+```systemverilog
+uvm_config_db#(virtual reg_if)::set(null, "uvm_test_top.*", "vif", reg_if0);
+```
+
+## run_test()
+- Global task forwards to `uvm_root::run_test`.
+- Creates test, runs phases (build -> connect -> run -> ...), summary, finish.
+- Fixed name: `run_test("reg_test")` needs recompile to switch tests.
+- Flexible: `run_test();` + sim plusarg `+UVM_TESTNAME=reg_write_only_test`.
+
+## Clock and reset
+- Simple: `always #period clk = ~clk;` enough for one-domain chapter DUT.
+- Complex multi-clock / sequenced reset: often dedicated clock/reset agents later.
+- Drive `rst_n` from top initial or reset agent; release before stimulus (driver may wait).
+
+## Required includes
+```systemverilog
+import uvm_pkg::*;
+`include "uvm_macros.svh"
+```
+Without these, `uvm_config_db` / `run_test` will not compile in the module.
+
+## Beginner mistakes
+1. `set` after `run_test`.
+2. Missing import / macros include.
+3. Forgetting to instantiate IF+DUT (vif points nowhere).
+4. Hardcoding only one test name in production flows (prefer +UVM_TESTNAME).
+
+## ChipSutra emit notes (methodology=uvm)
+- Always emit top: clk gen, IF, DUT port map, config_db set, `run_test`, `$dumpfile`/`$dumpvars` when useful.
+- Config overview: `uvm_configure_components.txt`. config_db API: `uvm_config_db.txt`.
+- Exact DUT/IF from user RTL — chapter `reg_*` only for that teaching DUT.
+- Clock: `#5` or `#10` toggling; reset sequence clear.
+- Note commercial sim / Verilator UVM limits; Pure SV layered remains Verilator default.
+- Full first-TB map: dut/IF -> object/txn -> component -> driver/monitor/sqr/seq -> sb -> agent -> env -> test -> **this top**.

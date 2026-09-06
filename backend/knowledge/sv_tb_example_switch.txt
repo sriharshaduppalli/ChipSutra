@@ -1,0 +1,75 @@
+# ChipVerify Testbench Example 2 — switch (teaching map)
+# Layered Pure SV with generator + event sync + dual-thread monitor (semaphore).
+# Curriculum: ChipVerify SystemVerilog Testbench Example 2. Prefer user RTL ports over examples.
+
+## Example 2 overview
+- DUT: address-range **switch / demux** — when `vld`, routes `{addr,data}` to port A if `addr` in low range, else port B; clears the unused port.
+- TB adds a real **generator** (vs Example 1 stim-in-test) and syncs gen↔drv with an **event** (`drv_done`).
+- Monitor uses a **semaphore** + two forked sample threads to pipeline capture across clock edges.
+- ChipSutra default: still IF/gen/drv/mon/sb/env/test; prefer fixed-N `join` + `errors`/report; borrow ready/event/semaphore patterns when the protocol needs them.
+
+## Design under test (protocol cues)
+- Inputs: `clk`, `rstn`, `vld`, `addr`, `data`.
+- Outputs: `addr_a`/`data_a`, `addr_b`/`data_b`.
+- Reset: clear all outs to 0.
+- When `vld`: if `addr` in `[0 : ADDR_DIV]` (example `8'h3F`) → update A, zero B; else update B, zero A.
+- When `!vld`: hold (example only updates on `vld`).
+- Scoreboard must encode the same split rule with **independent** expected A/B (not copy DUT outs as golden).
+
+## Transaction (switch_item)
+- `rand` stimulus: `addr`, `data`.
+- Observed outs on item: `addr_a`, `data_a`, `addr_b`, `data_b` (filled by monitor).
+- `print(tag)` for debug.
+- ChipSutra: constrain addr legal width; optional `dist` to hit both A and B ranges.
+
+## Generator (+ event handshake)
+- Holds `mailbox drv_mbx`, `event drv_done`, `int num`.
+- Loop `num` times: `item = new; randomize; put; @(drv_done);` — **back-pressure**: do not flood the driver.
+- ChipSutra mapping: `gen2drv` mailbox; fixed `n_txns`; event sync optional (mailbox depth alone often enough for smoke).
+
+## Driver
+- `virtual switch_if`, mailbox, shared `drv_done`.
+- Forever: `get` → drive `vld/addr/data` → `@(posedge)` → deassert `vld` → `->drv_done`.
+- ChipSutra: blocking assigns OK; pulse `vld` for one cycle matches this DUT style.
+
+## Monitor (semaphore + dual thread)
+- Two `fork`ed `sample_port` threads share a `semaphore(1)`.
+- On `rstn & vld`: take semaphore, sample addr/data (address/data phase), next posedge release semaphore and sample outs, `scb_mbx.put`.
+- Why semaphore: serialize the two-phase sample so pipelined threads do not corrupt a single item.
+- ChipSutra: single-thread monitor + `#1` is enough for many DUTs; use semaphore/fork when teaching IPC or when pipelining is required.
+
+## Scoreboard (routing golden)
+- `get` item; if `addr inside {[0:'h3F]}` expect A mirrors `{addr,data}` (and B cleared in a strict check); else expect B mirrors and A cleared.
+- Example article prints PASS/ERROR per item; ChipSutra should increment `errors` and end with one PASS/FAIL when using fixed-N.
+- Independent rule: derive expected port from **input addr**, compare to monitored outs.
+
+## Environment
+- Constructs gen/drv/mon/sb; mailboxes `drv_mbx` (gen→drv), `scb_mbx` (mon→sb); shares `drv_done` event; holds vif.
+- `run`: assign vif; `fork` all four; Example 2 uses `join_any`.
+- ChipSutra: also often wires `drv2sb` if comparing against driven txn; here mon packet alone carries both stimulus and outs.
+
+## Test / IF / top
+- Thin test: `e0 = new; e0.run();` (knobs live on generator `num` / constraints).
+- IF bundles rstn, vld, addr, data, addr_a/data_a, addr_b/data_b.
+- Top: clock (`#10` in article; ChipSutra `#5`), reset, assign `t0.e0.vif`, run, timed `$finish` because forever threads run; `$dumpfile`/`$dumpvars`.
+
+## ChipSutra vs Example 2
+| Topic | Example 2 | ChipSutra default |
+|-------|-----------|-------------------|
+| Generator | Yes + `@(drv_done)` | Yes; event optional |
+| Monitor | Dual thread + semaphore | Usually one thread |
+| Scoreboard | Per-item $display | `errors` + `env.report` |
+| Lifetime | forever + `#50 $finish` | fixed-N join then finish |
+| OOP extras | Article mentions inheritance/polymorphism for variants | Emit base stack first; extend classes when user asks |
+
+## When to retrieve this chunk
+- DUT routes by address range / demux / switch fabric.
+- User asks for generator back-pressure via events.
+- User asks for semaphore / multi-thread monitor patterns.
+- Contrast with Example 1 (`sv_tb_example_reg_ctrl.txt`) which had no generator and a register memory scoreboard.
+
+## Anti-patterns
+- Scoreboard that only checks A and ignores B (or vice versa) for the other address range.
+- Generator `put` without sync when driver is slow → unbounded mailbox growth (OK for tiny smoke; bad for long runs).
+- Monitor sampling outs on the same edge as inputs without accounting for registered DUT latency.
+- Inventing `ADDR_DIV` / port names not in user RTL.

@@ -121,7 +121,8 @@ def test_available_providers_reports_ollama_true_when_url_set():
     try:
         av = lp.available_providers()
         assert av["ollama"] is True, f"Expected ollama=True. Got: {av}"
-        assert av["ollama_model"] == "chipsutra-vlsi:3b", av
+        # Product model resolution may prefer an installed higher tier (7b)
+        assert (av["ollama_model"] or "").startswith("chipsutra-vlsi:"), av
         # No key providers should be enabled in this env slice
         assert av["emergent"] is False
         assert av["anthropic"] is False
@@ -231,7 +232,8 @@ def test_stream_chat_falls_through_to_ollama_when_only_ollama_configured():
             assert cap["url"].endswith("/api/chat"), cap
             assert cap["url"].startswith("http://localhost:11434"), cap
             payload = cap["json"]
-            assert payload["model"] == "chipsutra-vlsi:3b", payload
+                # Product model resolution may prefer an installed higher tier (7b)
+            assert (payload["model"] or "").startswith("chipsutra-vlsi:"), payload
             assert payload["stream"] is True, payload
             msgs = payload["messages"]
             roles = [m["role"] for m in msgs]
@@ -423,21 +425,25 @@ def _consume_sse(response, max_seconds=90):
 
 def test_regression_generate_stream_testbench_still_works(session, headers, project_and_file):
     proj, fid = project_and_file
+    # Wiring smoke test: pin the fast 3B tier (cloud→local fallback is covered
+    # by test_stream_chat_falls_through_to_ollama_when_only_ollama_configured).
     body = {
         "project_id": proj["id"],
         "module": "testbench",
-        "provider": "anthropic",
-        "model": "claude-sonnet-4-5-20250929",
+        "model_provider": "ollama",
+        "model_name": "chipsutra-vlsi:3b",
         "rtl_file_ids": [fid],
         "prompt": "Generate a simple SystemVerilog testbench for the counter module.",
     }
     with session.post(
         f"{API}/generate/stream",
         headers={**headers, "Accept": "text/event-stream"},
-        json=body, stream=True, timeout=120,
+        json=body, stream=True, timeout=(20, 900),
     ) as r:
         assert r.status_code == 200, r.text[:500]
-        events = _consume_sse(r, max_seconds=120)
+        # CPU-only Ollama: model swap-in (~90s) + generation + Verilator proof
+        # loop + possible LLM repair pass — allow the full pipeline to finish.
+        events = _consume_sse(r, max_seconds=900)
 
     assert events, "no SSE events received"
     delta_texts = []
@@ -461,7 +467,15 @@ FRESH_DIR = pathlib.Path("/tmp/FreshChipSutra_v08")
 
 def test_fresh_clone_has_ollama_wiring():
     if FRESH_DIR.exists():
-        shutil.rmtree(FRESH_DIR)
+        # Windows: .git objects are read-only; clear the bit before deleting
+        def _on_rm_error(func, path, _exc):
+            os.chmod(path, 0o700)
+            func(path)
+
+        try:
+            shutil.rmtree(FRESH_DIR, onerror=_on_rm_error)
+        except PermissionError:
+            pytest.skip("stale clone dir locked by another process")
     proc = subprocess.run(
         ["git", "clone", "--depth", "1",
          "https://github.com/sriharshaduppalli/ChipSutra.git",
@@ -472,27 +486,27 @@ def test_fresh_clone_has_ollama_wiring():
         pytest.skip(f"git clone failed (network?): {proc.stderr[:300]}")
 
     # docker-compose.yml has ollama + ollama-bootstrap
-    compose = (FRESH_DIR / "docker-compose.yml").read_text()
+    compose = (FRESH_DIR / "docker-compose.yml").read_text(encoding="utf-8")
     assert "ollama:" in compose, "fresh clone docker-compose missing ollama service"
     assert "ollama-bootstrap" in compose, "fresh clone docker-compose missing ollama-bootstrap"
     assert "chipsutra-vlsi" in compose or "qwen2.5-coder" in compose, \
         "fresh clone docker-compose missing VLSI model wiring"
 
     # llm_provider.py has stream_chat + OLLAMA_URL fallback
-    lp = (FRESH_DIR / "backend" / "llm_provider.py").read_text()
+    lp = (FRESH_DIR / "backend" / "llm_provider.py").read_text(encoding="utf-8")
     assert "stream_chat" in lp, "fresh clone llm_provider.py missing stream_chat"
     assert "OLLAMA_URL" in lp, "fresh clone llm_provider.py missing OLLAMA_URL fallback"
     assert "/api/chat" in lp, "fresh clone llm_provider.py missing /api/chat endpoint"
 
     # .env.example has OLLAMA_URL preset
-    env = (FRESH_DIR / "backend" / ".env.example").read_text()
+    env = (FRESH_DIR / "backend" / ".env.example").read_text(encoding="utf-8")
     assert re.search(r'^\s*OLLAMA_URL\s*=', env, re.M), "fresh clone .env.example missing OLLAMA_URL preset"
 
     # README quick start says zero API keys
-    readme = (FRESH_DIR / "README.md").read_text()
+    readme = (FRESH_DIR / "README.md").read_text(encoding="utf-8")
     assert re.search(r'zero\s+api\s+keys?\s+required', readme, re.I), \
         "fresh clone README missing 'zero API keys required'"
 
     # requirements.txt has httpx
-    reqs = (FRESH_DIR / "backend" / "requirements-oss.txt").read_text()
+    reqs = (FRESH_DIR / "backend" / "requirements-oss.txt").read_text(encoding="utf-8")
     assert re.search(r'^httpx', reqs, re.M), "fresh clone requirements-oss.txt missing httpx"

@@ -1,0 +1,95 @@
+# UVM Utility and Field Macros
+# Factory registration utils + field automation overview.
+# ChipSutra original wording. Curriculum: ChipVerify UVM utility & field macros.
+# Pair with: uvm_object.txt, uvm_object_print/compare/copy/pack, uvm_field_macros.txt (deep field catalog).
+
+## Why utils exist
+UVM factory needs every user type registered. Utility macros expand into registry + create + get_type_name.
+Field macros (between begin/end) auto-implement print/copy/compare/pack/record for registered properties.
+
+## Object utility
+Classes extending `uvm_object` / `uvm_sequence_item` / `uvm_transaction`:
+
+```systemverilog
+class ABC extends uvm_object;
+  `uvm_object_utils(ABC)
+  function new(string name = "ABC");
+    super.new(name);
+  endfunction
+endclass
+```
+- Explicit `new(string name=...)` is required.
+- Parameterized classes: `` `uvm_object_param_utils `` / `` `uvm_object_param_utils_begin `` (no string type-name registration the same way).
+
+## Component utility
+Classes extending `uvm_component` (test, env, agent, driver, …):
+
+```systemverilog
+class DEF extends uvm_component;
+  `uvm_component_utils(DEF)
+  function new(string name = "DEF", uvm_component parent = null);
+    super.new(name, parent);
+  endfunction
+endclass
+```
+- `new` must take `(name, parent)`.
+- Component create takes name + parent (unlike objects).
+
+## What utils expand to (mental model)
+`` `uvm_object_utils(T) `` == begin/end with no fields. Begin expands roughly to:
+1. `type_id` registry (`uvm_object_registry#(T,"T")`) + `get_type` / `get_object_type`
+2. `create(string name)` calling `new`
+3. `get_type_name()` returning `"T"`
+4. Field-automation function skeleton (`uvm_field_utils_begin`) closed by `` `uvm_object_utils_end ``
+
+Do not hand-rewrite these unless advanced customization. Prefer macros + factory create.
+
+## Create via factory
+```systemverilog
+ABC abc = ABC::type_id::create("abc_inst");
+// components:
+drv = my_driver::type_id::create("drv", this);
+```
+Never `new` for factory-overrideable types in ChipSutra smoke TB emit.
+Overrides API: `uvm_factory_override.txt`.
+
+## Field macros (overview)
+Place between begin/end; pick macro matching the property type:
+
+```systemverilog
+`uvm_object_utils_begin(ABC)
+  `uvm_field_int(m_addr, UVM_DEFAULT)
+  `uvm_field_int(m_data, UVM_DEFAULT)
+`uvm_object_utils_end
+```
+- Args: `ARG` (variable name), `FLAG` (ops + optional radix).
+- Auto-implements copy/compare/print/pack/record unless flagged off.
+- Expands a lot of code — OK for small txns; prefer `do_*` hooks for large/hot objects.
+
+### Operation flags (OR together)
+| Flag | Effect |
+|------|--------|
+| `UVM_DEFAULT` / `UVM_ALL_ON` | All ops on |
+| `UVM_NOCOPY` | Skip copy |
+| `UVM_NOCOMPARE` | Skip compare |
+| `UVM_NOPRINT` | Skip print |
+| `UVM_NOPACK` | Skip pack/unpack |
+| `UVM_REFERENCE` | Object handles only (no deep copy/compare) |
+
+### Radix flags (OR with ops; default print radix often hex)
+`UVM_BIN` | `UVM_DEC` | `UVM_HEX` | `UVM_OCT` | `UVM_STRING` | `UVM_TIME`
+
+Example: `` `uvm_field_int(m_mode, UVM_DEFAULT | UVM_DEC) ``
+
+## Beginner mistakes
+1. Missing utils on a class then calling `type_id::create` / factory override.
+2. Using `` `uvm_object_utils `` on a component (or reverse).
+3. Wrong `new` signature (object vs component).
+4. Wrong field macro for type (queue vs int vs object).
+5. Assuming field macros are free — they cost compile size / sim cycles.
+
+## ChipSutra emit notes
+- Every user `uvm_object` / `uvm_component` derivative: matching utils macro + proper `new`.
+- Smoke sequence_items: begin/end + field macros for int/enum/string/object as needed.
+- Large VIP / hot paths: `` `uvm_object_utils `` only + hand `do_copy`/`do_compare`/`do_print`/`convert2string`.
+- Deep field-type catalog: `uvm_field_macros.txt`; ops detail also in print/copy/compare/pack articles.

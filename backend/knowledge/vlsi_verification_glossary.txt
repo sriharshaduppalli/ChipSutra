@@ -39,9 +39,9 @@
 - cocotb / pyuvm: Python-driven TB alternatives.
 
 ## Protocols (one-liners)
-- AXI: ARM AMBA memory-mapped burst bus with VALID/READY.
-- APB: simple peripheral bus, two-phase.
-- AHB: pipelined high-performance AMBA bus.
+- AXI: ARM AMBA memory-mapped bus; VALID/READY; Lite = single-beat register access.
+- APB: two-phase peripheral bus (SETUP then ACCESS); wait on PREADY.
+- AHB: pipelined AMBA bus; address phase overlaps previous data phase.
 - AXIS: streaming AMBA data path.
 - TileLink: SiFive/RISC-V coherent/noncoherent tile bus.
 - Wishbone: OpenCores classic SoC bus.
@@ -52,6 +52,6 @@
 - UCIe: open die-to-die interconnect standard.
 
 ## Roles
-- DUT: design under test; TB: testbench; VIP: protocol agent.
-- Formal: mathematical proof/check vs simulation stimulus.
-- Emulation / FPGA prototype: acceleration platforms for large SoCs.
+- DUT: design under test; TB: testbench; VIP: protocol agent (driver+monitor+checker+coverage). BFM: drive-only.
+- Formal: mathematical proof of written properties vs simulation stimulus. No violations ≠ design fully correct.
+- Emulation / FPGA prototype: acceleration for boot and real I/O. ChipSutra closed-loop is simulation only.

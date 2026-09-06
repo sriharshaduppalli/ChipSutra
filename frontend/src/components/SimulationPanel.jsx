@@ -10,7 +10,21 @@ function rtlFileIds(project) {
     .map((f) => f.id);
 }
 
-export default function SimulationPanel({ project, selectedFileIds, onClose, onVcdCreated, onLogReady }) {
+function looksUvm(text) {
+  return /import\s+uvm_pkg|`include\s+"uvm_macros|run_test\s*\(/i.test(text || "");
+}
+
+export function extractSimTime(line) {
+  const s = String(line || "");
+  const m =
+    s.match(/\[(\d+)\s*(?:ns|ps|us|ms|fs)?\]/) ||
+    s.match(/#\s*(\d+)/) ||
+    s.match(/@\s*(\d+)/) ||
+    s.match(/\b(?:time|t)\s*[=:]\s*(\d+)/i);
+  return m ? Number(m[1]) : null;
+}
+
+export default function SimulationPanel({ project, selectedFileIds, tbMethodology, generatedOutput, onClose, onVcdCreated, onLogReady }) {
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState([]);
   const [topModule, setTopModule] = useState("");
@@ -25,6 +39,8 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
   const [seed, setSeed] = useState("");
   const [coverageSummary, setCoverageSummary] = useState(null);
   const [lintReport, setLintReport] = useState(null);
+  const [exporting, setExporting] = useState(false);
+  const [findings, setFindings] = useState(null);
 
   useEffect(() => {
     fetch(`${API}/health`)
@@ -49,7 +65,9 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
 
   const tbFile = (project.files || []).find(
     (f) => selectedFileIds.includes(f.id) && f.kind === "tb",
-  );
+  ) || (project.files || []).find((f) => (f.kind === "tb") || /uvm|_tb\.sv$/i.test(f.original_filename || ""));
+
+  const isUvm = tbMethodology === "uvm" || looksUvm(generatedOutput) || /uvm/i.test(tbFile?.original_filename || "");
 
   const run = async () => {
     if (rtlIds.length === 0) {
@@ -101,6 +119,9 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
             }
             else if (j.type === "coverage") setCoverageSummary(j);
             else if (j.type === "lint_report") setLintReport(j);
+            else if (j.type === "vendor_pack") {
+              setLogs(prev => [...prev, { level: "warn", line: `UVM test ${j.test} — use Export vendor pack` }]);
+            }
             else if (j.type === "done") {
               finalStatus = j.status;
               setStatus(j.status);
@@ -112,6 +133,16 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
       if (onLogReady && logLines.length) {
         onLogReady(logLines.join("\n"), { status: finalStatus, mode });
       }
+      if (logLines.length) {
+        fetch(`${API}/debug/classify`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+          body: JSON.stringify({ tool_log: logLines.join("\n") }),
+        })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((d) => d && setFindings(d))
+          .catch(() => {});
+      }
     } catch (e) {
       toast.error(e.message || "Simulation failed");
       if (onLogReady && logLines.length) {
@@ -119,6 +150,36 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
       }
     }
     setRunning(false);
+  };
+
+  const exportVendorPack = async () => {
+    setExporting(true);
+    try {
+      const res = await fetch(`${API}/simulate/vendor-pack`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({
+          project_id: project.id,
+          rtl_file_ids: rtlIds,
+          tb_file_id: tbFile?.id || null,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${res.status}`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "chipsutra_uvm_vendor_pack.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success("Vendor pack downloaded (filelist + Questa/VCS/Xcelium)");
+    } catch (e) {
+      toast.error(e.message || "Vendor pack failed");
+    }
+    setExporting(false);
   };
 
   const colorFor = (lvl) => lvl === "error" ? "text-red-400" : lvl === "warn" ? "text-amber-400" : lvl === "success" ? "text-emerald-400" : "text-slate-300";
@@ -129,11 +190,17 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
         <div className="border-b border-[#1E293B] px-5 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Terminal size={16} className="text-emerald-400" />
-            <div className="font-mono text-sm">Verilator Simulation · {project.name}</div>
+            <div className="font-mono text-sm">{isUvm ? "UVM export" : "Verilator Simulation"} · {project.name}</div>
             {engine && <span className={`pin-badge ${engine === 'mock' ? 'text-amber-400 border-amber-500/40' : 'text-emerald-400 border-emerald-500/40'}`}>{engine}</span>}
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-100" data-testid="sim-close"><X size={16} /></button>
         </div>
+        {isUvm && (
+          <div className="mx-4 mt-3 p-3 border border-amber-500/40 bg-amber-500/5 font-mono text-[11px] text-amber-200" data-testid="sim-uvm-banner">
+            UVM is source-only here. Verilator cannot run <span className="text-amber-300">run_test</span>.
+            Export a filelist + Questa/VCS/Xcelium scripts, or regenerate as <span className="text-emerald-400">Pure SV</span> for Compile + Run.
+          </div>
+        )}
         {verilatorAvailable === false && (
           <div className="mx-4 mt-3 p-3 border border-amber-500/40 bg-amber-500/5 font-mono text-[11px] text-amber-200 flex gap-2 items-start">
             <AlertTriangle size={14} className="flex-shrink-0 mt-0.5 text-amber-400" />
@@ -164,7 +231,7 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
         {allRtlIds.length === 0 && (
           <div className="mx-4 mt-3 p-3 border border-red-500/40 bg-red-500/5 font-mono text-[11px] text-slate-300">
             Upload at least one <span className="text-red-400">.v</span> or <span className="text-red-400">.sv</span> RTL file.
-            Generated testbench text in the output pane must be downloaded and re-uploaded as a file before sim.
+            Upload at least one RTL file. Generate auto-saves the TB to Files so Simulate can pick it.
           </div>
         )}
         <div className="p-4 border-b border-[#1E293B] flex flex-wrap items-center gap-3">
@@ -187,7 +254,10 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
           )}
           <input placeholder="top module (auto)" value={topModule} onChange={e => setTopModule(e.target.value)} className="flex-1 min-w-[180px] bg-[#0B0E14] border border-[#1E293B] px-2 py-1 text-xs font-mono focus:outline-none focus:border-emerald-500" data-testid="sim-top" />
           <button disabled={running || rtlIds.length === 0} onClick={run} className="btn-neon text-xs inline-flex items-center gap-1" data-testid="sim-run">
-            {running ? <><Loader2 size={12} className="animate-spin" /> Running...</> : <><Play size={12} /> Run</>}
+            {running ? <><Loader2 size={12} className="animate-spin" /> Running...</> : <><Play size={12} /> {isUvm ? "Check / refuse" : "Run"}</>}
+          </button>
+          <button disabled={exporting || rtlIds.length === 0} onClick={exportVendorPack} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="sim-vendor-pack">
+            {exporting ? "Export…" : "Export vendor pack"}
           </button>
         </div>
         <div className="p-2 border-b border-[#1E293B] font-mono text-[10px] text-slate-500">
@@ -196,7 +266,7 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
             <span className="text-amber-400"> (all project RTL)</span>
           )}
           · TB: <span className="text-emerald-400">{tbFile?.original_filename || "auto-detect"}</span>
-          {mode === "run" && <span> · Runs verilator --cc --build + captures VCD if TB has $dumpvars.</span>}
+          {mode === "run" && <span> · Runs verilator --cc --build + captures VCD if TB has $dumpvars. Icarus/IVL_UVM is opt-in (`CHIPSUTRA_SIM_ADAPTER=iverilog`) — not UVM sign-off.</span>}
         </div>
         <div className="flex-1 overflow-auto bg-[#0B0E14] p-4 font-mono text-[11px] scanline">
           {logs.length === 0 && !running && (
@@ -205,7 +275,25 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
               <div className="mt-2">Pick <span className="text-emerald-400">Lint</span> for fast static checks, or <span className="text-emerald-400">Compile + Run</span> to actually simulate and capture a VCD.</div>
             </div>
           )}
-          {logs.map((l, i) => (<div key={i} className={colorFor(l.level)}>{l.line}</div>))}
+          {logs.map((l, i) => {
+            const t = extractSimTime(l.line);
+            const failish = /fail|error|assert|mismatch/i.test(l.line || "");
+            if (t != null && vcdFileId && failish) {
+              return (
+                <div key={i} className={colorFor(l.level)}>
+                  <Link
+                    to={`/app/waveform?pid=${project.id}&file_id=${vcdFileId}&t=${t}`}
+                    className="underline hover:text-amber-300"
+                    data-testid="sim-log-time-link"
+                    title={`Jump waveform to t=${t}`}
+                  >
+                    {l.line}
+                  </Link>
+                </div>
+              );
+            }
+            return <div key={i} className={colorFor(l.level)}>{l.line}</div>;
+          })}
           {running && <div className="text-emerald-400 mt-2 cli-caret"></div>}
           {status && (
             <div className={`mt-4 p-2 border-l-2 ${status === 'done' ? 'border-emerald-500 text-emerald-400' : 'border-red-500 text-red-400'}`}>
@@ -220,6 +308,14 @@ export default function SimulationPanel({ project, selectedFileIds, onClose, onV
               {lintReport && (
                 <div className="mt-2 text-slate-300">
                   Lint policy: active {lintReport.counts?.active || 0} · waived {lintReport.counts?.waived || 0} · blocking {lintReport.counts?.blocking || 0}
+                </div>
+              )}
+              {findings && !findings.empty && (findings.findings || []).length > 0 && (
+                <div className="mt-3 text-slate-300 space-y-1" data-testid="sim-fail-causes">
+                  <div className="text-amber-400">Fail causes · {findings.summary}</div>
+                  {(findings.findings || []).slice(0, 5).map((f, i) => (
+                    <div key={i}>[{f.severity}] {f.title}: {f.hint}</div>
+                  ))}
                 </div>
               )}
             </div>

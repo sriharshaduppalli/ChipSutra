@@ -35,14 +35,17 @@ Best for counters, simple FSMs, FIFOs with a modelable API.
 5. Plusargs: +SEED=, +N_TXN= for regression reuse.
 Reusable: same txn class across smoke/extended tests via constraint mode.
 
-## Template D - Layered SV TB (scalable without UVM)
-Layers:
-- interface / clocking block (optional) for synchronous drive/sample
-- driver task: drive txn on interface
-- monitor task: sample + push to queue
-- scoreboard: pop expected vs actual
-- test: call sequences of driver tasks
-Reuse: swap test tasks; keep driver/monitor/scoreboard.
+## Template D - Layered Pure SV TB (DEFAULT — scalable without UVM)
+Required components (ChipSutra Pure SV default):
+- interface <dut>_if — design signals + modports DRV/MON
+- generator — randomizes <dut>_txn into mailbox gen2drv
+- driver — reset + drive stimulus from mailbox via virtual interface
+- monitor — sample DUT activity into mailbox mon2sb
+- scoreboard — independent predict/check (never circular golden)
+- environment — builds gen/drv/mon/sb + mailboxes; fork/join run
+- test — build env, reset, post-reset checks, run, PASS/FAIL report
+- top module — clock, IF, DUT via vif, construct test, $dump/$finish
+Reuse: swap test configs; keep driver/monitor/scoreboard/env.
 
 ## Template E - Minimal UVM env (when user asks UVM)
 Components:
@@ -53,6 +56,11 @@ Components:
 Rules: config_db for vif; start_item/finish_item; get_next_item/item_done.
 Forbidden: .put(), .configure(vif), cast(rhs), driver.start(this).
 Note: full UVM may not Verilate; offer Template B for OSS local runs.
+
+## Template E2 - Legacy OVM / VMM (only when methodology asks)
+OVM: same agent/env/test shape as UVM but `ovm_*` macros/APIs + `run_test()`; no `uvm_*`.
+VMM: `vmm_data` txn, channels, generator/xactor driver & monitor, env, top; VCS-oriented.
+Always mark `// ChipSutra methodology=ovm|vmm (legacy)`. Prefer UVM when user is flexible.
 
 ## Template F - Extended / corner regression set
 Build on Template B/C library:

@@ -1,0 +1,99 @@
+# UVM Objection
+# End-of-phase control: raise/drop until count hits zero (+ optional drain).
+# ChipSutra original wording. Curriculum: ChipVerify UVM Objection.
+# Pair with: uvm_phases.txt, uvm_sequence_usage.txt, uvm_test.txt.
+
+## Why objections
+Timed phases (`run_phase`, `main_phase`, reset/configure sub-phases, …) must know when
+stimulus/check activity is done. Objections are a distributed counter per phase:
+raise while busy, drop when finished; phase ends only when count reaches zero
+(then drain time, if set).
+
+Do not instantiate `uvm_objection` yourself for normal use — use the `uvm_phase`
+handle passed into the phase method / sequence starting phase.
+
+## Core API (on uvm_phase)
+```systemverilog
+phase.raise_objection(this, "why raised");   // count += 1 (default)
+phase.drop_objection(this, "why dropped"); // count -= 1
+uvm_objection o = phase.get_objection();
+o.set_drain_time(this, 100ns);             // wait after all-dropped
+o.display_objections();                    // debug dump
+```
+- Every raise must eventually match a drop (same `count` if non-default).
+- Prefer informative `description` strings — critical for hang debug.
+- Drain: after count→0, wait drain before phase completes; re-raise during drain cancels the all-dropped.
+
+## Where to raise (ChipSutra default)
+| Prefer | Avoid |
+|--------|--------|
+| Test `run_phase` / `main_phase` around stimulus | Every driver/monitor forever loop |
+| Root / virtual sequence body | Passive-only agents (usually) |
+| Optional: scoreboard waiting for last txn | Many nested components each objecting |
+
+Passive monitors rarely need objections. Hierarchical counts add overhead — keep raises high in the tree.
+
+## Test pattern (standard)
+```systemverilog
+virtual task run_phase(uvm_phase phase);
+  my_seq seq = my_seq::type_id::create("seq");
+  phase.raise_objection(this, "start stimulus");
+  seq.start(m_env.m_agent.m_sequencer);
+  phase.drop_objection(this, "stimulus done");
+endtask
+```
+Same idea for `main_phase` with a virtual sequence.
+
+## Sequence patterns
+
+### Explicit via starting_phase
+```systemverilog
+virtual task body();
+  uvm_phase phase = get_starting_phase();
+  if (phase != null)
+    phase.raise_objection(this, "Sequence generating stimulus");
+  // ... start_item / finish_item or `uvm_do ...
+  if (phase != null)
+    phase.drop_objection(this, "Sequence finished");
+endtask
+```
+- `get_starting_phase()` may be null if started manually without phase set — null-check.
+- Test can `seq.set_starting_phase(phase)` before `start`.
+
+### Automatic
+```systemverilog
+function new(string name = "my_auto_sequence");
+  super.new(name);
+  set_automatic_phase_objection(1);  // raise before pre_start, drop after post_start
+endfunction
+```
+Requires a valid starting_phase. Never enable automatic objection on a sequence whose `body` has an infinite `forever` — hang.
+
+## Drain time
+```systemverilog
+// typically once at test / uvm_top — allow in-flight DUT→monitor settle
+phase.get_objection().set_drain_time(this, 50ns);
+```
+Keep short. Prefer at test or top env, not every agent.
+
+## Debug plusargs
+| Plusarg | Use |
+|---------|-----|
+| `+UVM_OBJECTION_TRACE` | Who raised/dropped, descriptions, counts |
+| `+UVM_PHASE_TRACE` | Phase transitions (pairs well with objection trace) |
+
+Hung sim that never reaches extract → almost always unmatched raise or forever body with auto-objection.
+
+## Beginner mistakes
+1. Raise without drop → simulation never ends.
+2. Objections in `build_phase` / `connect_phase` — meaningless / wrong.
+3. Driver raises for every item while test also raises — redundant; prefer test/seq.
+4. Auto-objection + infinite `forever` in `body`.
+5. Forgetting `set_starting_phase` when sequence manages its own objections.
+6. Huge drain times masking real completion bugs.
+
+## ChipSutra emit notes
+- methodology=uvm smoke: raise/drop in **test** `run_phase` around `seq.start(...)`.
+- Sequences: either test owns objections **or** sequence does (explicit/auto) — not both for the same activity unless intentional nested counts.
+- Do not sprinkle objections in every driver/monitor of generated TB.
+- Phases map: `uvm_phases.txt`. Sequence start styles: `uvm_sequence_usage.txt`.

@@ -3,13 +3,13 @@
 # ALWAYS prefer user RTL/spec signal names, widths, and timing. Do not invent JEDEC/vendor numbers.
 
 ## AMBA on-chip buses (AXI / AHB / APB / ACE / CHI)
-- AXI4: separate write (AW/W/B) and read (AR/R); VALID/READY handshake; VALID must not depend on READY; AWLEN/ARLEN burst length; ASIZE transfer size; ABURST FIXED/INCR/WRAP; AID/RID/BID ordering; AxCACHE/AxPROT/AxLOCK/AxQOS/AxREGION; WLAST/RLAST; BRESP/RRESP OKAY/EXOKAY/SLVERR/DECERR; low-power via CSYSREQ/CSYSACK/CACTIVE when present.
-- AXI4-Lite: no bursts (LEN=0); simpler register access; same VALID/READY rules.
+- AXI4: separate write (AW/W/B) and read (AR/R); VALID/READY handshake; transmitter must not wait for READY before VALID; AWLEN/ARLEN burst length; ASIZE transfer size; ABURST FIXED/INCR/WRAP; AID/RID/BID ordering; AxCACHE/AxPROT/AxLOCK/AxQOS/AxREGION; WLAST/RLAST; BRESP/RRESP OKAY/EXOKAY/SLVERR/DECERR; low-power via CSYSREQ/CSYSACK/CACTIVE when present.
+- AXI4-Lite / AXI5-Lite smoke: no bursts; same VALID/READY rules; ChipSutra eval slaves stay AXI4-Lite pin set — do not invent AXI5-only pins unless RTL has them.
 - AXI4-Stream: TVALID/TREADY, TDATA, TSTRB/TKEEP, TLAST, TUSER, TID, TDEST; backpressure on TREADY; packet boundaries on TLAST.
 - ACE / ACE-Lite: coherency channels (CR/CD/AC) beyond AXI; shareable domains; use user VIP/spec — do not invent snoop timing.
 - AMBA CHI: layered flits (REQ/RSP/SNP/DAT); typically VIP/SoC level, not gate-level TB unless user provides interfaces.
-- AHB-Lite / AHB5: HTRANS IDLE/BUSY/NONSEQ/SEQ; HREADY/HREADYOUT; HRESP OKAY/ERROR; HBURST; HSIZE; HWRITE; HPROT; wait states via HREADY.
-- APB3/APB4: PSEL, PENABLE two-phase (setup→access); PWRITE, PADDR, PWDATA/PRDATA; PREADY wait; PSLVERR; PPROT/PSTRB on APB4; no bursts.
+- AHB-Lite / AHB5: one-cycle address phase (cannot wait) overlapping previous data phase; HWDATA is data-phase; HTRANS IDLE/BUSY/NONSEQ/SEQ; wait via HREADYOUT; HRESP OKAY; do not invent exclusive/secure unless RTL has them.
+- APB3/APB4: SETUP (PSEL&&!PENABLE) then ACCESS (PENABLE); hold controls while PREADY is LOW; PSTRB inactive on reads; PSLVERR valid only last ACCESS cycle.
 - AXI interconnect / QoS: arbitration, decode, width conversion, clock-crossing bridges — verify decode map and timeout from user interconnect docs.
 
 ## Other on-chip fabrics

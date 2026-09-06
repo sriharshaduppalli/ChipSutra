@@ -1,3 +1,4 @@
+import React from "react";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { Toaster } from "sonner";
@@ -15,6 +16,42 @@ import Docs from "@/pages/Docs";
 import AuthCallback from "@/pages/AuthCallback";
 import Workspaces from "@/pages/Workspaces";
 import CI from "@/pages/CI";
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  render() {
+    if (this.state.error) {
+      const msg = String(this.state.error?.message || this.state.error);
+      const apiDown = /network|ECONNREFUSED|Failed to fetch|ERR_CONNECTION/i.test(msg);
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-slate-950 text-slate-100 p-8">
+          <div className="max-w-lg font-mono text-sm space-y-3">
+            <div className="text-rose-400 text-base">Something went wrong</div>
+            <p className="text-slate-400">
+              {apiDown
+                ? "Backend looks unreachable. Start ChipSutra with scripts/start-chipsutra.ps1 and confirm http://localhost:8001/api/health."
+                : msg}
+            </p>
+            <button
+              type="button"
+              className="px-3 py-1.5 border border-slate-600 rounded hover:bg-slate-900"
+              onClick={() => window.location.assign("/app")}
+            >
+              Reload workspace
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -53,14 +90,16 @@ function AppRouter() {
 
 function App() {
   return (
-    <AuthProvider>
-      {/* PUBLIC_URL is "" on the custom domain and "/ChipSutra" on the
-          github.io project URL, so routing works from either origin. */}
-      <BrowserRouter basename={process.env.PUBLIC_URL || undefined}>
-        <Toaster theme="dark" position="bottom-right" toastOptions={{ style: { background: "#121721", border: "1px solid #1E293B", color: "#F8FAFC", fontFamily: "JetBrains Mono, monospace" } }} />
-        <AppRouter />
-      </BrowserRouter>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        {/* PUBLIC_URL is "" on the custom domain and "/ChipSutra" on the
+            github.io project URL, so routing works from either origin. */}
+        <BrowserRouter basename={process.env.PUBLIC_URL || undefined}>
+          <Toaster theme="dark" position="bottom-right" toastOptions={{ style: { background: "#121721", border: "1px solid #1E293B", color: "#F8FAFC", fontFamily: "JetBrains Mono, monospace" } }} />
+          <AppRouter />
+        </BrowserRouter>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
 

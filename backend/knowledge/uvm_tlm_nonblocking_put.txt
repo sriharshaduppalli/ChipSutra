@@ -1,0 +1,69 @@
+# UVM TLM Nonblocking Put Port
+# try_put / can_put — sender does not stall inside a put task.
+# ChipSutra original wording. Curriculum: ChipVerify UVM TLM Nonblocking Put Port.
+# Pair with: uvm_tlm_blocking_put.txt, uvm_tlm.txt. Nonblocking get sibling next.
+
+## Blocking vs nonblocking put
+| | Blocking | Nonblocking |
+|--|----------|-------------|
+| Port | `uvm_blocking_put_port #(T)` | `uvm_nonblocking_put_port #(T)` |
+| Imp | `uvm_blocking_put_imp #(T,IMP)` | `uvm_nonblocking_put_imp #(T,IMP)` |
+| Call | `put(t)` task — waits until done | `try_put(t)` / `can_put()` **functions** |
+| Imp body | `task put(T t)` | `function bit try_put(T t)` + `function bit can_put()` |
+
+Connect: `sender.m_put_port.connect(receiver.m_put_imp)` in parent `connect_phase`.
+Match blocking↔blocking or nonblocking↔nonblocking — do not mix.
+
+## APIs
+```systemverilog
+bit ok = m_put_port.try_put(pkt);  // 1 = accepted, 0 = rejected (no stall in port)
+bit rdy = m_put_port.can_put();    // 1 = receiver says ready (query only)
+```
+- Imp **must** implement both `try_put` and `can_put` (even if `can_put` is stubbed).
+- `try_put` returns 1 on success so the sender can retry / drop / log.
+
+## Minimal pattern
+```systemverilog
+// Sender
+uvm_nonblocking_put_port #(Packet) m_put_port;
+m_put_port = new("m_put_port", this);
+success = m_put_port.try_put(pkt);
+
+// Receiver
+uvm_nonblocking_put_imp #(Packet, componentB) m_put_imp;
+m_put_imp = new("m_put_imp", this);
+virtual function bit try_put(Packet pkt);
+  // accept work — no time consume in function
+  return 1;  // or 0 if not ready
+endfunction
+virtual function bit can_put();
+  return 1;  // readiness query
+endfunction
+```
+
+## Retry styles (sender)
+1. **Single try** — log success/fail; drop or queue locally on 0.
+2. **Poll try_put** — `do try_put; #1; while (!success)` (emulates blocking with backoff).
+3. **can_put then try_put** — wait until `can_put==1`, then `try_put` (still check return).
+
+Prefer a FIFO (`uvm_tlm_fifo`) over busy-polling when rates differ.
+
+## vs smoke TB
+| Need | Prefer |
+|------|--------|
+| Monitor broadcast | `uvm_analysis_port.write` (always nonblocking void) |
+| Driver↔sequencer | `get_next_item` / `item_done` |
+| Teaching NB put / backpressure | `uvm_nonblocking_put_port` |
+| Simple A→B with wait | blocking `put` or FIFO |
+
+## Beginner mistakes
+1. Implementing `task put` on a nonblocking imp — need `try_put`/`can_put` functions.
+2. Connecting NB port to blocking imp.
+3. Ignoring `try_put` return → silent lost transactions.
+4. Busy-loop `can_put` with no `#delay` → sim hang at time 0.
+5. Heavy work inside `try_put` function (no time allowed).
+
+## ChipSutra emit notes
+- Default Generate: do not emit NB put; use analysis + seq_item paths.
+- Demo only when user asks; document return-code handling.
+- Blocking put: `uvm_tlm_blocking_put.txt`. Overview: `uvm_tlm.txt`.

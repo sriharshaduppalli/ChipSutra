@@ -1,0 +1,82 @@
+# Configure Components
+# Knobs, config_db/resource_db, and config objects — hide VIP wiring from tests.
+# ChipSutra original wording. Curriculum: ChipVerify Configure Components.
+# Deep: uvm_resource_db.txt, uvm_config_db.txt; examples next.
+
+## Goal
+Tests should tweak behavior without knowing internal agent wiring.
+Expose knobs + pass values (vif, IDs, modes) through UVM configuration — not hard-coded globals.
+
+## 1) Configurable parameters (knobs)
+Standard knobs on VIP:
+
+| Knob | Typical type | Effect |
+|------|--------------|--------|
+| Active vs passive agent | `uvm_active_passive_enum` (`UVM_ACTIVE` / `UVM_PASSIVE`) | Active builds driver+sequencer; passive = monitor only |
+| Coverage enable | `bit` / enum | Monitor/subscriber collects coverage or not |
+| Checker enable | `bit` | Protocol checks on/off |
+| Design-specific | int / enum | #masters/slaves, bus speed/mode, …
+
+Set from test via `uvm_config_db` or a config object before/during `build_phase`.
+See agent/monitor first-TB files for ACTIVE/PASSIVE patterns.
+
+## 2) UVM configuration mechanism
+Mental model: shared name→value table. Components `set` / `get` typed entries.
+
+| API | Scope idea |
+|-----|------------|
+| `uvm_config_db#(T)` | Typed + **hierarchical path** limits who can see the entry |
+| `uvm_resource_db#(T)` | Broader resource lookup (any/object scope); less path-scoped than config_db |
+
+```systemverilog
+// Only under wbSlaves[0] see slave_id
+uvm_config_db#(int)::set(this, "*.wbSlaves[0]", "slave_id", 0);
+
+// Virtual IF to test and below (common: set from tb_top before run_test)
+uvm_config_db#(virtual dut_if)::set(null, "uvm_test_top", "dut_vif", dut_if1);
+
+// resource_db example — shared named resource
+uvm_resource_db#(my_cfg)::set("test", "shared_config", cfg, this);
+```
+- Path with one leaf → only that component (and matching wildcards) can `get`.
+- Path `"uvm_test_top"` / `"*"` patterns control visibility down the tree.
+- Prefer `uvm_config_db` for VIP knobs and virtual interfaces in ChipSutra emit.
+
+## 3) Configuration class
+Bundle knobs into one object; set once; children get and apply:
+
+```systemverilog
+class env_cfg extends uvm_object;
+  `uvm_object_utils(env_cfg)
+  uvm_active_passive_enum is_active = UVM_ACTIVE;
+  bit enable_coverage = 1;
+  int num_slaves = 1;
+  // rand + constraints for legal modes when useful
+  function new(string name = "env_cfg"); super.new(name); endfunction
+endclass
+
+// test build_phase:
+env_cfg cfg = env_cfg::type_id::create("cfg");
+cfg.is_active = UVM_PASSIVE;
+uvm_config_db#(env_cfg)::set(this, "m_env*", "env_cfg", cfg);
+```
+Advantages: inheritance for derived tests, `randomize()` with constraints, one handle through hierarchy.
+
+## Factory vs config
+| Need | Use |
+|------|-----|
+| Swap class type (driver→eth_driver) | Factory override (`uvm_factory_override.txt`) |
+| Pass vif / mode / counts / cfg object | `uvm_config_db` / config class |
+
+## Beginner mistakes
+1. Hard-coding vif in driver — always config_db get (fatal if missing).
+2. Setting config **after** child `build_phase` already ran — too late for construction knobs.
+3. Wrong hierarchical path → get fails / wrong component sees value.
+4. Exposing every internal wire to the test — prefer a few knobs + config class.
+
+## ChipSutra emit notes
+- methodology=uvm smoke: `uvm_config_db#(virtual ...)::set` in tb_top before `run_test`; driver/monitor `get` in `build_phase`.
+- Agent: honor `is_active` (or config field) when creating drv/sqr.
+- Multi-test reuse: optional small `*_cfg` object via config_db rather than many loose ints.
+- Do not invent resource_db unless user asks; config_db covers nearly all smoke cases.
+- Resource pool / scope model: `uvm_resource_db.txt`. Detailed set/get: `uvm_config_db.txt`.

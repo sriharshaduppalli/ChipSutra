@@ -1,0 +1,59 @@
+# How to Use `uvm_do Sequence Macros
+# Catalog of `uvm_do*` / `uvm_do_on*` — create, randomize, start_item or start.
+# ChipSutra original wording. Curriculum: ChipVerify How to use `uvm_do sequence macros.
+# Expand/caveats: uvm_sequence_macros.txt. Pre-existing items: next article.
+
+## What they do
+Given a **sequence_item** or **sequence** handle, macros (via `` `uvm_create ``):
+1. Create the object if needed (use `` `uvm_send* `` if already created — next article).
+2. Randomize (optional inline constraints).
+3. Item → `start_item` / `finish_item`; sequence → `start(..., call_pre_post=0)`.
+
+Default sequencer for `` `uvm_do* `` (no `_on`) is **`m_sequencer`**.
+For a different sqr: `` `uvm_do_on* ``.
+
+`req` is the built-in request handle on `uvm_sequence #(REQ)`.
+
+## Macro catalog (default sequencer)
+| Macro | Meaning |
+|-------|---------|
+| `` `uvm_do(SEQ_OR_ITEM) `` | Create, randomize, execute on `m_sequencer` |
+| `` `uvm_do_with(SEQ_OR_ITEM, {constraints}) `` | Same + inline constraints |
+| `` `uvm_do_pri(SEQ_OR_ITEM, PRI) `` | Same + priority |
+| `` `uvm_do_pri_with(SEQ_OR_ITEM, PRI, {constraints}) `` | Priority + constraints |
+
+## Macro catalog (explicit sequencer)
+| Macro | Meaning |
+|-------|---------|
+| `` `uvm_do_on(SEQ_OR_ITEM, SEQR) `` | Execute on `SEQR` |
+| `` `uvm_do_on_with(SEQ_OR_ITEM, SEQR, {constraints}) `` | + constraints |
+| `` `uvm_do_on_pri(SEQ_OR_ITEM, SEQR, PRI) `` | + priority |
+| `` `uvm_do_on_pri_with(SEQ_OR_ITEM, SEQR, PRI, {constraints}) `` | Full form |
+
+All thin wrappers around `` `uvm_do_on_pri_with ``:
+```systemverilog
+`uvm_do(SEQ_OR_ITEM)
+  → `uvm_do_on_pri_with(SEQ_OR_ITEM, m_sequencer, -1, {})
+
+`uvm_do_on_with(SEQ_OR_ITEM, SEQR, CONSTRAINTS)
+  → `uvm_do_on_pri_with(SEQ_OR_ITEM, SEQR, -1, CONSTRAINTS)
+```
+
+## Body example
+```systemverilog
+virtual task body();
+  `uvm_do(req)
+  `uvm_do_with(req, { data == 8'h4e; addr == 8'ha1; })
+  `uvm_do_pri(req, 9)
+  `uvm_do_pri_with(req, 3, { data == 8'hc5; })
+endtask
+```
+
+## ChipSutra emit notes
+- Smoke Generate: prefer explicit
+  `start_item(req); assert(req.randomize()); finish_item(req);`
+  or constrained randomize between start/finish — clearer for repair/lint.
+- Optional: `` `uvm_do_with `` inside sequences when user asks compact style.
+- Never `` `uvm_do `` from **test** — use `seq.start(sqr)`.
+- Nested sequence macros skip child `pre_body`/`post_body` — see `uvm_sequence_macros.txt`.
+- Already-built items: `` `uvm_send* `` / `` `uvm_create `` — `uvm_send.txt`.

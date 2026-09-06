@@ -1,0 +1,18 @@
+# CAN / CAN-FD VIP emit guide (ChipSutra)
+# Distilled emit rules. Do not copy ISO 11898 text. Never invent bit-time or sample point.
+
+## can
+- Ports from RTL only (can_rx / can_tx or canrx / cantx). Recessive idle = 1 on the wire.
+- Smoke without user bit_clocks: drive can_rx HIGH, check can_tx is not X after reset. Do not invent SOF/CRC.
+- If user knob can_bit_clocks=N: drive one dominant SOF (can_rx=0) for N clocks, then recessive. N comes from user IP — never guess.
+- Frame fields (SOF, 11/29-bit ID, RTR, DLC, data, CRC, ACK, EOF) only when user provides a BFM or bit-time.
+- Bit stuffing / error-active / bus-off / TEC/REC: mention as cover items; do not invent counters unless RTL exposes them.
+- Verilator Pure SV: $display + errors++; no $error.
+
+## canfd
+- Only when user knob can_variant=canfd or RTL names FDF/BRS/can_fd.
+- FDF/BRS and larger DLC from user IP. ISO vs non-ISO CRC — do not pick one.
+- Same idle/SOF smoke as CAN if only can_rx/can_tx exist.
+
+## can_vip_bound
+- Full CAN VIP (stuffing, CRC, bus-off recovery) requires user BFM. ChipSutra emits outline + idle/SOF smoke only.

@@ -1,0 +1,106 @@
+# UVM config_db
+# Typed hierarchical set/get for component configuration (on top of resource_db).
+# ChipSutra original wording. Curriculum: ChipVerify UVM config database.
+# Pair with: uvm_resource_db.txt, uvm_configure_components.txt, examples article next.
+
+## What it is
+`uvm_config_db#(T)` — parameterized, **static** API (`::set` / `::get`) to store named
+values visible under a hierarchical scope. Convenience layer over `uvm_resource_db`
+aimed at `uvm_component` configuration.
+
+All methods are static — always call `uvm_config_db#(T)::method(...)`.
+
+## Core methods
+
+### set
+```systemverilog
+static function void set(uvm_component cntxt, string inst_name,
+                         string field_name, T value);
+```
+| Arg | Meaning |
+|-----|---------|
+| `T` | Type of value (`int`, `virtual my_if`, config object, …) |
+| `cntxt` | From component: `this`. From module top: `null` (path from `inst_name`, often under `uvm_test_top`) |
+| `inst_name` | Target relative to cntxt; wildcards `*` OK on set |
+| `field_name` | Lookup key |
+| `value` | Stored data |
+
+Full scope ≈ `{cntxt path}.{inst_name}` (if cntxt null, scope is `inst_name`).
+
+```systemverilog
+uvm_config_db#(virtual apb_if)::set(null, "uvm_test_top.*", "apb_vif", apb_if);
+uvm_config_db#(int)::set(null, "uvm_test_top.m_env.m_apb_agent.*", "cov_enable", 1);
+// from agent build_phase — same idea:
+uvm_config_db#(int)::set(this, "*", "cov_enable", 1);
+```
+
+### get
+```systemverilog
+static function bit get(uvm_component cntxt, string inst_name,
+                        string field_name, inout T value);
+```
+- Returns `1` if found, `0` otherwise — **always check**.
+- Typical: `get(this, "", "field", local_var)`.
+- Type `T` and `field_name` must match set. Wildcards in get `inst_name` are generally **literal**, not glob.
+
+```systemverilog
+if (!uvm_config_db#(virtual apb_if)::get(this, "", "apb_vif", vif))
+  `uvm_fatal("NOVIF", {"missing vif for ", get_full_name()})
+```
+
+### exists
+```systemverilog
+static function bit exists(uvm_component cntxt, string inst_name,
+                           string field_name, bit spell_chk = 0);
+```
+Probe without consuming; optional spell-check when field should exist.
+
+### wait_modified
+```systemverilog
+static task wait_modified(uvm_component cntxt, string inst_name, string field_name);
+```
+Blocks until that field is set/changed again at the scope — rare; for runtime reconfig.
+
+## Convenience typedefs
+`uvm_config_int` | `uvm_config_string` | `uvm_config_object` | `uvm_config_wrapper`  
+(aliases of `uvm_config_db#(…)` — prefer explicit `uvm_config_db#(T)` in ChipSutra emit.)
+
+## Best practices
+1. **Config objects** — group knobs + optional vif in a `uvm_object`; set one handle (`my_agent_cfg`) to avoid name collisions.
+2. **Virtual interfaces** — set from tb_top before `run_test`; smoke OK to get vif directly in drv/mon; larger VIP: put vif inside cfg object.
+3. **Set in `build_phase`** (test/env) **before** creating children that need the values.
+4. **Check get()** — `` `uvm_fatal `` for vif/cfg; optional default only for non-critical knobs.
+5. **Do not use** deprecated `set_config_int/string/object` or raw resource_db for hierarchical knobs.
+
+## Config object sketch
+```systemverilog
+class my_agent_config extends uvm_object;
+  `uvm_object_utils(my_agent_config)
+  int num_transactions = 10;
+  bit enable_coverage = 1;
+  virtual my_bus_if vif;
+  function new(string name = "my_agent_config"); super.new(name); endfunction
+endclass
+
+// env build: set then create
+uvm_config_db#(my_agent_config)::set(this, "m_agent*", "my_agent_cfg", m_cfg);
+m_agent = my_agent::type_id::create("m_agent", this);
+
+// agent build: get then apply / re-set for driver
+if (!uvm_config_db#(my_agent_config)::get(this, "", "my_agent_cfg", m_cfg))
+  `uvm_fatal("NOCFG", "my_agent_cfg missing")
+```
+
+## Beginner mistakes
+1. Ignoring get() return → null vif / silent wrong defaults.
+2. Set after child create/build — too late.
+3. Field name or type mismatch between set and get.
+4. Wrong path / missing `*` under parent.
+5. Using OVM-style `set_config_*`.
+
+## ChipSutra emit notes
+- Smoke UVM: top `set(null, "uvm_test_top*", "vif", …)` or `"*"`; drv/mon `get(this,"","vif",vif)` + fatal.
+- Multi-knob agents: small `*_cfg` via config_db (see `uvm_configure_components.txt`).
+- Factory type swap ≠ config_db (see `uvm_factory_override.txt`).
+- Path matching / TRACE examples: `uvm_config_db_examples.txt`.
+- Prefer config_db over custom singletons for knobs (`uvm_singleton.txt`).

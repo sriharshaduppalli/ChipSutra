@@ -1,0 +1,67 @@
+# How to Execute Sequences via start()
+# Explicit seq.start(sequencer) lifecycle: pre_start / body / post_start + parent hooks.
+# ChipSutra original wording. Curriculum: ChipVerify How to execute sequences via start().
+# Pair with: uvm_sequence.txt, uvm_sequence_usage.txt, uvm_objection.txt.
+
+## API
+```systemverilog
+virtual task start(
+  uvm_sequencer_base sequencer,
+  uvm_sequence_base  parent_sequence = null,
+  int                this_priority = -1,
+  bit                call_pre_post = 1
+);
+```
+| Arg | Meaning |
+|-----|---------|
+| `sequencer` | Required for real stimulus — which sqr runs the sequence (`null` only for callback demos) |
+| `parent_sequence` | Sequence that spawned this one (`this` from parent `body`) — enables parent `pre_do`/`mid_do`/`post_do` |
+| `this_priority` | Priority (-1 → inherit parent); arbitration later |
+| `call_pre_post` | `1` (default) → run `pre_body`/`post_body`; `0` → skip them |
+
+Typical ChipSutra smoke:
+```systemverilog
+seq.randomize(); // optional
+phase.raise_objection(this);
+seq.start(m_env.m_agent.m_sequencer);
+phase.drop_objection(this);
+```
+
+## Call order inside start()
+Approximate order when `call_pre_post==1`:
+
+1. `pre_start()` (task)
+2. `pre_body()` (task) — if `call_pre_post`
+3. If `parent_sequence != null`: parent `pre_do` → parent `mid_do(this)`
+4. `body()` (task) — **your stimulus**
+5. If parent: parent `post_do(this)`
+6. `post_body()` (task) — if `call_pre_post`
+7. `post_start()` (task)
+
+`call_pre_post==0` → only `pre_start` / `body` / `post_start` (no `pre_body`/`post_body`).
+
+## Simple flow
+Root sequence started from test with default args → `pre_body` → `body` → `post_body`.
+With `start(sqr, null, -1, 0)` → `body` only (plus start/post_start).
+
+## Inheritance vs parent_sequence
+- **Class extends** (`child_seq extends base_seq`) ≠ `parent_sequence` argument.
+- Overridden `pre_body` on the child runs for that child instance.
+- `parent_sequence` is the **runtime spawner** handle passed into `start`.
+
+## Spawned (hierarchical) sequences
+From parent `body`:
+```systemverilog
+child2_seq cs = child2_seq::type_id::create("cs");
+cs.start(m_sequencer, this);  // parent = this → parent pre_do/mid_do/post_do wrap child body
+// cs.start(m_sequencer);     // parent null → no parent pre_do/mid_do/post_do
+```
+Child still runs its own `pre_body`/`body`/`post_body` (if `call_pre_post`).
+
+## ChipSutra emit notes
+- Default: `seq.start(sequencer)` from test `run_phase` with objections (`uvm_sequence_usage.txt` Pattern A).
+- Do not start with `null` sequencer for DUT stimulus.
+- Leave `call_pre_post` at default unless skipping pre/post_body intentionally.
+- Pass `this` as parent only when nesting sequences and parent hooks matter.
+- Macros (`uvm_do`, …): `uvm_sequence_macros.txt` — prefer explicit `start_item`/`finish_item` in smoke.
+- Objection ownership: usually test around `start`, not every nested child, unless intentional.

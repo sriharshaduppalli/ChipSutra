@@ -1,0 +1,59 @@
+# SystemVerilog classes & OOP (deep RAG)
+# Curriculum map: ChipVerify Classes & OOP chapters
+# https://chipverify.com/tutorials/systemverilog — prerequisite for UVM.
+# Original ChipSutra wording.
+
+## Why OOP in verification
+- Transactions, drivers, scoreboards are objects with state + methods.
+- Inheritance/reuse: base txn → protocol txn; base agent → specialized agent.
+- UVM is entirely SV OOP — without classes/virtual/extends, UVM is unusable.
+
+## Class basics
+- `class Foo; ... endclass` — construct with `Foo f = new();` (or `new(args)`).
+- Handle vs object: assignment copies handle (shallow) unless `clone`/deep copy.
+- Members: properties + `function`/`task`; prefer `function` for no-time, `task` for time (see `sv_functions_patterns.txt`).
+- `this.` qualifies current object; `super.` calls parent method.
+- `typedef class Foo;` for forward refs when classes reference each other.
+
+## Inheritance and polymorphism
+- `class Child extends Parent;` — override virtual methods for polymorphic dispatch.
+- Mark overridable methods `virtual`; child redefines with same signature.
+- Always call `super.build_phase(phase)` (UVM) / `super.new(...)` when extending constructors.
+- Abstract base: unimplemented `pure virtual` methods — cannot `new` the base.
+
+## Parameterized classes
+- `class stack #(type T = int, int DEPTH = 8);` — type/value params for reuse.
+- UVM: `uvm_driver #(txn_t)`, `uvm_sequencer #(txn_t)`.
+- Prefer params over copy-paste width/type variants.
+
+## Copying objects
+- Shallow: `c2 = c1;` — both handles → same object.
+- Deep: implement `copy`/`clone` or field-by-field; UVM field macros / `do_copy`.
+- Scoreboards must deep-copy monitored txns before queuing (avoid mutation races).
+
+## Access and lifetime
+- `local` / `protected` / public (default) — hide internals; UVM often keeps members public for simplicity.
+- `static` members/methods shared across instances (e.g. shared ID counters).
+- `const` after construction — IDs, config knobs set in `new`.
+
+## Constructors
+- `function new(string name = "txn");` — initialize non-rand defaults.
+- UVM objects: `function new(string name = ""); super.new(name);`
+- Never do time-consuming waits inside `new`; build hierarchy in phases/tasks.
+
+## Casts
+- `$cast(dst, src)` — dynamic downcast; check return / use `assert($cast(...))`.
+- Static cast `'()` for widths/types when safe; don't hide X bugs with aggressive casts.
+
+## ChipSutra usage
+- Pure SV CRV: small `class txn` with rand + constraints (see sv_constraints_patterns).
+- Layered SV: driver/monitor/scoreboard as classes with vif handles.
+- UVM: extend uvm_* bases; never invent non-UVM factory APIs.
+- Keep generated classes compact; one txn type per protocol IF.
+
+## Anti-patterns
+- Using classes but driving via global variables only (defeats reuse).
+- Forgetting `virtual` then wondering why override never runs.
+- Shallow-copy into scoreboard queue then mutating the same handle.
+- Skipping `super.new` / `super.build_phase` in UVM components.
+- Essay comments instead of working `new` + methods.

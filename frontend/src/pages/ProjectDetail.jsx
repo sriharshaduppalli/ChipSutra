@@ -4,7 +4,7 @@ import { api, API, getToken } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import Editor from "@monaco-editor/react";
-import { Upload, FileText, Cpu, Zap, Download, Loader2, X, ArrowLeft, Play, Users, Shield, GitBranch, Grid3X3, FlaskConical, Timer } from "lucide-react";
+import { Upload, FileText, Cpu, Zap, Download, Loader2, X, ArrowLeft, Play, Users, Shield, GitBranch, Grid3X3, FlaskConical, Timer, Rocket, Package } from "lucide-react";
 import ShareModal from "@/components/ShareModal";
 import SimulationPanel from "@/components/SimulationPanel";
 import CommentsPanel from "@/components/CommentsPanel";
@@ -14,10 +14,11 @@ import SynthPanel from "@/components/SynthPanel";
 import RegressionPanel from "@/components/RegressionPanel";
 import CocotbPanel from "@/components/CocotbPanel";
 import StaPanel from "@/components/StaPanel";
+import LabPipelinePanel from "@/components/LabPipelinePanel";
 import GoldenDutImport from "@/components/GoldenDutImport";
 
 const MODULES = [
-  { id: "testbench", label: "SV / UVM Testbench", desc: "Fast randomized SV TB from DUT ports (instant); LLM/UVM if you ask" },
+  { id: "testbench", label: "Testbench", desc: "Layered Pure SV (IF/gen/drv/mon/sb/env/test), or UVM / OVM / VMM" },
   { id: "assertions", label: "SVA Assertions", desc: "SystemVerilog assertions for protocol/safety/liveness" },
   { id: "checkers", label: "Checkers", desc: "Reference model + protocol checkers" },
   { id: "covergroups", label: "Covergroups", desc: "Covergroups with bins, cross coverage, illegal_bins" },
@@ -29,8 +30,16 @@ const MODULES = [
   { id: "formal_hints", label: "Formal Hints", desc: "SVA properties for SymbiYosys formal proofs" },
 ];
 
+const TB_METHODOLOGIES = [
+  { id: "sv", label: "Pure SV", hint: "LLM layered SV (IF/gen/drv/mon/sb/env/test) — no UVM" },
+  { id: "uvm", label: "UVM", hint: "UVM 1.2 via ChipSutra-VLSI LLM" },
+  { id: "ovm", label: "OVM", hint: "Legacy OVM via LLM" },
+  { id: "vmm", label: "VMM", hint: "Legacy VMM via LLM" },
+];
+
 const DEFAULT_MODELS = [
-  { provider: "ollama", model: "chipsutra-vlsi:3b", label: "ChipSutra-VLSI (local)" },
+  { provider: "ollama", model: "chipsutra-vlsi:7b", label: "ChipSutra-VLSI 7B (local)" },
+  { provider: "ollama", model: "chipsutra-vlsi:3b", label: "ChipSutra-VLSI 3B (fast)" },
 ];
 
 const langMap = { v: "verilog", sv: "systemverilog", vhd: "vhdl", vhdl: "vhdl", md: "markdown", txt: "plaintext", log: "plaintext", rpt: "plaintext" };
@@ -43,11 +52,18 @@ export default function ProjectDetail() {
   const [project, setProject] = useState(null);
   const [selectedFileIds, setSelectedFileIds] = useState([]);
   const [module, setModule] = useState("testbench");
-  const [genMode, setGenMode] = useState("skeleton"); // auto | skeleton | llm — default fast randomized TB
+  const [genMode, setGenMode] = useState("llm"); // always LLM; style hint only
+  const [tbMethodology, setTbMethodology] = useState("sv"); // sv | uvm | ovm | vmm
   const [models, setModels] = useState(DEFAULT_MODELS);
   const [modelIdx, setModelIdx] = useState(0);
   const [prompt, setPrompt] = useState("");
+  const [dvConfigText, setDvConfigText] = useState("");
+  const [enableRal, setEnableRal] = useState(false);
+  const [dvScale, setDvScale] = useState("block");
+  const [showDvConfig, setShowDvConfig] = useState(false);
   const [toolLog, setToolLog] = useState("");
+  const [simFindings, setSimFindings] = useState(null);
+  const [packBusy, setPackBusy] = useState(false);
   const [attachingLog, setAttachingLog] = useState(false);
   const [output, setOutput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -61,6 +77,7 @@ export default function ProjectDetail() {
   const [showRegression, setShowRegression] = useState(false);
   const [showCocotb, setShowCocotb] = useState(false);
   const [showSta, setShowSta] = useState(false);
+  const [showLab, setShowLab] = useState(false);
   const [regressionSeeds, setRegressionSeeds] = useState(null);
   const [regressionCoverage, setRegressionCoverage] = useState(null);
   const [pendingAutoGenerate, setPendingAutoGenerate] = useState(false);
@@ -96,13 +113,18 @@ export default function ProjectDetail() {
   const onSimLogReady = useCallback((logText, meta = {}) => {
     if (!logText?.trim()) return;
     setToolLog(logText);
-    const failed = meta.status && meta.status !== "done";
+    const failed = meta.status && meta.status !== "done" && meta.status !== "export";
     toast.success(
       failed
         ? "Sim log auto-attached for fix-loop regenerate"
-        : "Sim log auto-attached to Generate fix-loop",
+        : meta.status === "export"
+          ? "UVM export — use vendor pack, not Verilator"
+          : "Sim log auto-attached to Generate fix-loop",
     );
-  }, []);
+    api.post("/debug/classify", { tool_log: logText, prior_output: output || "" })
+      .then(({ data }) => setSimFindings(data))
+      .catch(() => setSimFindings(null));
+  }, [output]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -115,6 +137,17 @@ export default function ProjectDetail() {
       return next.length === prev.length ? prev : next;
     });
   }, [project]);
+
+  useEffect(() => {
+    if (!project?.files?.length) return;
+    const wiz = new URLSearchParams(location.search).get("wizard") === "1" || project.wizard;
+    if (!wiz) return;
+    setSelectedFileIds((prev) => {
+      if (prev.length) return prev;
+      const counter = project.files.find((f) => (f.original_filename || "").toLowerCase() === "counter.sv");
+      return counter ? [counter.id] : prev;
+    });
+  }, [project, location.search]);
 
   const pendingHandoffRef = useRef(null);
 
@@ -169,23 +202,33 @@ export default function ProjectDetail() {
       .then((h) => {
         const p = h?.llm_providers || {};
         const o = h?.ollama || {};
-        const product = p.product_model || { provider: "ollama", model: "chipsutra-vlsi:3b", label: "ChipSutra-VLSI" };
+        const product = p.product_model || { provider: "ollama", model: "chipsutra-vlsi:7b", label: "ChipSutra-VLSI" };
         const showCloud = p.show_cloud_models === true;
         const list = [];
 
-        // Always lead with ChipSutra-VLSI (local Ollama or product default).
+        // Always lead with ChipSutra-VLSI. Prefer 7B whenever health says so.
         if (p.ollama || !h?.llm_providers) {
-          const tag = p.ollama_model || product.model || "chipsutra-vlsi:3b";
-          let label = `ChipSutra-VLSI (${tag})`;
-          if (p.ollama && o.ready === false) label = `ChipSutra-VLSI (${tag}) — starting…`;
+          const tag =
+            o?.preferred_installed ||
+            (String(p.ollama_model || "").includes("7b") ? p.ollama_model : null) ||
+            (String(product.model || "").includes("7b") ? product.model : null) ||
+            p.ollama_model ||
+            product.model ||
+            "chipsutra-vlsi:7b";
+          const lead = String(tag).includes("7b") ? "chipsutra-vlsi:7b" : tag;
+          let label = `ChipSutra-VLSI (${lead})`;
+          if (p.ollama && o.ready === false) label = `ChipSutra-VLSI (${lead}) — starting…`;
           if (!p.ollama && h?.llm_providers) {
-            label = `ChipSutra-VLSI (${tag}) — not on this host`;
+            label = `ChipSutra-VLSI (${lead}) — not on this host`;
           }
-          list.push({ provider: "ollama", model: tag, label });
+          list.push({ provider: "ollama", model: lead, label });
+          if (String(lead).includes("7b")) {
+            list.push({ provider: "ollama", model: "chipsutra-vlsi:3b", label: "ChipSutra-VLSI (3b fast)" });
+          }
         } else {
           list.push({
             provider: product.provider || "ollama",
-            model: product.model || "chipsutra-vlsi:3b",
+            model: product.model || "chipsutra-vlsi:7b",
             label: `${product.label || "ChipSutra-VLSI"} (default)`,
           });
         }
@@ -287,6 +330,34 @@ export default function ProjectDetail() {
     }
 
     try {
+      let dvConfig;
+      if (moduleToUse === "testbench") {
+        const raw = (dvConfigText || "").trim();
+        if (raw) {
+          try {
+            dvConfig = JSON.parse(raw);
+          } catch {
+            toast.error("DV config JSON is invalid — fix it or clear the box");
+            setStreaming(false);
+            return;
+          }
+        } else {
+          dvConfig = {};
+        }
+        if (enableRal) dvConfig.enable_ral = true;
+        if (!enableRal && dvConfig.enable_ral == null) dvConfig.enable_ral = false;
+        if (dvScale && dvScale !== "block" && dvConfig.scale == null) dvConfig.scale = dvScale;
+        if (!Object.keys(dvConfig).length) dvConfig = undefined;
+      }
+      const meth = moduleToUse === "testbench" ? tbMethodology : "sv";
+      const modeForReq =
+        moduleToUse === "testbench"
+          ? meth === "sv"
+            ? genMode === "smoke" || genMode === "skeleton" || genMode === "fast"
+              ? "smoke"
+              : "llm"
+            : "llm"
+          : "llm";
       const res = await fetch(`${API}/generate/stream`, {
         method: "POST",
         headers: {
@@ -301,7 +372,9 @@ export default function ProjectDetail() {
           prompt: promptToUse,
           file_ids: fileIdsToUse,
           language: project?.language || "systemverilog",
-          gen_mode: moduleToUse === "testbench" ? genMode : "llm",
+          gen_mode: modeForReq,
+          tb_methodology: meth,
+          ...(dvConfig ? { dv_config: dvConfig } : {}),
           ...(toolLog.trim()
             ? { tool_log: toolLog.trim(), prior_output: output || undefined }
             : {}),
@@ -320,6 +393,7 @@ export default function ProjectDetail() {
       const decoder = new TextDecoder();
       let buffer = "";
       let engineUsed = null;
+      let methFromMeta = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -334,6 +408,12 @@ export default function ProjectDetail() {
             if (j.type === "meta") {
               setCurrentGenId(j.generation_id);
               if (j.engine) engineUsed = j.engine;
+              if (j.tb_methodology) methFromMeta = j.tb_methodology;
+              if (j.engine === "skeleton" && j.tb_methodology && j.tb_methodology !== "sv") {
+                toast.error(
+                  `Bug: asked for ${String(j.tb_methodology).toUpperCase()} but got Fast-random SV — restart API and retry.`,
+                );
+              }
             } else if (j.type === "progress") {
               if (j.message) setStreamStatus(j.message);
             } else if (j.type === "replace") {
@@ -345,6 +425,10 @@ export default function ProjectDetail() {
               if (j.engine) engineUsed = j.engine;
               if (j.learning) setLearningInfo(j.learning);
               setStreamStatus("");
+              const methNote =
+                methFromMeta && methFromMeta !== "sv"
+                  ? ` · ${String(methFromMeta).toUpperCase()}`
+                  : "";
               const verifyNote =
                 j.learning?.verify_ok === true
                   ? " · Verilator OK"
@@ -353,10 +437,26 @@ export default function ProjectDetail() {
                     : j.learning?.verify_ok === false
                       ? " · Verilator issues"
                       : "";
+              const simNote =
+                j.learning?.sim_pass === true
+                  ? " · sim PASS"
+                  : j.learning?.sim_pass === false
+                    ? " · sim FAIL"
+                    : "";
+              const mutNote =
+                j.learning?.mutation?.kill_rate != null
+                  ? ` · kill ${j.learning.mutation.kill_rate}`
+                  : "";
+              if (j.saved_file?.name) {
+                toast.success(`Saved ${j.saved_file.name} to Files`);
+                if (j.saved_file.id) {
+                  setSelectedFileIds((prev) =>
+                    prev.includes(j.saved_file.id) ? prev : [...prev, j.saved_file.id],
+                  );
+                }
+              }
               toast.success(
-                (engineUsed === "skeleton" || engineUsed === "skeleton_fallback"
-                  ? "Verified randomized TB ready"
-                  : "Generation complete") + verifyNote,
+                `LLM generation complete${methNote}${verifyNote}${simNote}${mutNote}`,
               );
               // Refresh KG learning score after each TB generation
               if (moduleToUse === "testbench") {
@@ -411,7 +511,49 @@ export default function ProjectDetail() {
     URL.revokeObjectURL(url);
   };
 
+  const downloadZip = (data, filename) => {
+    const url = URL.createObjectURL(data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadDvPack = async () => {
+    setPackBusy(true);
+    try {
+      const { data } = await api.post(
+        "/generate/pack",
+        { project_id: pid, file_ids: selectedFileIds, tb_methodology: tbMethodology },
+        { responseType: "blob" },
+      );
+      downloadZip(data, `chipsutra_dv_pack_${Date.now()}.zip`);
+      toast.success("DV pack downloaded (TB + SVA + covergroup + testplan)");
+    } catch {
+      toast.error("Could not build DV pack — select RTL first");
+    }
+    setPackBusy(false);
+  };
+
+  const downloadEvidence = async () => {
+    if (!currentGenId) return;
+    try {
+      const { data } = await api.get(`/generations/${currentGenId}/evidence`, { responseType: "blob" });
+      const url = URL.createObjectURL(data);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `chipsutra_evidence_${currentGenId.slice(0, 8)}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Could not download evidence pack");
+    }
+  };
+
   const outputExt = ["testbench", "assertions", "checkers", "covergroups", "spec2rtl", "coverage_holes"].includes(module) ? "systemverilog" : "markdown";
+
+  const wizard = new URLSearchParams(location.search).get("wizard") === "1" || project?.wizard;
 
   if (!project) return <div className="p-8 font-mono text-sm text-slate-400">Loading...</div>;
 
@@ -427,14 +569,26 @@ export default function ProjectDetail() {
           </div>
           <h1 className="font-display text-3xl font-bold">{project.name}</h1>
           <p className="font-mono text-xs text-slate-400 mt-1">{project.description || "—"}</p>
+          {wizard && (
+            <div className="mt-3 border border-emerald-500/40 bg-emerald-500/5 p-3 font-mono text-[11px] text-slate-300" data-testid="wizard-steps">
+              <div className="text-emerald-400 uppercase tracking-widest text-[10px] mb-1">60-second wizard</div>
+              <ol className="list-decimal ml-4 space-y-0.5">
+                <li>Select <span className="text-emerald-400">counter.sv</span> in Files</li>
+                <li>Keep module = Testbench (Pure SV) and hit Generate</li>
+                <li>Click Simulate — Verilator PASS is the bar (not UVM sign-off)</li>
+              </ol>
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <button onClick={() => setShowFormal(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-formal"><Shield size={12} /> Formal</button>
           <button onClick={() => setShowCdc(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-cdc"><GitBranch size={12} /> CDC</button>
+          <button onClick={() => setShowLab(true)} className="btn-neon text-xs inline-flex items-center gap-1" data-testid="btn-lab"><Rocket size={12} /> Open Lab</button>
           <button onClick={() => setShowSynth(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-synth"><Cpu size={12} /> Synth</button>
           <button onClick={() => setShowSta(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-sta"><Timer size={12} /> STA</button>
           <button onClick={() => setShowRegression(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-regression"><Grid3X3 size={12} /> Regression</button>
           <button onClick={() => setShowCocotb(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-cocotb"><FlaskConical size={12} /> cocotb</button>
+          <button onClick={downloadDvPack} disabled={packBusy} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-dv-pack"><Package size={12} /> {packBusy ? "Pack…" : "DV pack"}</button>
           <button onClick={() => setShowSim(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-simulate"><Play size={12} /> Simulate</button>
           <button onClick={() => setShowShare(true)} className="btn-outline-neon text-xs inline-flex items-center gap-1" data-testid="btn-share"><Users size={12} /> Share ({project.collaborators?.length || 0})</button>
         </div>
@@ -520,26 +674,57 @@ export default function ProjectDetail() {
               <div>
                 <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2">Prompt (optional)</div>
                 {module === "testbench" && (
-                  <div className="mb-2 grid grid-cols-3 gap-1" data-testid="tb-gen-mode">
-                    {[
-                      { id: "auto", label: "Auto" },
-                      { id: "skeleton", label: "Fast random" },
-                      { id: "llm", label: "UVM (LLM)" },
-                    ].map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setGenMode(opt.id)}
-                        className={`p-1.5 border text-[10px] font-mono uppercase tracking-wide ${
-                          genMode === opt.id
-                            ? "border-emerald-500/60 text-emerald-400 bg-emerald-500/5"
-                            : "border-[#1E293B] text-slate-400"
-                        }`}
-                        data-testid={`gen-mode-${opt.id}`}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
+                  <div className="mb-2 space-y-2">
+                    <div>
+                      <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mb-1">Methodology</div>
+                      <div className="grid grid-cols-4 gap-1" data-testid="tb-methodology">
+                        {TB_METHODOLOGIES.map((opt) => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            title={opt.hint}
+                            onClick={() => {
+                              setTbMethodology(opt.id);
+                              // Pure SV defaults to Class SV template; never leave Smoke stuck on.
+                              setGenMode(opt.id === "sv" ? "llm" : "llm");
+                            }}
+                            className={`p-1.5 border text-[10px] font-mono uppercase tracking-wide ${
+                              tbMethodology === opt.id
+                                ? "border-emerald-500/60 text-emerald-400 bg-emerald-500/5"
+                                : "border-[#1E293B] text-slate-400"
+                            }`}
+                            data-testid={`tb-meth-${opt.id}`}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {tbMethodology === "sv" && (
+                      <div>
+                        <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500 mb-1">SV style (LLM)</div>
+                        <div className="grid grid-cols-2 gap-1" data-testid="tb-gen-mode">
+                          {[
+                            { id: "llm", label: "Class-based" },
+                            { id: "smoke", label: "Procedural" },
+                          ].map((opt) => (
+                            <button
+                              key={opt.id}
+                              type="button"
+                              onClick={() => setGenMode(opt.id)}
+                              className={`p-1.5 border text-[10px] font-mono uppercase tracking-wide ${
+                                genMode === opt.id || (opt.id === "llm" && genMode === "auto")
+                                  ? "border-emerald-500/60 text-emerald-400 bg-emerald-500/5"
+                                  : "border-[#1E293B] text-slate-400"
+                              }`}
+                              data-testid={`gen-mode-${opt.id}`}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
                 <textarea
@@ -548,7 +733,9 @@ export default function ProjectDetail() {
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder={
                     module === "testbench"
-                      ? "Fast random = verified template (best smoke). UVM (LLM) = local model + lint gate (falls back to template if weak)"
+                      ? tbMethodology === "sv"
+                        ? "Always LLM. Class-based = full layered stack. Procedural = smoke-style prompt."
+                        : `Generate ${tbMethodology.toUpperCase()} env/agent/test for the selected DUT (commercial simulator).`
                       : "e.g., focus on backpressure and AXI4 protocol violations"
                   }
                   className="w-full bg-[#0B0E14] border border-[#1E293B] px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 resize-none"
@@ -556,7 +743,84 @@ export default function ProjectDetail() {
                 />
                 {module === "testbench" && (
                   <div className="font-mono text-[10px] text-slate-500 mt-1">
-                    Pure SV TBs use the verified template (3B LLM is gated). UVM/agents still use the LLM + lint fallback.
+                    {tbMethodology === "sv"
+                      ? "All testbenches are generated by ChipSutra-VLSI (LLM). Templates are style hints only."
+                      : `${tbMethodology.toUpperCase()} uses ChipSutra-VLSI (class-based). Not Verilator-gated — use a UVM/OVM/VMM-capable simulator.`}
+                  </div>
+                )}
+                {module === "testbench" && (
+                  <div className="mt-3 border border-[#1E293B] p-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowDvConfig((v) => !v)}
+                        className="font-mono text-[10px] uppercase tracking-widest text-slate-400 hover:text-emerald-400"
+                        data-testid="dv-config-toggle"
+                      >
+                        DV config (JSON) {showDvConfig ? "▾" : "▸"}
+                      </button>
+                      <div className="flex items-center gap-3">
+                        <label className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-slate-400">
+                          <span>Scale</span>
+                          <select
+                            value={dvScale}
+                            onChange={(e) => setDvScale(e.target.value)}
+                            className="bg-[#0B0E14] border border-[#1E293B] px-1 py-0.5 text-[10px] font-mono text-slate-300"
+                            data-testid="dv-scale"
+                          >
+                            <option value="block">block</option>
+                            <option value="ip">ip</option>
+                            <option value="processor">processor</option>
+                            <option value="subsystem">subsystem</option>
+                            <option value="soc">soc</option>
+                            <option value="chiplet">chiplet</option>
+                          </select>
+                        </label>
+                        <label className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-slate-400">
+                          <input
+                            type="checkbox"
+                            checked={enableRal}
+                            onChange={(e) => setEnableRal(e.target.checked)}
+                            data-testid="enable-ral"
+                          />
+                          RAL (needs csr_list)
+                        </label>
+                      </div>
+                    </div>
+                    {showDvConfig && (
+                      <>
+                        <div className="flex justify-end mb-1">
+                          <button
+                            type="button"
+                            className="font-mono text-[10px] uppercase tracking-widest text-emerald-400"
+                            data-testid="dv-config-example"
+                            onClick={async () => {
+                              try {
+                                const r = await api.get("/dv-config/example");
+                                setDvConfigText(JSON.stringify(r.data, null, 2));
+                                setEnableRal(true);
+                                if (r.data?.scale) setDvScale(r.data.scale);
+                              } catch {
+                                toast.error("Could not load DV config example");
+                              }
+                            }}
+                          >
+                            Load example
+                          </button>
+                        </div>
+                        <textarea
+                          rows={8}
+                          value={dvConfigText}
+                          onChange={(e) => setDvConfigText(e.target.value)}
+                          placeholder='{"scale":"ip","enable_ral":true,"csr_list":[{"name":"CTRL","addr":"0x0","access":"rw"}]}'
+                          className="w-full bg-[#0B0E14] border border-[#1E293B] px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 resize-y"
+                          data-testid="dv-config-input"
+                        />
+                        <div className="font-mono text-[10px] text-slate-500 mt-1">
+                          Merged with selected RTL (port names win). Same shape as CHIPSUTRA_DV_CONFIG. RAL only uses your csr_list — no invented registers.
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -580,6 +844,37 @@ export default function ProjectDetail() {
                   className="w-full bg-[#0B0E14] border border-[#1E293B] px-3 py-2 text-xs font-mono focus:outline-none focus:border-emerald-500 resize-none"
                   data-testid="tool-log-input"
                 />
+                {simFindings && !simFindings.empty && (simFindings.findings || []).length > 0 && (
+                  <div className="mt-2 border border-[#1E293B] bg-[#0B0E14] p-2 space-y-1" data-testid="fail-cause-panel">
+                    <div className="font-mono text-[10px] uppercase tracking-widest text-amber-400">
+                      Fail causes · {simFindings.summary}
+                    </div>
+                    {(simFindings.findings || []).slice(0, 5).map((f, i) => (
+                      <div key={i} className="font-mono text-[11px] text-slate-300">
+                        <span className={f.severity === "error" ? "text-red-400" : "text-amber-400"}>[{f.severity}]</span>{" "}
+                        {f.title}: {f.hint}
+                      </div>
+                    ))}
+                    <div className="flex gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => { setModule("testbench"); generate({ moduleOverride: "testbench" }); }}
+                        className="font-mono text-[10px] text-emerald-400 hover:underline"
+                        data-testid="apply-fail-patch"
+                      >
+                        Generate patch
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowSim(true)}
+                        className="font-mono text-[10px] text-emerald-400 hover:underline"
+                        data-testid="rerun-sim"
+                      >
+                        Re-run Simulate
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="font-mono text-[10px] text-slate-500 mt-1">Simulate auto-fills this field when a run finishes.</div>
               </div>
               <button onClick={generate} disabled={streaming} className="btn-neon w-full inline-flex items-center justify-center gap-2" data-testid="generate-btn">
@@ -630,6 +925,16 @@ export default function ProjectDetail() {
                     <Download size={12} /> download
                   </button>
                 )}
+                {currentGenId && module === "testbench" && (learningInfo?.evidence || learningInfo?.sim_pass != null) && (
+                  <button
+                    type="button"
+                    onClick={downloadEvidence}
+                    className="text-xs font-mono text-emerald-400 hover:underline inline-flex items-center gap-1"
+                    data-testid="download-evidence"
+                  >
+                    <Download size={12} /> evidence zip
+                  </button>
+                )}
               </div>
             </div>
             {(learningInfo || kgScore) && module === "testbench" && (
@@ -643,6 +948,14 @@ export default function ProjectDetail() {
                       : learningInfo.verify_ok === false
                         ? " · verilator✗"
                         : ""}
+                    {learningInfo.sim_pass === true
+                      ? " · sim✓"
+                      : learningInfo.sim_pass === false
+                        ? " · sim✗"
+                        : ""}
+                    {learningInfo.mutation?.kill_rate != null
+                      ? ` · kill ${learningInfo.mutation.kill_rate}`
+                      : ""}
                   </span>
                 )}
                 {kgScore?.kg_learning_score != null && (
@@ -694,12 +1007,26 @@ export default function ProjectDetail() {
         <SimulationPanel
           project={project}
           selectedFileIds={selectedFileIds}
+          tbMethodology={tbMethodology}
+          generatedOutput={output}
           onClose={() => setShowSim(false)}
           onVcdCreated={load}
           onLogReady={onSimLogReady}
         />
       )}
-      {showFormal && <FormalPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowFormal(false)} />}
+      {showFormal && (
+        <FormalPanel
+          project={project}
+          selectedFileIds={selectedFileIds}
+          onClose={() => setShowFormal(false)}
+          onSendDebug={(log) => {
+            setToolLog(log || "");
+            setModule("debug");
+            setShowFormal(false);
+            toast.success("CEX/log attached — Generate Debug next");
+          }}
+        />
+      )}
       {showCdc && <CdcPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowCdc(false)} />}
       {showSynth && <SynthPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowSynth(false)} onArtifacts={load} />}
       {showRegression && (
@@ -713,6 +1040,14 @@ export default function ProjectDetail() {
       )}
       {showCocotb && <CocotbPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowCocotb(false)} onUpdate={load} />}
       {showSta && <StaPanel project={project} selectedFileIds={selectedFileIds} onClose={() => setShowSta(false)} />}
+      {showLab && (
+        <LabPipelinePanel
+          project={project}
+          selectedFileIds={selectedFileIds}
+          onClose={() => setShowLab(false)}
+          onArtifacts={load}
+        />
+      )}
 
       {/* File preview modal */}
       {previewFile && (

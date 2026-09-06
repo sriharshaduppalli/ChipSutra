@@ -48,6 +48,7 @@ def test_format_lint_feedback_includes_prior():
     block = format_lint_feedback("%Error: x.sv:1: bad", prior_code="module x; endmodule")
     assert "Tool / simulation feedback" in block
     assert "module x" in block
+    assert "Debug classifier" in block or "Key findings" in block
 
 
 def test_rag_has_expanded_knowledge():

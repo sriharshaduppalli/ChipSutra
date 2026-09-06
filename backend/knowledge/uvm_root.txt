@@ -1,0 +1,65 @@
+# UVM Root [uvm_root]
+# Singleton top container; global handle uvm_top. Never user-new a second root.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Root.
+# Context: uvm_base_classes.txt, uvm_tb_top.txt (run_test), uvm_component.txt.
+
+## What it is
+- Singleton `uvm_root` extends `uvm_component`; one instance for the whole sim.
+- Access: global `uvm_top` **or** `uvm_root::get()` (same object via coreservice).
+- Created automatically when `run_test()` runs — never `new` your own root.
+- Root's own name is `""` so paths look like `uvm_test_top.env...` not `uvm_top.uvm_test_top...`.
+
+## How run_test attaches the test
+1. Global `run_test(name)` -> `uvm_root::run_test`.
+2. Factory creates test instance named literally **`uvm_test_top`**, parent null -> under `uvm_top`.
+3. That is why every log path starts with `uvm_test_top`.
+
+## Implicit parenting (orphans)
+- `create("child", this)` — correct; parent = this.
+- `create("child")` or parent=`null` — **silently** attaches under `uvm_top` (not under intended parent).
+- No compile error — breaks config_db scopes and `get_full_name()`; easy to miss.
+
+```systemverilog
+// Right
+m_env = my_env::type_id::create("m_env", this);
+// Wrong (orphans under uvm_top)
+m_env = my_env::type_id::create("m_env");
+```
+
+## Search: find / find_all
+```systemverilog
+comp   = uvm_top.find("m_env.m_agent.m_driver");
+comp   = uvm_top.find("*apb_driver*");       // * any, ? one char
+comp_q = uvm_top.find_all("*m_driver*");
+// optional 2nd arg: start search in a subtree
+```
+- Absolute-style patterns can start with `.`
+- Use in `end_of_elaboration_phase`+ (hierarchy complete).
+- ChipSutra smoke: prefer stored handles over find; find for debug/utilities.
+
+## Global report / config
+```systemverilog
+uvm_top.set_report_verbosity_level_hier(UVM_HIGH);
+
+uvm_config_db#(my_cfg)::set(uvm_root::get(), "*", "my_cfg", m_cfg);
+```
+- Verbosity on `uvm_top` affects whole hierarchy.
+- `uvm_root::get()` / `uvm_top` as config_db context + `"*"` = broadly visible values.
+- Reporting macros reachable outside components via this global infrastructure.
+
+## End-of-elaboration error gate
+- After `end_of_elaboration`, if errors already reported -> `` `uvm_fatal `` and stop **before** run.
+- Failures "before first clock" often from this check — inspect earlier `` `uvm_error `` / config fails.
+
+## Beginner mistakes
+1. Omitting `this` in `create` (silent wrong parent).
+2. Trying to construct a second `uvm_root`.
+3. Relying on find in production smoke instead of real handles.
+4. Setting config after components already failed get in build.
+
+## ChipSutra emit notes
+- Always `type_id::create(name, this)` for children under tests/envs/agents.
+- Top: `run_test` / `+UVM_TESTNAME` as in `uvm_tb_top.txt`.
+- Optional: `uvm_top.print_topology()` in test end_of_elaboration.
+- Do not invent alternate "global root" patterns.
+- Custom shared instances (use sparingly): `uvm_singleton.txt`.

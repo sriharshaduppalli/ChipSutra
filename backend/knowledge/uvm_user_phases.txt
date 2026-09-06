@@ -1,0 +1,100 @@
+# Creating User-Defined UVM Phases
+# Custom phase class + insert into domain schedule. Advanced / rare.
+# ChipSutra original wording. Curriculum: ChipVerify Creating user-defined phases.
+# Pair with: uvm_phases.txt, uvm_objection.txt. Prefer standard phases for smoke.
+
+## When (and when not)
+Custom phases can sync project-specific steps, but they hurt VIP reuse and invite
+null-handle / out-of-sync bugs if not every component knows the schedule.
+ChipSutra smoke / Generate: **do not invent custom phases** — use build/connect/run
+(+ standard run-time sub-phases) from `uvm_phases.txt`.
+
+Use only when the user explicitly asks for a custom phase in an existing domain schedule.
+
+## Steps
+1. Define a phase class (task / topdown / bottomup).
+2. Insert it into a domain after an existing phase.
+3. Implement the callback method on components that participate (`exec_*` dispatches).
+
+## 1) Custom phase class
+Pick base by traversal / time:
+| Base | Meaning |
+|------|---------|
+| `uvm_task_phase` | May consume time (`exec_task`) |
+| `uvm_topdown_phase` | Zero-time, top-down (`exec_func`) |
+| `uvm_bottomup_phase` | Zero-time, bottom-up (`exec_func`) |
+
+```systemverilog
+class uvm_user_phase extends uvm_task_phase;
+  protected function new(string name = "user");
+    super.new(name);
+  endfunction
+
+  static const string type_name = "uvm_user_phase";
+  virtual function string get_type_name();
+    return type_name;
+  endfunction
+
+  // Dispatch into component method that knows this phase
+  virtual task exec_task(uvm_component comp, uvm_phase phase);
+    my_test TEST;
+    if ($cast(TEST, comp))
+      TEST.user_phase(phase);
+  endtask
+
+  local static uvm_user_phase m_inst;
+  static function uvm_user_phase get();
+    if (m_inst == null) m_inst = new();
+    return m_inst;
+  endfunction
+endclass
+```
+- Singleton via `get()` — schedule holds one phase node type.
+- Name in `new` is the phase name (often without `uvm_` / `_phase` suffix).
+- `$cast` only components that implement the callback; others no-op.
+
+## 2) Insert into schedule (domain)
+```systemverilog
+// Common phases: build, connect, eoe, sos, run, extract, check, report, final
+uvm_domain dm = uvm_domain::get_common_domain();
+
+// Run-time sub-phases: reset, configure, main, shutdown, ...
+uvm_domain dm = uvm_domain::get_uvm_domain();
+
+uvm_phase after_ph = dm.find(uvm_connect_phase::get());
+dm.add(uvm_user_phase::get(), null, after_ph, null);
+```
+`add(phase, parent, after, before)` — insert after `connect` → runs before later common phases (e.g. before `run` in the example schedule).
+
+Typical place to register: early in test `new()` / before hierarchy runs phases.
+
+```systemverilog
+function new(string name = "my_test", uvm_component parent = null);
+  super.new(name, parent);
+  begin
+    uvm_domain dm = uvm_domain::get_common_domain();
+    uvm_phase ph = dm.find(uvm_connect_phase::get());
+    dm.add(uvm_user_phase::get(), null, ph, null);
+  end
+endfunction
+
+virtual task user_phase(uvm_phase phase);
+  `uvm_info("TEST", $sformatf("In %s", phase.get_name()), UVM_MEDIUM)
+endtask
+```
+
+## 3) Component support
+Only components `$cast` inside `exec_task`/`exec_func` run custom work.
+Other components skip silently — document which classes must implement the hook.
+
+## Beginner mistakes
+1. Custom phase for ordinary stimulus — use `run_phase` / `main_phase` instead.
+2. Forgetting singleton `get()` / inserting multiple incompatible schedules.
+3. Dispatch method name mismatch (`exec_task` calls `X` but component defines `Y`).
+4. Inserting after wrong domain (`get_common_domain` vs `get_uvm_domain`).
+5. Expecting all VIP to honor a private phase — they won't.
+
+## ChipSutra emit notes
+- Default: never emit `uvm_domain::add` / custom `uvm_*_phase` subclasses.
+- If user requests custom phase: singleton phase class + domain insert + typed `exec_*` dispatch + component callback; keep objections in timed phases (`uvm_objection.txt`).
+- Prefer configuring existing run-time sub-phases over inventing new names when possible.

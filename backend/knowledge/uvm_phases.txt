@@ -1,0 +1,122 @@
+# UVM Phases
+# Ordered component lifecycle: build -> connect -> run -> cleanup.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Phases.
+# Pair with: uvm_component.txt, uvm_objection.txt (next), first-TB chapter files.
+
+## Why phases exist
+`uvm_component` objects are dynamic (created with `type_id::create`), unlike Verilog modules that exist at elaboration.
+Phases globally sync the hierarchy so no component connects/runs against a still-null peer.
+VIP from different vendors plugs together via the same phase contract.
+
+## Rules of thumb
+- Phase methods are callbacks: **function** = zero sim time; **task** = may consume time.
+- Top-level timed phase: `run_phase` (task). Build/connect/cleanup are functions.
+- A phase advances only when **all** components finish that phase.
+- Always call `super.<phase>(phase)` first (especially `build_phase` — applies config).
+- Create children only in `build_phase`. TLM `connect` only in `connect_phase`.
+- Objections only in `run_phase` / run-time sub-phases (not build/connect).
+
+## Traversal direction
+| Direction | Phases |
+|-----------|--------|
+| Top-down | `build_phase`, `final_phase` |
+| Bottom-up | `connect_phase`, most others including cleanup |
+
+Build must be top-down: parent creates children before children build.
+
+Example order for `test → env → agent → drv/mon`:
+- build: test, env, agent, drv, mon (top-down)
+- connect: drv, mon, agent, env, test (bottom-up)
+
+## Three categories
+
+### Build (zero time)
+| Phase | Purpose |
+|-------|---------|
+| `build_phase` | Factory-create children; get/set config_db; build RAL |
+| `connect_phase` | TLM port↔export, analysis connects, adapter/predictor |
+| `end_of_elaboration_phase` | Final tweaks; `print_topology`; open logs |
+| `start_of_simulation_phase` | Last zero-time setup before time advances |
+
+```systemverilog
+function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  agent = my_agent::type_id::create("agent", this);
+  sb    = my_scoreboard::type_id::create("sb", this);
+endfunction
+
+function void connect_phase(uvm_phase phase);
+  super.connect_phase(phase);
+  drv.seq_item_port.connect(seqr.seq_item_export);
+endfunction
+```
+
+### Run (consumes time)
+| Phase | Purpose |
+|-------|---------|
+| `run_phase` | Stimulus + monitor; raise/drop objections for end-of-test |
+
+Runs **in parallel** with optional run-time sub-phases (ordered among themselves):
+
+`pre_reset` → `reset` → `post_reset` → `pre_configure` → `configure` → `post_configure` →
+`pre_main` → `main` → `post_main` → `pre_shutdown` → `shutdown` → `post_shutdown`
+
+| Sub-phase | Typical use |
+|-----------|-------------|
+| reset* | Assert/release reset, wait power-good |
+| configure* | Program registers / DUT mode |
+| main* | Primary traffic |
+| shutdown* | Drain / idle before cleanup |
+
+ChipSutra smoke: prefer single `run_phase` + objections. Use sub-phases when VIP/SoC reset-config order demands it.
+
+### Cleanup (zero time, after run ends)
+| Phase | Purpose |
+|-------|---------|
+| `extract_phase` | Collect final SB/DUT data, stats |
+| `check_phase` | Pass/fail decisions from collected data |
+| `report_phase` | Print summary / write reports |
+| `final_phase` | Close files, kill co-sim (top-down) |
+
+## What goes where (emit cheat sheet)
+| Work | Phase |
+|------|-------|
+| `type_id::create` children | `build_phase` |
+| `uvm_config_db::get` vif | `build_phase` (after set in tb_top before `run_test`) |
+| TLM `.connect` | `connect_phase` |
+| `print_topology` | `end_of_elaboration_phase` (or start_of_simulation) |
+| Drive / monitor / sequences | `run_phase` (or sub-phases) |
+| Objections | `run_phase` / sub-phases only |
+| Final SB check / UVM report | `check_phase` / `report_phase` |
+
+## Driver sketch
+```systemverilog
+function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  if (!uvm_config_db#(virtual my_if)::get(this, "", "vif", vif))
+    `uvm_fatal("NO_VIF", "vif missing")
+endfunction
+
+task run_phase(uvm_phase phase);
+  forever begin
+    seq_item_port.get_next_item(req);
+    // drive vif ...
+    seq_item_port.item_done();
+  end
+endtask
+```
+
+## Beginner mistakes
+1. TLM connect in `build_phase` — peer may not exist yet.
+2. Create children in `connect_phase` / `run_phase`.
+3. Skip `super.build_phase(phase)`.
+4. Raise objections in build/connect.
+5. Expect Verilog-style “everything exists at time 0” for class components.
+
+## ChipSutra emit notes
+- methodology=uvm: every component overrides only the phases it needs; always `super.*`.
+- Agent: build drv/mon/sqr; connect drv↔sqr and mon analysis in `connect_phase`.
+- Test: build env in `build_phase`; start sequences / objections in `run_phase`.
+- Do not invent custom phase names unless following `uvm_user_phases.txt` (explicit user ask).
+- Objections deep-dive: `uvm_objection.txt`.
+- TLM port styles overview: `uvm_tlm.txt`.

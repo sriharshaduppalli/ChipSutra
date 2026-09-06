@@ -1,0 +1,56 @@
+# OVM/VMM interoperability + Accellera VIP practices — ChipSutra emit
+# Concepts from Accellera VIP Recommended Practices 1.0 (2009) and the
+# OVM-VMM Interop Kit 1.0 (AVT adapters). Original ChipSutra wording.
+# Do not paste kit examples, HFPB/APB demo SV, or PDF sample code into Generate.
+
+## When this file applies
+- User methodology is `ovm` or `vmm`, or the prompt asks to mix OVM with VMM / reuse foreign VIP.
+- Default ChipSutra: **do not mix**. Prefer a single methodology; migrate legacy IP to UVM when the user allows.
+- Never emit `uvm_*` and `ovm_*` in the same TB. VMM channels/xactors stay in `vmm` TBs only.
+
+## VIP-1.0 model (interconnected, not wrapped)
+- Accellera VIP-TSC chose the **interconnected** model: keep each VIP’s native API; sit adapters on TLM/channel/notify boundaries. Do not rewrite the VIP.
+- The **encapsulated** model (hide foreign VIP behind a wrapper in the user’s methodology) is out of ChipSutra smoke — do not invent wrappers.
+- Interop ≠ migration. Migration rewrites IP to UVM. Interop keeps both libraries and adapts traffic.
+- Integrator must understand **both** libraries. ChipSutra will not fake a universal wrapper class.
+
+## Who is on top
+- **OVM-on-top:** OVM phasing (`run_test`, components) starts the run; VMM env/xactors are stepped/synced from OVM (kit: `avt_ovm_vmm_env`).
+- **VMM-on-top:** VMM env starts; OVM subtree is synced (kit: `avt_vmm_ovm_env`).
+- Mixed / sandwiched hierarchy is advanced. ChipSutra smoke: one top methodology + adapters only if the user named both libraries.
+- Phase sync is the hard part — do not start OVM and VMM independently with no adapter env.
+
+## Traffic adapters (names only — do not copy kit bodies)
+Map at the boundary; convert txn types with a static `convert()` (OVM↔VMM, optional in-place `to=`).
+
+| Direction | Kit adapter (catalog) |
+|-----------|------------------------|
+| VMM `vmm_channel` → OVM TLM consumer | `avt_channel2tlm` |
+| OVM TLM producer → VMM channel | `avt_tlm2channel` |
+| OVM analysis ↔ VMM channel | `avt_analysis_channel` |
+| VMM `vmm_notify` → OVM analysis | `avt_notify2analysis` |
+| OVM analysis → VMM notify | `avt_analysis2notify` |
+| Bidirectional | extra REQ_/RSP_ type params + converters |
+
+- Also in kit: sequencer↔channel, OVM port↔VMM channel, callback adapter, log/report bridges (`avt_ovm_vmm_log_fmt`, `avt_vmm_ovm_report_server`).
+- Include via kit master files (`ovm_vmm_pkg.sv` or `ovm_vmm.svh`) when the user has the kit. ChipSutra does **not** vendor `ovm_vmm_interop` sources.
+- Optional env: `CHIPSUTRA_OVM_VMM_INTEROP` / `INTEROP_HOME` pointing at an extracted kit — catalog/include only, never paste `.sv` into Generate.
+
+## VIP-1.0 integrator checklist (emit)
+- Group foreign VIP + adapters in a **container** env; do not scatter adapters in the test.
+- Instantiate and connect on TLM/channel/notify ports that already exist — do not change the VIP interface.
+- Configure each side with that methodology’s cfg (OVM config / VMM opts) — no invented absolute paths.
+- Sequences stay native: OVM sequences on OVM sequencers; VMM scenarios on VMM generators. Multi-stream virtual control only if the user asked.
+- Tests pick the top methodology’s test/entry. Debug: keep both report servers bridged; do not drop UVM_ERROR/VMM errors.
+
+## ChipSutra methodology ids
+- `ovm`: compact `ovm_*` agent/env/test, `run_test()`, comment `methodology=ovm (legacy)`.
+- `vmm`: `vmm_data` + `vmm_channel` + xactors, comment `methodology=vmm (legacy)`.
+- User says “UVM”: emit UVM only (`uvm_users_guide_emit.txt`). Do not pull AVT adapters into UVM smoke.
+- Exact DUT ports. Independent golden. No RAL unless user CSR map (UVM path).
+
+## Forbidden
+- Mixing `uvm_*` macros with `ovm_*` in one file.
+- Copying interop example DUT (HFPB) or APB converters from the kit.
+- Claiming Verilator/Icarus runs OVM+VMM interop. Kit targets Questa / IUS / VCS-era libraries (OVM ≥2.0.2, VMM 1.1.1).
+- Encapsulating a VIP so the user cannot see which library it is — ChipSutra stays interconnected and explicit.

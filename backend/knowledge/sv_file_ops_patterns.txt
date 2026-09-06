@@ -1,0 +1,112 @@
+# SystemVerilog file operations (ChipVerify)
+# Read/write disk files from the TB for vectors, logs, and stimulus tables.
+# Curriculum: ChipVerify — SystemVerilog file operations
+
+## Open and close ($fopen / $fclose)
+- `$fopen(filename, mode)` returns a 32-bit integer **file descriptor** (fd). Use that handle for all I/O until closed.
+- `$fclose(fd)` closes the descriptor; further reads/writes on it are illegal.
+- Check success: `if (fd)` opened OK; `fd == 0` means open failed (e.g. read missing file).
+- Always `$fclose` before `$finish` so buffered contents are flushed.
+
+```systemverilog
+int fd;
+fd = $fopen("./note.txt", "r");
+if (fd) $display("opened %0d", fd);
+else    $display("open failed %0d", fd);
+fd = $fopen("./note.txt", "w");  // create/overwrite
+$fclose(fd);
+```
+
+## File access modes
+| Mode | Meaning |
+|------|---------|
+| `"r"` | Open for reading |
+| `"w"` | Create for writing; overwrite if exists (common default mentally) |
+| `"a"` | Append (create if missing); write at EOF |
+| `"r+"` | Update (read + write) |
+| `"w+"` | Truncate/create for update |
+| `"a+"` | Append/update at EOF |
+
+- Same path can be opened with different fds/modes (simulator may warn if already open).
+- Prefer one writer fd at a time for a given log file.
+
+## Write to a file ($fdisplay / $fwrite)
+- Open with `"w"` or `"a"`.
+- First argument is the **fd**; then format like `$display` / `$write`.
+
+```systemverilog
+fd = $fopen("trial", "w");
+for (int i = 0; i < 5; i++)
+  $fdisplay(fd, "Iteration = %0d", i);
+$fclose(fd);
+```
+
+## Read a line ($fgets)
+- Open with `"r"` or `"r+"`.
+- `$fgets(line, fd)` reads one line into a `string` (call again for the next line).
+
+```systemverilog
+string line;
+fd = $fopen("trial", "r");
+$fgets(line, fd);
+$display("Line read : %s", line);
+$fclose(fd);
+```
+
+## Read until EOF ($feof)
+- `$feof(fd)` is true when end-of-file is reached.
+- Loop pattern:
+
+```systemverilog
+fd = $fopen("trial", "r");
+while (!$feof(fd)) begin
+  $fgets(line, fd);
+  $display("Line: %s", line);
+end
+$fclose(fd);
+```
+
+- Note: some sims may yield one empty line after the last content line — tolerate empty `line`.
+
+## Parse values ($fscanf)
+- `$fscanf(fd, format, args...)` returns the number of successful conversions.
+- Loop while the return count matches expected fields:
+
+```systemverilog
+int idx;
+string str;
+fd = $fopen("trial", "r");
+while ($fscanf(fd, "%s = %0d", str, idx) == 2)
+  $display("Line: %s = %0d", str, idx);
+$fclose(fd);
+```
+
+## Multichannel descriptors (MCD)
+- An **mcd** is a 32-bit value with a single bit set for an open channel; LSB refers to **stdout**.
+- Bitwise-OR mcds and write to the combined value to send the same output to multiple channels/files.
+- Modern TBs more often use separate integer fds from `$fopen` with an explicit mode string; know MCD for older Verilog / interview questions.
+
+## ChipSutra usage
+- Default generated smoke TB: `$dumpfile` / `$dumpvars` for waves — not required to use `$fopen`.
+- Emit file I/O when the user asks for: stimulus from file, golden compare from file, or a text log besides `$display`.
+- Safe pattern for optional log:
+
+```systemverilog
+int fd;
+initial begin
+  fd = $fopen("tb_log.txt", "w");
+  if (fd) $fdisplay(fd, "PASS/FAIL details...");
+  if (fd) $fclose(fd);
+end
+```
+
+- Prefer relative paths under the sim work dir; do not invent absolute host paths.
+- Verilator: file tasks are generally supported for basic fopen/fdisplay/fgets — keep usage simple.
+- Never leave fds open across `$finish` without `$fclose`.
+
+## Anti-patterns
+- Writing without checking `fd != 0`.
+- Forgetting `$fclose` (truncated / missing log).
+- Using `$fgets` without `"r"` mode.
+- Parsing with `$fscanf` but ignoring the match count.
+- Hard-coding machine-specific absolute paths in generated TB.

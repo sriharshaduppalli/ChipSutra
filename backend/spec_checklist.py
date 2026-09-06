@@ -1,12 +1,13 @@
 """Spec→RTL checklist guardrails — catch incomplete specs before trusting generation.
 
-Phase-1 of docs/ADVANCED_DV_ARCHITECTURE.md. Does not block generation; returns
-structured gaps the UI/learning can surface (🧪 incomplete until clocks/reset/I/O clear).
+Phase-1 of docs/ADVANCED_DV_ARCHITECTURE.md. Incomplete specs can be hard-gated
+(`CHIPSUTRA_SPEC_GATE`, default on) to exploratory stub RTL with documented assumptions.
 """
 from __future__ import annotations
 
+import os
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 _CLK_RE = re.compile(
     r"\b(clock|clk|aclk|pclk|sclk|sys_clk|clock\s*domain|posedge)\b",
@@ -125,7 +126,48 @@ def checklist_prompt_block(analysis: Dict[str, Any]) -> str:
             lines.append(f"  - {g}")
     if not analysis.get("ready"):
         lines.append(
-            "INSTRUCTION: If the spec lacks clock/reset/I/O, invent a minimal reasonable interface, "
-            "document assumptions in // comments, and mark the module as exploratory."
+            "INSTRUCTION: Spec incomplete. If the Spec gate is on, ChipSutra emits "
+            "exploratory stub RTL with // ASSUMPTION comments instead of free-form LLM RTL. "
+            "Set CHIPSUTRA_SPEC_GATE=0 to force LLM anyway."
         )
     return "\n".join(lines)
+
+
+def spec_gate_enabled() -> bool:
+    raw = (os.environ.get("CHIPSUTRA_SPEC_GATE") or "true").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return True
+
+
+def spec_gate_blocks(analysis: Optional[Dict[str, Any]]) -> bool:
+    if not spec_gate_enabled():
+        return False
+    if not analysis:
+        return True
+    return not bool(analysis.get("ready"))
+
+
+def exploratory_stub_rtl(analysis: Optional[Dict[str, Any]] = None, *, prompt: str = "") -> str:
+    """Documented stub when clock/reset/I/O are missing. Not production RTL."""
+    a = analysis or {}
+    gaps = a.get("gaps") or ["No specification text provided."]
+    notes = "\n".join(f"// ASSUMPTION: {g}" for g in gaps[:8])
+    hint = (prompt or "").strip().replace("\n", " ")[:120]
+    return f"""// ChipSutra Spec→RTL GATE — spec incomplete (grade={a.get('grade') or 'empty'})
+// Exploratory stub only. Fill clock / reset / I/O in the spec and regenerate.
+// This is not a tapeout-ready design.
+{notes}
+// prompt_hint: {hint or '(none)'}
+module exploratory_stub (
+  input  logic       clk,    // assumed
+  input  logic       rst_n,  // assumed active-low
+  input  logic [7:0] d,      // assumed
+  output logic [7:0] q       // assumed
+);
+  always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) q <= '0;
+    else        q <= d;
+  end
+endmodule
+"""

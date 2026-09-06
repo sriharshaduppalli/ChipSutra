@@ -1,0 +1,74 @@
+# UVM TLM (Transaction Level Modeling)
+# Abstract component-to-component data flow via transaction ports — not wire-by-wire.
+# ChipSutra original wording. Curriculum: ChipVerify UVM TLM (chapter intro).
+# Deep ports next: blocking put/get, fifo, analysis, sockets, nonblocking, port→export→imp.
+
+## What TLM is
+Model communication at **transaction** level: class objects carrying protocol fields
+(addr/data/cmd/…) move between components through typed TLM ports/exports/imps.
+Benefits vs pin-level coupling:
+- Higher abstraction (read/write ops, not dozens of signals)
+- Components stay isolated — swap VIP if the TLM API matches
+- Standard connect in `connect_phase`
+
+## Transaction object
+Any `uvm_object` / `uvm_sequence_item` with protocol fields + factory utils:
+
+```systemverilog
+class simple_packet extends uvm_object;
+  `uvm_object_utils(simple_packet)
+  rand bit [7:0] addr;
+  rand bit [7:0] data;
+  bit rwb;
+  constraint c_addr { addr > 8'h2a; };
+  constraint c_data { data inside {[8'h14:8'he9]}; }
+  function new(string name = "simple_packet"); super.new(name); endfunction
+endclass
+```
+ChipSutra smoke: prefer `uvm_sequence_item` when the object also rides sequencer↔driver.
+
+## Mental topology
+```
+componentA  --[ port ]-->  [ export / fifo / imp ]  --  componentB
+```
+- **Port**: initiator side (calls put/get/…).
+- **Export / Imp**: implementation / target side.
+- **Analysis port**: broadcast one-to-many (monitor → scoreboard/coverage) — unbound fanout.
+- **seq_item_port / seq_item_export**: specialized TLM pull path driver↔sequencer (first-TB).
+
+Connect only in `connect_phase` after both ends exist (`uvm_phases.txt`).
+
+## ChipSutra smoke map (what to emit)
+| Link | Usual TLM |
+|------|-----------|
+| Driver ↔ Sequencer | `seq_item_port.connect(seq_item_export)` |
+| Monitor → Scoreboard / Coverage | `analysis_port` → `analysis_export` / `analysis_imp` / subscriber |
+| Optional componentA→B teaching | blocking put/get or `uvm_tlm_fifo` (chapter pages) |
+
+Do not invent exotic TLM sockets for simple APB/AXI smoke unless user asks.
+
+## Chapter file map (ChipVerify TLM — complete)
+| Topic | File |
+|-------|------|
+| Blocking put | `uvm_tlm_blocking_put.txt` |
+| Blocking get | `uvm_tlm_blocking_get.txt` |
+| TLM FIFO | `uvm_tlm_fifo.txt` |
+| Worked example | `uvm_tlm_example.txt` |
+| Analysis port | `uvm_tlm_analysis.txt` |
+| Sockets (TLM2) | `uvm_tlm_sockets.txt` |
+| `_decl` multi-imp | `uvm_tlm_decl.txt` |
+| Nonblocking put | `uvm_tlm_nonblocking_put.txt` |
+| Port→export→imp chains | `uvm_tlm_port_export_imp.txt` |
+| Nonblocking get | `uvm_tlm_nonblocking_get.txt` |
+
+## Beginner mistakes
+1. Connecting TLM in `build_phase` — use `connect_phase`.
+2. Driving pin-level from every component instead of txn + one driver.
+3. Forgetting factory utils on the transaction type.
+4. Analysis port with no subscribers connected — silent drop of observed txns.
+
+## ChipSutra emit notes
+- methodology=uvm: always wire sqr↔drv and mon analysis→sb (and cov if present).
+- Transaction fields match DUT/protocol — not generic `simple_packet` unless teaching demo.
+- Pure SV layered: mailbox/queue between gen/drv/mon/sb plays the same role as TLM.
+- Port API details: follow dedicated TLM articles as ingested.

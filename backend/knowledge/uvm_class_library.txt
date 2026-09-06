@@ -1,0 +1,81 @@
+# UVM Class Library (ChipVerify reference map)
+# Compact emit-oriented index of core Accellera UVM classes ChipSutra uses.
+# Not a full IEEE 1800.2 API dump. Deep how-to: sibling uvm_*.txt / uvm_patterns.txt.
+# Curriculum: ChipVerify UVM Class Library (searchable class browser).
+
+## How to use this file
+- When methodology=uvm, pick classes from this index — real `uvm_*` types only.
+- Objects vs components: see `uvm_class_hierarchy.txt`.
+- Minimal runnable: `uvm_hello.txt`. Install/path: `uvm_installation.txt`.
+
+## Root / reporting
+| Class | Role | ChipSutra emit |
+|-------|------|----------------|
+| `uvm_object` | Root; print/copy/compare/pack | Config objects; base of all |
+| `uvm_report_object` | Messaging base | Prefer `` `uvm_info/error/fatal `` macros |
+| `uvm_component` | Static TB infrastructure + phases | Never for transactions |
+| `uvm_root` / `uvm_top` | Singleton top of hierarchy | `print_topology()`; do not reinvent |
+
+## Test / env / agent
+| Class | Role | ChipSutra emit |
+|-------|------|----------------|
+| `uvm_test` | Scenario, knobs, start sequences | Thin; factory create env; see `uvm_test.txt` |
+| `uvm_env` | Container for agents/sb/cov | Connect TLM here; see `uvm_env.txt` |
+| `uvm_agent` | Protocol VIP: sqr+drv+mon | Active vs passive; see `uvm_agent.txt` |
+| `uvm_subscriber` | Analysis listener | Coverage / checkers; see `uvm_subscriber.txt` |
+
+## Stimulus path
+| Class | Role | ChipSutra emit |
+|-------|------|----------------|
+| `uvm_sequence_item` | One transaction | `rand` + field macros; see `uvm_transaction.txt` |
+| `uvm_sequence #(REQ)` | Stimulus container | `body()`; `start(sqr)`; see `uvm_sequence.txt` |
+| `uvm_sequencer #(REQ)` | Arbitrate -> driver | Default seq / start; see `uvm_sequencer.txt` |
+| `uvm_driver #(REQ)` | Item -> pins | `get_next_item` / `item_done`; see `uvm_driver.txt` |
+| `uvm_monitor` | Pins -> item | `uvm_analysis_port` + `write`; see `uvm_monitor.txt` |
+
+## Checking / coverage
+| Class | Role | ChipSutra emit |
+|-------|------|----------------|
+| `uvm_scoreboard` | Expected vs actual | Independent predict; see `uvm_scoreboard.txt` |
+| Covergroup (SV) | Functional coverage | Often in subscriber/monitor |
+
+## Factory / config / phases
+| Class / API | Role | ChipSutra emit |
+|-------------|------|----------------|
+| Factory (`type_id::create`) | Typed create + overrides | Always over raw `new` for components |
+| `uvm_config_db #(T)` | Typed set/get | Virtual IF + knobs; fatal if missing |
+| `uvm_resource_db` | Lower-level resource store | Prefer config_db in smoke TBs |
+| `uvm_phase` / objections | Sync construction + eot | `super.*`; raise/drop in run |
+
+## TLM (communication)
+| Class | Role | ChipSutra emit |
+|-------|------|----------------|
+| `uvm_analysis_port` | 1-to-many broadcast | Monitor -> sb/cov |
+| `uvm_analysis_imp` / export | Analysis sink | Scoreboard |
+| `uvm_tlm_analysis_fifo` | Buffered analysis | Optional |
+| put/get ports + `uvm_tlm_fifo` | Blocking producer/consumer | Advanced; sqr-drv uses pull port |
+
+## RAL (only with user CSR map)
+| Class | Role | ChipSutra emit |
+|-------|------|----------------|
+| `uvm_reg_block` / `uvm_reg` / `uvm_reg_field` | Model | Never invent addresses |
+| `uvm_reg_map` / adapter / predictor | Frontdoor path | When map provided |
+| Built-in reg sequences | Reset/RW tests | Optional |
+
+Concepts: `uvm_ral.txt`. Classes/desired/mirrored: `uvm_ral_classes.txt`.
+
+## Macros (must register types)
+- `` `uvm_component_utils(T) `` / `` `uvm_object_utils(T) ``
+- Field macros: `` `uvm_field_int `` / `` `uvm_field_enum `` / array variants + `UVM_ALL_ON`
+- Sequence helpers: `` `uvm_do `` family (optional; `start_item`/`finish_item` fine for smoke)
+
+## Forbidden / fake (never emit)
+- Invented APIs: `.put()` as UVM driver API, `.configure(vif)`, `driver.start(this)`, `cast(rhs)`
+- Extending txn from `uvm_component`
+- Building children in `run_phase`
+- Mixing `ovm_*` with `uvm_*`
+
+## ChipSutra default skeleton (class set)
+`uvm_sequence_item`, `uvm_sequence`, `uvm_sequencer`, `uvm_driver`, `uvm_monitor`,
+`uvm_agent`, `uvm_scoreboard`, `uvm_env`, `uvm_test`, plus module top with `run_test()`.
+Hello-only: `uvm_test` + `uvm_env` + top (`uvm_hello.txt`).

@@ -1,0 +1,79 @@
+# UVM TLM Port → Export → Imp
+# Hierarchical chaining: promote ports up, exports down, imp at the leaf.
+# ChipSutra original wording. Curriculum: ChipVerify UVM TLM Port to Export to Imp.
+# Pair with: uvm_tlm.txt, uvm_tlm_blocking_put.txt, uvm_tlm_example.txt.
+
+## Roles
+| Object | Direction | Job |
+|--------|-----------|-----|
+| **Port** | Initiate / forward **up** toward parent edge | Child `put_port.connect(parent.put_port)` |
+| **Export** | Accept at parent edge / forward **down** | Parent `put_export.connect(child.put_imp or child.put_export)` |
+| **Imp** | Leaf implementation (`task put` / get / …) | Only place that defines the operation |
+
+Rule of thumb for reusable hierarchy:
+- Producer subtree exposes a **port** at its boundary.
+- Consumer subtree exposes an **export** at its boundary.
+- Top connects `producer.port.connect(consumer.export)`.
+- Imp lives only at the final target leaf.
+
+## Pattern catalog
+
+### 1) Port → Port → Export → Imp (full VIP style)
+```
+subA.put_port → A.put_port → [top] → B.put_export → subB.put_imp
+```
+```systemverilog
+// A: forward child up
+m_subcomp_A.m_put_port.connect(this.m_put_port);
+// B: forward export down to imp
+m_put_export.connect(m_subcomp_B.m_put_imp);
+// top
+compA.m_put_port.connect(compB.m_put_export);
+```
+
+### 2) Port → Port → Imp
+Consumer has no child — imp on `componentB` itself:
+```
+subA.put_port → A.put_port → B.put_imp
+```
+```systemverilog
+compA.m_put_port.connect(compB.m_put_imp);
+```
+
+### 3) Port → Export → Imp
+Producer is the top of A (no sub-producer); B still wraps a child target:
+```
+A.put_port → B.put_export → subB.put_imp
+```
+
+### 4) Port → Port → Export → Export → Imp
+Extra forwarding layer on the consumer side:
+```
+… → B.put_export → B1.put_export → B2.put_imp
+```
+Each middle layer: `m_put_export.connect(child.m_put_export)`.
+
+## Connect checklist
+1. Always in parent `connect_phase` after both ends exist.
+2. Chain type must match (blocking put port/export/imp family together).
+3. Only the **imp** owner implements `put`/`get`/`try_put`/….
+4. Do not reach into a peer's grandchild from top — use edge port/export.
+5. Analysis broadcast uses `analysis_port` → `analysis_export`/`imp` (same promote idea).
+
+## vs ChipSutra smoke
+| Hierarchy lesson | Smoke agent stack |
+|------------------|-------------------|
+| Port/export edges for reusable VIP | Agent hides sqr/drv; env connects mon.ap → sb |
+| Deep put chains | Rare — prefer analysis + seq_item |
+| Teaching hierarchical TLM | Emit only if user asks |
+
+## Beginner mistakes
+1. Putting `put` implementation on the export owner instead of the imp leaf.
+2. Connecting port→port across env boundaries without an export on the sink side when a child needs the traffic.
+3. Top connecting into `m_subcomp_*` internals (breaks encapsulation).
+4. Mixing get-family ports with put-family exports.
+
+## ChipSutra emit notes
+- Agent/env edges: expose analysis_port from monitor; connect in env — not deep put chains.
+- Hierarchical put demo: follow patterns 1–4; keep Packet + objections on the true producer.
+- Related: `uvm_tlm_example.txt` (FIFOs + forward), `uvm_tlm_blocking_put.txt`.

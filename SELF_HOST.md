@@ -113,6 +113,29 @@ volumes:
   mongo_data:
 ```
 
+### 6b. Pull GHCR instead of rebuilding the backend
+
+Published images: `ghcr.io/sriharshaduppalli/chipsutra-backend:${CHIPSUTRA_TAG:-edge}`.
+
+```bash
+# Omit --build so Compose uses the pulled backend image.
+docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+# Pin a release:
+# CHIPSUTRA_TAG=1.2.0 docker compose -f docker-compose.yml -f docker-compose.ghcr.yml up -d
+```
+
+Frontend stays a **local build** in this overlay: the GHCR frontend image bakes `REACT_APP_BACKEND_URL=https://api.chipsutra.org`.
+
+### 6c. NVIDIA GPU for Ollama (optional)
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+```
+
+Requires the NVIDIA Container Toolkit. CPU hosts should ignore `docker-compose.gpu.yml`.
+
+STA liberty (demo `.lib` vs Sky130): **[docs/STA_LIBERTY.md](./docs/STA_LIBERTY.md)**.
+
 ## 7. Provider matrix
 
 | Feature | Emergent mode | Standalone mode |

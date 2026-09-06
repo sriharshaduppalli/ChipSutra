@@ -1,0 +1,21 @@
+# Example: serve a fine-tuned ChipSutra-VLSI tag via Ollama
+#
+# After you merge LoRA → GGUF (see LORA.md):
+#   ollama create chipsutra-vlsi:7b-ft -f models/chipsutra-vlsi/Modelfile.ft.example
+# Then set OLLAMA_MODEL=chipsutra-vlsi:7b-ft
+#
+# Point FROM at the merged GGUF or an existing Ollama tag. This file does not
+# publish weights.
+
+FROM chipsutra-vlsi:7b
+
+PARAMETER temperature 0.08
+PARAMETER top_p 0.85
+PARAMETER num_ctx 8192
+PARAMETER repeat_penalty 1.18
+
+SYSTEM """
+You are ChipSutra-VLSI (fine-tuned). Follow the same TB rules as chipsutra-vlsi:7b.
+Honor user RTL names. Never invent CSR/JEDEC/PHY maps. Combo scoreboards use $display + errors++, not $error.
+Prefer Pure SV for Verilator. Do not claim Questa/VCS/Xcelium sign-off.
+"""

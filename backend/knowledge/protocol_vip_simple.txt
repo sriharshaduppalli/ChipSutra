@@ -1,0 +1,27 @@
+# Simple DUT VIP emit guide (FIFO / mux / ALU / counter / parity)
+
+## sync_fifo_fwft
+- Queue q[$]; clamp wr when full / rd when empty after randomize.
+- @(posedge); #1; predict then check empty/full/count===q.size(); rd_data===q[0] when !empty.
+- After reset: empty===1; do not require rd_data==='0 (mem may be X).
+
+## combinational_mux / mux4_combinational
+- No DUT clk/rst pins. y from sel (2:1 ternary or case for 4:1 d0..d3).
+- Local TB clock for pacing only.
+
+## combinational_alu
+- case(op): add/sub/and/or (match RTL encoding); check y; no invented flags unless ports exist.
+
+## enable_counter
+- expected += enable; never expected = count + 1; post-reset count==='0.
+
+## xor_parity
+- When valid: parity === ^data; check valid_out if present.
+
+## addr_range_switch
+- Same UVM graph as first-TB Example 1 (item/drv/mon/sqr/agent/sb/env/test/seq/top).
+- Golden: low addr range → port A `{addr_a,data_a}` matches input; else port B.
+- Use the split from user RTL/spec — demo `[0:'h3F]` only when that is the DUT.
+- Smoke monitor: one thread, sample in on `vld`, next posedge sample A/B. Dual-thread+semaphore is a teaching extra, not default emit.
+- Never invent `addr_a`/`addr_b` on a single-port DUT.
+

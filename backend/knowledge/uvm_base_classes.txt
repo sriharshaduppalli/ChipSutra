@@ -1,0 +1,77 @@
+# UVM Base Classes (hierarchy overview)
+# Chain under every driver/monitor/txn. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Base Classes. Deep: uvm_object.txt, uvm_component.txt, uvm_class_hierarchy.txt.
+
+## Two branches (day-to-day)
+```
+uvm_void
+  └── uvm_object
+        ├── uvm_sequence_item  (+ sequences)     // DATA / transient
+        └── uvm_report_object
+              └── uvm_component (... driver, env) // STRUCTURE / whole-run
+```
+- Data branch: transactions, sequences, configs — come and go.
+- Component branch: drivers, monitors, agents, envs, tests — fixed hierarchy.
+- Recognizing the branch = fixed tree place vs transient data.
+
+## uvm_void
+- Empty virtual class — generic "some UVM thing" type (like C void*).
+- Almost never extend directly; anchors type system for `uvm_object`.
+- Extending void alone = no print/copy/factory — use `uvm_object` if interoperating with UVM.
+
+## uvm_object
+- Real library start: print, copy, compare, record signatures.
+- Not automatic — still need `` `uvm_object_utils `` / field macros or `do_*` hooks.
+- Details: `uvm_object.txt`.
+
+## uvm_report_object
+- Extends `uvm_object`; owns reporting path for components.
+- `` `uvm_info/`uvm_warning/`uvm_error/`uvm_fatal `` -> `uvm_report_handler` (verbosity filter)
+  -> global `uvm_report_server` (format/print).
+- High verbosity msgs stay in code; silent until verbosity raised (no recompile).
+- Components inherit reporting "for free" via this class.
+- Sequences are not components but can still use reporting macros (via global/`uvm_top` path).
+- Why reporting vs `$display`, severity/ID/verbosity concepts: `uvm_reporting_classes.txt`.
+
+## uvm_component
+- Extends `uvm_report_object` (hence also object): hierarchy, phasing, factory, recording + reporting.
+- Details: `uvm_component.txt`.
+
+## uvm_transaction (deprecated as user base)
+- Extends `uvm_object`; adds timing/notification hooks.
+- **Do not** `extends uvm_transaction` for user txns — **use `uvm_sequence_item`**.
+- `uvm_sequence_item` already extends transaction + sequencer/sequence IDs needed for VIP.
+
+```systemverilog
+class my_transaction extends uvm_sequence_item;  // correct
+  `uvm_object_utils(my_transaction)
+  // ...
+endclass
+```
+
+## uvm_root / uvm_top
+- Implicit top-level component; never user-`new` it.
+- Global handle: `uvm_top`.
+- Parent=`null` children become children of `uvm_top`.
+- Drives phasing; hierarchical lookup; global verbosity.
+- Unresolved errors at end_of_elaboration can `` `uvm_fatal `` before run (fail before first clock).
+- Details: `uvm_root.txt`.
+
+## Inheritance drills (emit awareness)
+| Class | Chain (simplified) |
+|-------|---------------------|
+| `uvm_driver` | ... -> component -> report_object -> object -> void |
+| `uvm_sequence_item` | ... -> object (-> transaction historically) -> void |
+| `uvm_env` | ... -> component -> report_object -> object -> void |
+
+## Beginner mistakes
+1. `extends uvm_transaction` instead of `uvm_sequence_item`.
+2. Thinking sequences cannot `` `uvm_info `` because not components.
+3. Extending `uvm_void` for "lightweight" UVM classes.
+4. Confusing data vs component branch when choosing base class.
+
+## ChipSutra emit notes
+- Txns/sequences: `uvm_sequence_item` / `uvm_sequence` + object_utils.
+- VIP structure: `uvm_component` derivatives + component_utils.
+- Always reporting macros in UVM code (not bare `$display` as primary).
+- Never invent parallel base classes outside Accellera hierarchy.

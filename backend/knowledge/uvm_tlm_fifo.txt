@@ -1,0 +1,70 @@
+# UVM TLM FIFO (uvm_tlm_fifo)
+# Rate-decouple producer and consumer with a bounded transaction FIFO.
+# ChipSutra original wording. Curriculum: ChipVerify UVM TLM Fifo.
+# Pair with: uvm_tlm.txt, uvm_tlm_blocking_put.txt, uvm_tlm_blocking_get.txt.
+
+## Why
+When the sender produces faster than the receiver consumes, insert `uvm_tlm_fifo #(T)`
+so both sides run independently. Depth sized from data-rate mismatch (peak backlog).
+
+```
+compA.put_port --> fifo.put_export
+compB.get_port --> fifo.get_export
+```
+
+## Construction
+```systemverilog
+uvm_tlm_fifo #(Packet) m_tlm_fifo;
+// name, parent, depth
+m_tlm_fifo = new("uvm_tlm_fifo", this, 2);
+```
+- Typed on the transaction `T`.
+- Depth argument sets capacity; full blocking put stalls the producer.
+- Useful queries: `is_full()`, `is_empty()`, `used()`, `size()` (API varies slightly by UVM version — use what library provides).
+
+## Connect pattern
+```systemverilog
+function void connect_phase(uvm_phase phase);
+  compA.m_put_port.connect(m_tlm_fifo.put_export);
+  compB.m_get_port.connect(m_tlm_fifo.get_export);
+endfunction
+```
+- Producer: `uvm_blocking_put_port` → FIFO `put_export`.
+- Consumer: `uvm_blocking_get_port` → FIFO `get_export`.
+- Connect in common parent `connect_phase` (env/test).
+
+## Producer / consumer sketch
+```systemverilog
+// Producer run: create + put (blocks if FIFO full)
+m_put_port.put(pkt);
+
+// Consumer run: get (blocks if FIFO empty)
+m_get_port.get(pkt);
+```
+Example timing idea: producer every `#50`, consumer every `#100` → FIFO fills; `is_full()` becomes true until consumer drains.
+
+## vs direct put_imp / get_imp
+| Link | Behavior |
+|------|----------|
+| Port → Imp (no FIFO) | Tight handshake; producer waits for consumer `put`/`get` body |
+| Port → FIFO → Port | Buffered; sides progress until depth / empty limits |
+
+## vs smoke TB
+| Need | Prefer |
+|------|--------|
+| Monitor → scoreboard fanout | `analysis_port` (not tlm_fifo) |
+| Driver ↔ sequencer | `seq_item_port` |
+| Custom rate mismatch / teaching buffer | `uvm_tlm_fifo` |
+
+## Beginner mistakes
+1. Forgetting depth → default may be too small/large for the scenario.
+2. Connecting put_port to get_export (wrong export).
+3. Creating FIFO with `type_id::create` incorrectly — use `new(name, parent, depth)`.
+4. Both sides raise objections and forever-monitor `is_full` without a way to end — keep objection ownership clear (often on producers/consumers that finish loops).
+5. Using FIFO where analysis broadcast is needed.
+
+## ChipSutra emit notes
+- methodology=uvm smoke: do not insert `uvm_tlm_fifo` between mon/sb or sqr/drv by default.
+- Emit FIFO only when user asks for TLM FIFO / rate decoupling demo.
+- Put/get port details: `uvm_tlm_blocking_put.txt`, `uvm_tlm_blocking_get.txt`.
+- Overview: `uvm_tlm.txt`. Nested hierarchy demo: `uvm_tlm_example.txt`.

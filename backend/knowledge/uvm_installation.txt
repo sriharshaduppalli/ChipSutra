@@ -1,0 +1,58 @@
+# UVM Installation (ChipVerify curriculum map)
+# UVM is a SystemVerilog class library, not a separate app/installer.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Installation.
+# External: Accellera downloads / github.com/accellera-official/uvm-core
+
+## UVM is a library, not an application
+- No install.sh / wizard — compile `uvm_pkg.sv` (+ macros) with the testbench.
+- Commercial sims (VCS, Questa, Xcelium, Riviera) usually ship a bundled UVM.
+- Manual download only when: no bundle, need a specific release, or OSS/lightweight flow.
+
+## Versions (project pin)
+| Release | Notes |
+|---------|--------|
+| UVM 1.2 | Still common in legacy codebases |
+| UVM 2020.x / IEEE 1800.2 (e.g. 2020.3.1) | Accellera reference; prefer for new projects unless company/tool standard says otherwise |
+
+ChipSutra default emit target: **UVM 1.2-style APIs** (widely portable) unless user asks for 1800.2-only features.
+Pin one UVM version per project — do not mix 1.2 and 2020.x in the same regression.
+
+## Where to get source
+1. Accellera downloads: accellera.org/downloads/standards/uvm (tarball + previous releases).
+2. GitHub: github.com/accellera-official/uvm-core (tags / patches).
+3. Simulator tree: e.g. `$VCS_HOME/etc/uvm` (or tool-equivalent) — check before downloading.
+
+## Pointing the simulator at UVM
+- Typical: `-incdir $UVM_HOME/src` (flag name varies: `-incdir`, `+incdir+`, tool docs).
+- Set `UVM_HOME` to extracted library root; persist in `.bashrc` / `.cshrc` (session `export` alone is lost).
+- Compile/import `uvm_pkg`; include `uvm_macros.svh` as tool expects.
+- Run tests with `+UVM_TESTNAME=<test>` (and verbosity plusargs as needed).
+
+Example (conceptual — check tool docs):
+```
+export UVM_HOME=/path/to/UVM-1800.2-2020.3.1
+# <sim> -incdir $UVM_HOME/src ... tb_top.sv +UVM_TESTNAME=my_test
+```
+
+## Easy practice paths
+1. **EDA Playground** — pick simulator + UVM methodology dropdown; zero local setup (learning).
+2. **Bundled commercial sim** — use vendor UVM path; no Accellera download.
+3. **Open-source (Verilator etc.)** — class/UVM support varies by version; do not assume full UVM PASS.
+
+## ChipSutra alignment
+- methodology=uvm: emit correct UVM code; note commercial sim / Accellera lib often required.
+- Pure SV layered remains default for Verilator-first local smoke.
+- Never claim ChipSutra "installs" UVM into the host — document `$UVM_HOME` / Docker / vendor bundle.
+- Docker/OSS CAD flows: Verilator-first; full UVM library packaging is optional enterprise/advanced.
+
+## Beginner mistakes
+1. Searching for a GUI installer — need source + include path.
+2. Forgetting to persist `$UVM_HOME` across shells.
+3. Mixing UVM versions across the same project/team.
+4. Assuming Verilator equals VCS/Questa UVM support.
+
+## Emit guidance when user asks "how to install UVM"
+- Explain library model + Accellera or vendor bundle.
+- Give `$UVM_HOME` + `-incdir` pattern; point to tool docs for exact flags.
+- Suggest EDA Playground for first `` `uvm_info `` smoke.
+- For ChipSutra local: prefer methodology=sv unless they have a UVM-capable sim.

@@ -1,0 +1,56 @@
+# SystemVerilog data types & control flow (deep RAG)
+# Curriculum map: ChipVerify Data Types + Control Flow & Loops.
+# Complements sv_uvm_syntax_core.txt + sv_fundamentals_must_know.txt.
+
+## 2-state vs 4-state
+- 4-state: `logic`, `reg`, `integer`, `time`, `realtime` — X/Z visible (prefer for DUT-facing).
+- 2-state: `bit`, `byte`, `int`, `longint`, `shortint` — X becomes 0; OK for pure TB counters/indexes.
+- TB drives: `logic`/`reg`; DUT outs observed as `wire`/`logic`.
+- Never use `bit` for nets where X detection matters (post-reset, scoreboard).
+- `integer` is 32-bit 4-state; prefer `int` for loop indexes in SV TB.
+
+## Widths and signing
+- Match DUT: `logic [3:0] count` not bare `logic count`.
+- Part-selects: `data[7:0]`, `data[i]` — stay in declared range.
+- Signed: `logic signed [7:0] s;` only if RTL/spec is signed; default unsigned for buses.
+- Casts: `$signed()`, `$unsigned()`, `'0` / `'1` / `'x` fills.
+
+## Useful types
+- `enum` for opcodes/states — constrain `inside {LEGAL...}`; coverpoint per enum.
+- `struct packed` for protocol headers; unpacked struct for TB records / mon packets.
+- `typedef` aliases: `typedef logic [31:0] addr_t;`
+- `string` for plusargs/logging; `void'(...)` discard function returns (`$urandom`).
+- `event` for TB sync; prefer mailbox/semaphore in layered envs.
+
+## Loops and control
+- `for` / `foreach` / `repeat` / `while` / `do...while` — stimulus prefers `for` with fixed N.
+- `foreach (arr[i])` for dynamic/queue walks in scoreboards.
+- `break` / `continue` sparingly; keep scoreboard checks straight-line when possible.
+- `unique` / `priority` if/case — RTL lint intent; TB rarely needs.
+- `always_comb` / `always_ff` / `always_latch` — DUT modeling; TB uses `initial` + `always #half clk`.
+- `forever` only for clocks (`always #5 clk=~clk` preferred over `initial forever`).
+
+## Case equality and unknowns
+- `===` / `!==` compare X/Z; use in scoreboards when X is a fail.
+- `==` / `!=` with X often unknown — prefer `===` for self-check after reset.
+- `$isunknown(sig)` soft check on monitored outs after reset/stimulus.
+- Four-value logic: 0,1,X,Z — never ignore X on checked DUT outputs.
+
+## Operators TB uses constantly
+- Reduction: `^data` (parity), `|bus`, `&bus`.
+- Concat/replicate: `{a,b}`, `{4{1'b1}}`.
+- Streaming for byte lanes when packing/unpacking (AXI WSTRB helpers) — keep simple.
+- Inside set membership in constraints and `unique case` RTL — TB constraints: `inside {[0:1]}`.
+
+## ChipSutra defaults
+- Ports/signals: `logic` with exact widths from RTL / parsed port list.
+- Loop: `for (i=0;i<N;i++)` + `@(posedge clk); #1;` check.
+- Errors: `int errors; errors = 0;` then `errors++` on mismatch; one PASS/FAIL at end.
+- Enums/structs only if present in user RTL/spec.
+
+## Anti-patterns
+- `integer` for narrow DUT ports (width surprises).
+- 2-state on monitored DUT outs hiding X bugs.
+- Unrolled Test case 1..N instead of a loop.
+- `always @(*)` in new SV — prefer `always_comb` for DUT fragments.
+- Declaring mid-block after procedural statements (illegal in modules — hoist decls).

@@ -1,0 +1,59 @@
+# UVM Register Abstraction Layer (RAL)
+# Why RAL exists: registers, blocks, memory maps, high-level read/write.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Register Abstraction Layer.
+# Model: uvm_ral_classes.txt. Env: uvm_ral_env.txt. Connect: uvm_ral_connect.txt.
+# Backdoor: uvm_ral_backdoor.txt. End-to-end map: uvm_ral_example.txt.
+# Pair with: uvm_class_library.txt, uvm_patterns.txt, uvm_config_db.txt.
+# Note: ChipVerify first-TB DUT `reg_block` RTL is NOT the same as `uvm_reg_block`.
+
+## What are registers
+Hardware CSRs store config, control, and status. Software often programs them over
+AXI/APB/Wishbone. One physical word (e.g. 32-bit) holds **fields** with RW/RO access,
+widths, and meaning (enable, mode, halt, reserved, …).
+
+RAL models that hierarchy in classes:
+| Hardware | UVM class |
+|----------|-----------|
+| Field | `uvm_reg_field` |
+| Register | `uvm_reg` |
+| Collection + map | `uvm_reg_block` (+ `uvm_reg_map`) |
+
+## Register block
+A **register block** groups related registers/memories for one module (e.g. REG_CTL @ 0x0,
+REG_STAT @ 0x4). Offsets are relative to the block base.
+Class: extend `uvm_reg_block`.
+
+## Memory map
+SoC address space layout: each peripheral’s register block sits at a **base address**.
+CPU access = `base + offset` (e.g. Timer @ `0xE7B3_0000`, REG_CTL @ +0x0, REG_DMACTL @ +0xC).
+RAL maps encode these offsets so sequences use register handles, not raw addresses.
+
+## What RAL provides
+Structured, standard model of registers/memories so you can:
+- `write` / `read` / `mirror` / `update` via high-level API
+- Check reset values, access policies, side-effects
+- Reuse the **same** register model from block → subsystem → SoC TB
+- Keep a mirrored “known” DUT register state in the model
+
+Sequence sketch (after config_db gets the model):
+```systemverilog
+uvm_status_e status;
+uvm_reg_data_t rdata;
+m_regmodel.reg_ctl.write(status, 'h3A);
+m_regmodel.reg_ctl.read(status, rdata);
+```
+
+## Why not only bus sequence_items
+Without RAL every access builds a bus `sequence_item` (addr/wdata/write) on the agent.
+That is verbose, hard to reuse across protocols, and does not give a structured mirror
+of field-level state. RAL + adapter converts model `write`/`read` into bus traffic.
+
+## ChipSutra emit notes
+- Emit RAL **only** when the user supplies a CSR map / addresses / field defs —
+  **never invent** registers or offsets.
+- Smoke / simple DUT: bus sequences or direct pin TB is enough — skip RAL.
+- First-TB chapter DUT named `reg_block` (`uvm_first_tb_dut.txt`) is teaching RTL,
+  not a generated `uvm_reg_block` model unless user asks for RAL on that design.
+- Prefer Accellera `uvm_reg_*` names; class/`configure`/`add_reg` details: `uvm_ral_classes.txt`.
+- Frontdoor needs adapter + map (Register Environment pages).
+- Verilator / limited UVM: full RAL often unsupported — warn and fall back to bus seqs.

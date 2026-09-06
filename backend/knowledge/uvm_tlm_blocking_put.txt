@@ -1,0 +1,73 @@
+# UVM TLM Blocking Put Port
+# Sender calls put(); receiver implements put as a task — blocks until it returns.
+# ChipSutra original wording. Curriculum: ChipVerify UVM TLM Blocking Put Port.
+# Pair with: uvm_tlm.txt, blocking get / fifo / analysis siblings.
+
+## Roles
+| Side | Type | Action |
+|------|------|--------|
+| Sender | `uvm_blocking_put_port #(T)` | `port.put(txn)` — blocks until imp's `put` task completes |
+| Receiver | `uvm_blocking_put_imp #(T, IMP)` | Implement `task put(T t)` — define what to do with txn |
+| Parent | connect | `sender.m_put_port.connect(receiver.m_put_imp)` in `connect_phase` |
+
+`T` = transaction type (`uvm_object` / sequence_item). `IMP` = receiver component type (imp callback target).
+
+Ports/imps are objects — `new("name", this)` in `build_phase` (not factory create).
+
+## Minimal pattern
+```systemverilog
+// Sender
+uvm_blocking_put_port #(Packet) m_put_port;
+function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  m_put_port = new("m_put_port", this);
+endfunction
+task run_phase(uvm_phase phase);
+  Packet pkt = Packet::type_id::create("pkt");
+  assert(pkt.randomize());
+  m_put_port.put(pkt);   // stalls here until CompB.put returns
+endtask
+
+// Receiver
+uvm_blocking_put_imp #(Packet, componentB) m_put_imp;
+function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  m_put_imp = new("m_put_imp", this);
+endfunction
+virtual task put(Packet pkt);
+  // process; may consume time — sender blocked until return
+  #20;
+endtask
+
+// Parent connect_phase
+compA.m_put_port.connect(compB.m_put_imp);
+```
+
+## Blocking behavior
+- `put` on a **blocking** port waits for the imp `put` task to finish.
+- Delay inside receiver `put` (e.g. `#20`) spaces sender's next packet by that latency.
+- Nonblocking put: `uvm_tlm_nonblocking_put.txt` — do not mix blocking/NB port↔imp.
+
+## Connect rules
+- Connect at the **common parent** (test/env) in `connect_phase`.
+- Never connect in `build_phase`.
+- Direct port→imp is fine for 1:1; FIFO/export chain for decoupling (fifo article).
+
+## vs smoke TB paths
+| Need | Prefer |
+|------|--------|
+| Driver↔sequencer | `seq_item_port` / `seq_item_export` (not generic put) |
+| Monitor fanout | `uvm_analysis_port` |
+| Teaching A→B or custom producer→consumer | blocking put port + put_imp |
+
+## Beginner mistakes
+1. Forgetting `m_put_port = new(...)` / `m_put_imp = new(...)`.
+2. Declaring `put` as a function when using blocking put_imp — must be **task**.
+3. Wrong `IMP` type parameter on `uvm_blocking_put_imp #(T, IMP)`.
+4. Connecting before both components exist.
+5. Expecting analysis-style broadcast — put is point-to-point.
+
+## ChipSutra emit notes
+- methodology=uvm smoke: do **not** replace sqr/drv or mon→sb with generic put unless user asks for TLM put/get demo.
+- If emitting put path: utils on Packet, new ports in build, connect in parent, objections around sender loop.
+- Overview: `uvm_tlm.txt`. Get side: `uvm_tlm_blocking_get.txt`.

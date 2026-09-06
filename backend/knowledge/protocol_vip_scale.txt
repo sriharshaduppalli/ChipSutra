@@ -1,0 +1,50 @@
+# Scale-aware TB emit (ChipSutra)
+# block ≠ ip ≠ processor ≠ subsystem ≠ soc ≠ chiplet.
+# Gated on user scale + topology. Never invent interconnect, CSR, or D2D maps.
+
+## block
+- One RTL module in isolation. TB supplies neighboring stimulus. Failures stay in this block.
+- Targets: function, CSR/FSM, this block's protocol, corners, errors, reset/idle.
+- Skeleton-first when a golden exists. No virtual sequencer. No invented maps. No extra agents.
+- Highest coverage bar of any scale. Code coverage without a closed functional plan is not sign-off.
+- Pure SV layered class TB is the default Verilator path.
+
+## ip
+- Still one DUT (block stage) — not a subsystem. Emit a reusable VIP agent for later integration reuse.
+- VIP four parts (all required): driver, monitor, checker, coverage + cfg (active/passive).
+- RAL only from user csr_list/HJSON. Project data scoreboard stays outside the VIP.
+- Do not emit a multi-agent virtual-seq or a SoC boot ROM.
+
+## processor
+- RV32I directed smoke unless the user supplied a memory_map and/or csr_list.
+- User maps become opaque model_reg keys. No Spike, no auto-RAL, no invented CSRs.
+- Bus fabric (AXI/TileLink/WB) only if those ports exist.
+
+## subsystem
+- DUT = connected signed-off blocks. Hunt interface bugs, not internal FSMs.
+- User topology.agents → one agent/IF each (reuse block VIP). Virtual-seq outline; per-agent scoreboard.
+- Shared clocks/resets from topology.clocks — CDC-aware. Decode only from topology.address_map.
+- Do not invent a crossbar. Do not emit a full UVM SoC env from a single 7B call.
+
+## soc
+- Full chip + software. End-to-end, boot, perf, power — only items the user listed.
+- RTL sim for targeted waves; boot/Linux → emulation, not Verilator. Multi-clock: never one clock for async domains.
+- Interconnect/QoS/timeout from user docs. DFT/JTAG/UPF only with user network / UPF.
+- SoC PASS does not replace block/subsystem sign-off.
+
+## chiplet
+- UCIe / BoW / AIB: user VIP. Outline mainband/sideband only if those RTL ports exist.
+- Never invent flit length, lane-repair, or die-to-die timings.
+- DFT daisy-chain / shared reset across dies only with user network description.
+
+## topology
+- Required fields when scale is subsystem|soc|chiplet: agents[], optional address_map[], clocks[], interconnect.
+- Missing fields: infer IFs from parsed RTL only; state assumptions in // comments.
+
+## differentiate
+- block = pin smoke, one agent, golden if known.
+- ip = Verification IP: driver + monitor + checker + coverage; still one DUT.
+- processor = ISA smoke + user maps.
+- subsystem = multi-agent virtual-seq from topology.
+- soc = subsystem + boot/IRQ/reset-tree from user.
+- chiplet = D2D VIP outline; no invented PHY.

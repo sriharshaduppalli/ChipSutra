@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT))
 
 from rtl_ports import extract_modules
 from tb_skeleton import render_randomized_tb
-from tb_lint import lint_testbench, choose_testbench_output, extract_sv
+from tb_lint import lint_testbench, choose_testbench_output, extract_sv, stamp_tb_header
 from kg_rating import auto_score_testbench
 from dv_planner import plan_generation
 
@@ -45,8 +45,18 @@ def review_sv(name: str, rtl: str, sv: str, engine: str, extra: dict | None = No
     mods = extract_modules(rtl)
     mod = mods[0]
     ports = [p["name"] for p in mod["ports"]]
+    dut_outs = [
+        p["name"]
+        for p in mod["ports"]
+        if (p.get("direction") or "").lower() in ("output", "out", "inout")
+    ]
     plan = plan_generation(module="testbench", gen_mode="skeleton", modules=mods, rtl_text=rtl)
-    lint_ok, issues = lint_testbench(extract_sv(sv) or sv, dut_name=mod["name"], required_ports=ports)
+    lint_ok, issues = lint_testbench(
+        extract_sv(sv) or sv,
+        dut_name=mod["name"],
+        required_ports=ports,
+        dut_outputs=dut_outs,
+    )
     score = auto_score_testbench(sv, engine, lint_ok, issues)
     golden = _has_golden(sv)
     proto = plan["protocol_pack"]
@@ -84,10 +94,16 @@ async def llm_tb(name: str, rtl: str) -> tuple[str, str, list, str]:
         num_predict_for_module,
     )
     from llm_provider import stream_chat
+    from tb_lint import choose_testbench_output, truncate_tb_reference, stamp_tb_header
 
     mods = extract_modules(rtl)
     mod = mods[0]
     ports = [p["name"] for p in mod["ports"]]
+    dut_outs = [
+        p["name"]
+        for p in mod["ports"]
+        if (p.get("direction") or "").lower() in ("output", "out", "inout")
+    ]
     skeleton = render_randomized_tb(mod, cycles=32, seed=11)
     system = (
         "You are ChipSutra-VLSI. Output ONLY SystemVerilog testbench.\n"
@@ -96,8 +112,8 @@ async def llm_tb(name: str, rtl: str) -> tuple[str, str, list, str]:
     user = default_user_prompt("testbench", dut_hint=f"module {mod['name']}")
     user += f"\n\n--- FILE: {name}.sv ---\n{rtl}\n"
     user = (
-        "MANDATORY reference (copy structure; keep exact ports):\n"
-        + skeleton
+        "MANDATORY reference (copy structure; keep exact ports; never drive DUT outs):\n"
+        + truncate_tb_reference(skeleton, max_lines=48)
         + f"\n\nGolden hint: {tb_golden_hint_from_ports(ports)}\n\n"
         + "User request:\n"
         + user
@@ -118,8 +134,10 @@ async def llm_tb(name: str, rtl: str) -> tuple[str, str, list, str]:
         skeleton=skeleton,
         dut_name=mod["name"],
         required_ports=ports,
+        dut_outputs=dut_outs,
         force_uvm=False,
     )
+    final = stamp_tb_header(final, engine=engine, model="chipsutra-vlsi:3b", protocol="review")
     return final, engine, issues, raw
 
 
@@ -152,9 +170,11 @@ async def main() -> int:
         if not mods:
             print(f"[FAIL] parse {name}")
             continue
-        sk = render_randomized_tb(mods[0], cycles=32, seed=11)
-        (OUT_DIR / f"{name}_skeleton_tb.sv").write_text(sk, encoding="utf-8")
-        r = review_sv(name, rtl, sk, "skeleton")
+        sv = render_randomized_tb(mods[0], cycles=32, seed=11)
+        plan = plan_generation(module="testbench", gen_mode="skeleton", modules=mods, rtl_text=rtl)
+        sv = stamp_tb_header(sv, engine="skeleton", model="tb_skeleton", protocol=plan["protocol_pack"])
+        (OUT_DIR / f"{name}_skeleton_tb.sv").write_text(sv, encoding="utf-8")
+        r = review_sv(name, rtl, sv, "skeleton")
         results.append(r)
         print(
             f"[{r['verdict']}] {name:16} proto={r['protocol']:8} "

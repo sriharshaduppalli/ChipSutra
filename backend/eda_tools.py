@@ -29,6 +29,11 @@ def tool_versions() -> Dict[str, Optional[str]]:
         or _run_version(["opensta", "-version"])
         or ("present" if (shutil.which("sta") or shutil.which("opensta")) else None),
         "cocotb": ("present" if shutil.which("cocotb-config") else None),
+        "iverilog": _run_version(["iverilog", "-V"])
+        or ("present" if shutil.which("iverilog") else None),
+        "verible_lint": ("present" if shutil.which("verible-verilog-lint") else None),
+        "slang": _run_version(["slang", "--version"])
+        or ("present" if shutil.which("slang") else None),
     }
 
 

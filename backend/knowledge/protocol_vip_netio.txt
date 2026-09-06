@@ -1,0 +1,24 @@
+# Network / USB / MIPI VIP emit (ChipSutra)
+# Never invent PHY timings, MIPI D-PHY HS/LP numbers, or USB chirp sequences.
+
+## ethernet
+- Frame fields (DA/SA/EtherType/FCS) only as txn outline when user MAC BFM exists.
+- MII / RMII / GMII / RGMII / SGMII: drive only ports that exist (txd/tx_en/rxd/rx_dv/clk).
+- Smoke without user PHY mode: after reset, outputs not X; do not invent a packet.
+- If user knob eth_mode=rgmii|gmii|mii: name that IF; still no invented DDR timing.
+- MDIO/MDC: Clause 22/45 PHY access only if mdio/mdc ports exist. Do not invent PHYAD maps.
+- Pause / checksum offload: user MAC csr_list only.
+
+## usb
+- USB2 UTMI/ULPI: outline if those ports exist. Chirp / packet token/data/handshake = user VIP.
+- USB3 LTSSM / SuperSpeed: VIP-level. Name states as cover items if RTL exposes them.
+- If only an AXI/APB register file exists, treat as that bus + user csr_list.
+
+## mipi
+- CSI-2 / DSI: packet headers / virtual channels / LP/HS only with user D-PHY/C-PHY ports.
+- Do not invent lane count, HS settle, or DCS command maps.
+- If RTL is a pixel/AXI-stream sink, use AXIS/stream golden — not a MIPI PHY.
+
+## netio_vip_bound
+- Full MAC/PCS/PMA, USB LTSSM, MIPI D-PHY require user VIP.
+- ChipSutra emits pin-accurate idle/reset smoke + txn outline. Never invent timings.

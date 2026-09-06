@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Plus, Cpu, FileCode2, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
@@ -15,10 +15,26 @@ const DESIGN_TYPES = [
 const LANGS = ["systemverilog", "verilog", "vhdl", "uvm"];
 
 export default function Projects() {
+  const navigate = useNavigate();
   const [projects, setProjects] = useState([]);
   const [workspaces, setWorkspaces] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  const [wizardBusy, setWizardBusy] = useState(false);
+
+  const startWizard = async () => {
+    setWizardBusy(true);
+    try {
+      const { data } = await api.post("/projects/quickstart");
+      const id = data.project?.id;
+      if (!id) throw new Error("no project");
+      toast.success("Counter DUT imported");
+      navigate(`/app/projects/${id}?wizard=1`);
+    } catch {
+      toast.error("Wizard failed");
+    }
+    setWizardBusy(false);
+  };
   const [form, setForm] = useState({ name: "", description: "", design_type: "block", language: "systemverilog", workspace_id: "" });
 
   const load = async () => {
@@ -60,9 +76,14 @@ export default function Projects() {
           <h1 className="font-display text-3xl font-bold">Projects</h1>
           <p className="font-mono text-xs text-slate-400 mt-1">Verify blocks, IPs, subsystems, SoCs and chiplets.</p>
         </div>
-        <button onClick={() => setCreating(true)} className="btn-neon inline-flex items-center gap-2" data-testid="new-project-btn">
-          <Plus size={16} /> New Project
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setCreating(true)} className="btn-neon inline-flex items-center gap-2" data-testid="new-project-btn">
+            <Plus size={16} /> New Project
+          </button>
+          <button onClick={startWizard} disabled={wizardBusy} className="btn-outline-neon inline-flex items-center gap-2" data-testid="wizard-counter-btn">
+            {wizardBusy ? "Starting…" : "60s wizard (counter)"}
+          </button>
+        </div>
       </div>
 
       {creating && (
@@ -97,7 +118,10 @@ export default function Projects() {
         <div className="card-surface p-16 text-center">
           <Cpu size={40} className="mx-auto mb-4 text-slate-600" />
           <div className="font-display text-xl mb-2">No projects yet</div>
-          <div className="font-mono text-xs text-slate-400">Create your first verification project to begin.</div>
+          <div className="font-mono text-xs text-slate-400">Create your first verification project, or start the 60-second counter wizard.</div>
+          <button onClick={startWizard} disabled={wizardBusy} className="btn-neon mt-4 inline-flex items-center gap-2" data-testid="wizard-empty-btn">
+            {wizardBusy ? "Starting…" : "Start with counter.sv"}
+          </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

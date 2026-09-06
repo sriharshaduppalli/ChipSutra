@@ -1,0 +1,51 @@
+# Accellera UVM User’s Guide — ChipSutra emit map
+# Concepts from UVM UG 1.2 (Oct 2015) preferred over UG 1.1 (May 2011).
+# Original ChipSutra wording. Do not paste Accellera chapters, UBus listings, or figures.
+# Guides apply the class library; they are not the only legal style.
+# Deep how-to stays in sibling uvm_*.txt files listed below.
+
+## Pin the guide
+- New ChipSutra UVM emit follows **UVM 1.2 User’s Guide** architecture (test/env/agent/seq/drv/mon/sb).
+- UG 1.1 is the same layered idea with older wording (CDV intro, data-item/BFM). Prefer 1.2 APIs: `uvm_config_db`, objections, factory `type_id::create`.
+- Class Reference / `uvm-core` is the API law. The guide is one way to apply it.
+- Do not emit the Accellera **UBus** example bus as a ChipSutra protocol. Use the user’s DUT ports.
+
+## Ch1 architecture (smoke always)
+- TB top: clock + virtual IF + DUT named port map + `config_db` set + `run_test`.
+- Test owns scenario + objections; env owns agents + project scoreboard.
+- Agent: sequencer + driver (active) + monitor (always). Sequence drives items; driver `get_next_item`/`item_done`.
+- Monitor is passive `analysis_port.write`; scoreboard is independent golden — never `expected = dut_out + 1`.
+- Files: `uvm_tb_top.txt`, `uvm_test.txt`, `uvm_env.txt`, `uvm_agent.txt`, `uvm_driver.txt`, `uvm_monitor.txt`, `uvm_scoreboard.txt`.
+
+## Ch2 TLM
+- Smoke: TLM-1 pull (seq_item port/export) + analysis broadcast. See `uvm_tlm.txt`, `uvm_tlm_analysis.txt`.
+- Do **not** emit TLM-2.0 sockets, generic payload, `b_transport`, or time-decoding unless the user asks. `uvm_tlm_sockets.txt` is advanced.
+- Analysis is 1-to-many; sequencer↔driver is 1-to-1 pull.
+
+## Ch3 reusable VIP (when scale=ip or user says VIP)
+- Txn: `uvm_sequence_item`, knobs on sequences not hardcoded in the item.
+- Connect driver↔sequencer in `connect_phase` only. `is_active` gates drv/sqr.
+- End of test = objections in test `run_phase` (and sequence auto-objection if used) — `uvm_objection.txt`.
+- Checks/coverage: protocol in monitor/interface; functional coverage in subscriber; project data in scoreboard.
+- Full reuse rules: `uvm_guide_reusable_vip.txt`.
+
+## Ch4 using UVCs
+- Instantiate agents only in env. Tests select `+UVM_TESTNAME`, constrain sequences, set cfg — do not poke pins.
+- Prefer `uvm_config_db` over raw `uvm_resource_db` for vif/cfg (`uvm_config_db.txt`).
+- Multi-IF: virtual sequencer + virtual sequence (`uvm_virtual_sequencer.txt`). Single-IF smoke may skip vseqr.
+- Integrator playbook: `uvm_guide_using_vip.txt`.
+
+## Ch5 register layer
+- Emit `uvm_reg` / adapter / predictor **only** with a user CSR map. Never invent addresses.
+- Front-door via adapter + sequencer; backdoor only if user gave HDL paths.
+- Memories are not mirrored like registers. Details: `uvm_ral.txt` and siblings.
+
+## Ch6 advanced — opt-in
+- Factory type/instance override: `uvm_factory_override.txt`. Never `new()` for overridable types.
+- Callbacks for VIP inject: `uvm_callback.txt`. Skip in pin smoke.
+- Sequence library / protocol layering / CLI plusargs (`+UVM_TESTNAME`, verbosity): only if user asks. Smoke hardcodes `run_test("…_test")`.
+- Macros: `` `uvm_object_utils `` / `` `uvm_component_utils `` required; avoid `` `uvm_do `` unless asked (`uvm_do.txt`).
+
+## ChipSutra defaults vs the guide
+- Community closed-loop is Pure SV / Verilator. UVM generate is source-correct, not Verilator UVM sign-off.
+- Do not mix `ovm_*` into a UVM TB. Legacy mix: `ovm_vmm_interop_emit.txt`.

@@ -1,0 +1,94 @@
+# UVM Driver [uvm_driver]
+# Active component: sequencer items -> pin wiggles on virtual interface.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Driver.
+# Needs: uvm_transaction.txt, uvm_first_tb_dut.txt, uvm_component.txt.
+
+## Role
+- Extends `uvm_driver #(REQ)` (RSP defaults to REQ).
+- Does **not** invent stimulus — pulls items from sequencer, drives IF cycle-by-cycle.
+- Never drives DUT outputs (e.g. `rdata` on `reg_if`).
+
+## Class skeleton
+```systemverilog
+class reg_driver extends uvm_driver #(reg_transaction);
+  `uvm_component_utils(reg_driver)
+  virtual reg_if vif;
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    if (!uvm_config_db#(virtual reg_if)::get(this, "", "vif", vif))
+      `uvm_fatal(get_type_name(), "Didn't get handle to virtual interface reg_if")
+  endfunction
+
+  // run_phase: get_next_item -> drive -> item_done
+endclass
+```
+- Parameterize on the sequence_item type used with the sequencer.
+- `virtual` IF only — classes cannot instantiate interfaces; top sets config_db.
+
+## Sequencer handshake (default)
+| Method | Role |
+|--------|------|
+| `seq_item_port.get_next_item(tr)` | Blocking pull; must pair with `item_done` |
+| `seq_item_port.item_done()` | Complete handshake (after drive done) |
+| `try_next_item` | Nonblocking; null if none; still needs `item_done` if got item |
+
+Built-in `seq_item_port` connects to sequencer `seq_item_export` in agent's `connect_phase`.
+Sequence `finish_item` stays blocked until `item_done` — one item in flight.
+
+**Prefer get_next_item / item_done** for ChipSutra smoke.
+Deep-dive + timeline: `uvm_get_next_item.txt`.
+
+### Alternate: get / put
+- `get(tr)` unblocks sequence `finish_item` immediately; later `put(tr)` + sequence `get_response`.
+- Details: `uvm_get_put.txt` — not default emit.
+
+## Drive timing (reg_block / reg_if)
+Fixed latency DUT (see `uvm_first_tb_dut.txt`):
+
+```systemverilog
+virtual task run_phase(uvm_phase phase);
+  reg_transaction tr;
+  // optional: wait for rst_n before forever
+  forever begin
+    seq_item_port.get_next_item(tr);
+
+    @(posedge vif.clk);
+    vif.wr_en <= tr.wr_en;
+    vif.rd_en <= tr.rd_en;
+    vif.addr  <= tr.addr;
+    vif.wdata <= tr.wdata;
+    @(posedge vif.clk);          // DUT samples / acts on this edge
+
+    if (tr.rd_en) begin
+      @(posedge vif.clk);        // rdata valid one cycle after rd_en sample
+      tr.rdata = vif.rdata;
+    end
+
+    seq_item_port.item_done();
+  end
+endtask
+```
+- Drive edge + act edge are separate — do not `item_done` before DUT saw the request.
+- Do not sample `rdata` on the act edge of `rd_en` — need +1 cycle.
+- Deassert enables between ops when protocol needs idle (optional for chapter smoke).
+
+## Beginner mistakes
+1. `item_done` without matching `get_next_item` (or double done).
+2. Single clock wait then done — DUT never samples request.
+3. Missing config_db get / null vif — always `` `uvm_fatal ``.
+4. Driving `rdata` from driver.
+5. Fake APIs: `.put()` as primary UVM path when meaning get_next_item; `.configure(vif)`.
+
+## ChipSutra emit notes (methodology=uvm)
+- Always: `uvm_driver #(txn)`, utils, two-arg new, config_db vif, forever get_next_item/drive/item_done.
+- config_db set/get details: `uvm_config_db.txt`.
+- Map txn fields 1:1 onto IF; honor DUT timing (combo vs registered).
+- Reset: wait `rst_n` high before stimulus loop when DUT has reset.
+- Agent must `drv.seq_item_port.connect(sqr.seq_item_export)` in connect_phase — see `uvm_sequencer.txt`.
+- User DUT Generate: use that DUT's ports/latency — chapter reg_* is the teaching example only.
+- Passive observe side: `uvm_monitor.txt` (same timing knowledge, never drive).

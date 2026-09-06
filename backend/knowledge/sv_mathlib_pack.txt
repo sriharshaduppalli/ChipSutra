@@ -1,0 +1,11 @@
+# AsFigo MathLib pack (ChipSutra original — do not vendor library SV)
+# Clone https://github.com/AsFigo/MathLib and set CHIPSUTRA_MATHLIB_DIR to import the package.
+
+## When to use
+- Sim-only real/vector/matrix helpers (DAC MathLib PKG).
+- Import `asfigo_MathLib_pkg` from the user clone; do not paste package source into the DUT.
+- FPGA / Yosys RTL: use integer/fixed-point or CORDIC/LUT — never `real`.
+
+## Modulo and real
+- SV `real` modulo is sim-oriented; do not treat it as synthesizable.
+- Keep golden math in the TB scoreboard when the DUT is integer RTL.

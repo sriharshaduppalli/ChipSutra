@@ -81,6 +81,18 @@ def test_rag_vector_status_shape():
     assert isinstance(st["note"], str) and st["note"]
     if "chunk_count" in st:
         assert st["chunk_count"] >= 0
+    assert "warmed" in st
+
+
+def test_warm_index_sets_warmed():
+    out = rag_vector.warm_index()
+    assert out["warmed"] is True
+    st = rag_vector_status()
+    assert st["warmed"] is True
+    assert st["warm_chunks"] == out["chunks"]
+    if out["ok"]:
+        assert st["warm_ok"] is True
+        assert st["warm_chunks"] >= 1
 
 
 def test_vector_backend_disabled_by_env(monkeypatch):
@@ -325,13 +337,15 @@ def test_golden_readme_documents_suite():
     assert "verilator" in text.lower()
 
 
+@pytest.mark.serial
+@pytest.mark.verilator
 @pytest.mark.skipif(not shutil.which("verilator"), reason="verilator not installed")
 @pytest.mark.parametrize("name", ["fifo.sv", "axi_lite_slave.sv"])
 def test_golden_rtl_verilator_lint(name):
-    proc = subprocess.run(
-        ["verilator", "--lint-only", "-Wall", str(GOLDEN / name)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-    )
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # Route through dv_verify: it invokes verilator with relative paths from a
+    # temp cwd, which also works when verilator is the WSL .bat shim.
+    from dv_verify import verify_sv_sources
+
+    src = (GOLDEN / name).read_text(encoding="utf-8")
+    r = verify_sv_sources([(name, src)], mode="lint", timeout_s=120.0)
+    assert r.get("ok"), r.get("errors") or r.get("log")

@@ -1,0 +1,56 @@
+# UVM Reporting Classes
+# Why UVM messages replace bare $display. ChipSutra original wording.
+# Curriculum: ChipVerify Reporting Classes (Reporting & Utilities).
+# Pair with: uvm_base_classes.txt (uvm_report_object), uvm_root.txt, uvm_object_print.txt.
+# API detail: uvm_reporting_functions.txt.
+
+## Why not only $display
+Plain SystemVerilog:
+```systemverilog
+$display("%t addr=0x%0h data=0x%0h", $time, addr, data);
+```
+Problems for a full TB:
+- No severity (info vs warning vs error vs fatal).
+- Hard to keep format consistent across files/components.
+- No standard way to filter debug noise without editing/removing prints.
+- No policy for actions (log file, count, stop, demote) by severity or ID.
+
+UVM reporting gives **consistent formatting**, **severity**, **ID tags**, **verbosity filters**,
+and **configurable actions / destinations** (console, file, both).
+
+## Core pieces
+| Piece | Role |
+|-------|------|
+| `` `uvm_info `` / `` `uvm_warning `` / `` `uvm_error `` / `` `uvm_fatal `` | Preferred user API |
+| `uvm_report_object` | Owns per-component report path (components inherit it) |
+| `uvm_report_handler` | Verbosity + severity/ID action filters |
+| `uvm_report_server` | Global format / print / summary counts |
+
+Inheritance sketch (details in `uvm_base_classes.txt`):
+```
+uvm_object -> uvm_report_object -> uvm_component -> driver/env/test/...
+```
+Sequences are not components but still use the macros (via report infrastructure / `uvm_top`).
+
+## What you can configure (concept)
+Users configure behavior based on:
+- **Severity** — INFO / WARNING / ERROR / FATAL
+- **ID** — string tag in the macro (e.g. `"DRV"`, `"SCOREBOARD"`)
+- **Severity + ID** together
+- **Verbosity** — filter INFO (and similar) without deleting code
+- **Actions** — display, log, count, exit, ...
+- **Files** — send selected reports to log files
+
+Global verbosity example (often on `uvm_top`):
+```systemverilog
+uvm_top.set_report_verbosity_level_hier(UVM_HIGH);
+```
+
+## ChipSutra emit notes
+- Always prefer `` `uvm_info/`uvm_warning/`uvm_error/`uvm_fatal `` over bare `$display` in UVM TB code.
+- Use a stable **ID** per component/role (`"DRV"`, `"MON"`, `"SB"`) — helps filter and demote later.
+- Smoke: `UVM_LOW` / `UVM_MEDIUM` for must-see messages; keep high-volume debug at `UVM_HIGH`/`UVM_DEBUG`.
+- Scoreboard mismatches: `` `uvm_error `` (or fatal if team policy); summary in `report_phase`.
+- Do not invent custom print frameworks; stay on Accellera report path.
+- Object pretty-print (`sprint` / `convert2string`) still goes **inside** a report macro — see `uvm_object_print.txt`.
+- Macro / verbosity API: `uvm_reporting_functions.txt`.

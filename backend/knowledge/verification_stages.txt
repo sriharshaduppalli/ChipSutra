@@ -1,0 +1,49 @@
+# Verification stages (ChipSutra)
+# Block → subsystem → system/SoC. Curriculum map: ChipVerify Verification Stages
+# (original ChipSutra wording; do not paste tutorial text).
+# ChipSutra scale knobs: block | ip | processor | subsystem | soc | chiplet.
+
+## why_stages
+- RTL is written block by block in parallel. Waiting for a full SoC sim finds bugs when they are slowest and costliest to fix.
+- Each stage has a different DUT, owner, and primary concern. Later stages do not replace earlier ones.
+- Stages overlap in calendar time: ready clusters integrate while other blocks still close coverage.
+
+## block_stage
+- DUT = one IP/module in isolation. TB supplies all neighboring stimulus. Failures stay inside this block.
+- Targets: specified function, every CSR/FSM, protocol compliance on this block's ports, corners (full/empty/overflow, reset mid-op, back-to-back), illegal/timeout/error flags, reset values and idle FSM.
+- Highest coverage bar: typical 95–100% code coverage AND closed functional coverage vs the block vplan (documented waivers only).
+- 98% code coverage with 12/15 functional points open ≠ block sign-off.
+- ChipSutra: scale=block (pin smoke) or scale=ip (VIP four parts). Reuse that agent later — do not re-discover block bugs at integration.
+
+## subsystem_stage
+- DUT = two or more signed-off blocks connected. Focus = interfaces, not re-proving internal FSMs.
+- Targets: master/slave exchange, shared-resource contention, multi-reset order, datapath integrity across the interconnect, CDC between block clocks.
+- Unique bugs: each block passed its own tests; the failure appears only when they talk (protocol interpretation, timing assumption, reset dependency).
+- TB: reuse block VIP agents on the *subsystem* external ports; protocol checkers on internal buses. User topology.agents / address_map / clocks — never invent a crossbar.
+- ChipSutra: scale=subsystem. Virtual-seq outline + per-agent scoreboard. Not a full SoC env from one 7B call.
+
+## soc_stage
+- DUT = full chip (processors, memory, DMA, IRQ, peripherals, interconnect) plus software.
+- Targets: end-to-end paths (DMA, IRQ service, boot), firmware/drivers/OS, throughput/latency, power-domain/clock-gate/retention, many-block scenarios at once.
+- Full-chip RTL sim is too slow for a software stack. Use emulation for boot/bring-up and FPGA proto for real cables; keep targeted RTL sim for scenarios that need waves.
+- ChipSutra: scale=soc. Boot/reset-tree/IRQ only if the user listed them. scale=chiplet adds D2D VIP bounds.
+- Passing SoC tests does not replace block/subsystem: isolation is gone, sim is sparse, and a passing boot can miss an AXI RVALID bug in one slave.
+
+## regression
+- Block: many CRV seeds + directed; nightly farm; smoke on every commit before full nightly.
+- Subsystem: fewer, longer tests (multi-block sequences, interface compliance).
+- SoC: fewest tests, longest runtime; boot/perf; emu runs may sit outside RTL-sim regression infra.
+- Triage red tests before stacking new RTL. “Fix later” masks new failures.
+
+## bug_cost
+- Block: hours–days; designer still on the block.
+- Subsystem: days–week; may re-regress neighbors.
+- SoC: days–weeks; multi-block waves; re-sign-off at several levels.
+- Post-silicon: re-spin / workaround / errata; months and large mask cost.
+- Closing the last functional holes at block level is cheaper than hunting the same bug in a SoC boot fail.
+
+## handoff
+- Block sign-off: coverage targets met, func plan closed (waivers written), no open critical bugs, regression green on a named RTL snapshot.
+- Subsystem ready: constituent blocks signed off; interface specs frozen; integration TB ready.
+- SoC ready: subsystems signed off; sim + emu platforms ready; firmware available for bring-up.
+- ChipSutra must not claim sign-off. Emit the TB for the requested scale; list open holes as comments, not PASS.

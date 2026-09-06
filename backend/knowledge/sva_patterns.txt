@@ -1,23 +1,85 @@
-# SystemVerilog Assertions patterns (RAG). Bind to real DUT signals only.
+# SystemVerilog Assertions (SVA) patterns (deep RAG)
+# Curriculum map: https://chipverify.com/systemverilog/systemverilog-assertions
+# Bind to real DUT signals only. Prefer user clocks/resets.
 
-## Concurrent SVA basics
-- `assert property (@(posedge clk) disable iff (rst) ... );`
-- Use `|->` (overlapping) vs `|=>` (non-overlapping) correctly for handshake timing.
-- `##[1:N]` for bounded delays; avoid unbounded `##[*]` in formal unless intended.
-- `cover property` for reachability; `assume property` for environment constraints only.
+## Why assertions
+- Concise temporal checkers vs verbose procedural always-blocks.
+- Catch protocol / safety bugs concurrent with stimulus.
+- Also feed formal (assert/assume/cover/restrict) and coverage (cover property).
 
-## Protocol handshake properties
-- AXI-style: once valid high, hold data/ctrl until ready; valid must not depend on ready.
-- Never drop valid mid-transfer without ready (unless protocol allows).
-- Reset: outputs known/idle under reset; no spurious fires in `disable iff (rst)`.
-- APB: PENABLE only after PSEL setup; PREADY stretches access phase.
+## Statement kinds
+- `assert` — property must hold in sim (and often formal).
+- `assume` — environment constraint for formal stimulus (don't over-assume DUT outs).
+- `cover` — reachability / interesting scenario was seen.
+- `restrict` — formal-only computation constraint; ignored by most sims.
 
-## Safety / liveness
-- Safety: mutual exclusion, one-hot FSM, no X on control after reset release.
-- Liveness: request eventually granted within N cycles (bounded for formal).
-- CDC: 2FF sync; do not assert async paths without synchronizer assumptions.
+## Immediate vs concurrent
+- Immediate: procedural, like `assert (fifo_empty == 0) else $error(...);` at a point in time.
+- Concurrent: clocked sampled values — `assert property (@(posedge clk) disable iff (!rst_n) ...);`
+- ChipSutra default for protocol: concurrent with `disable iff` on active reset.
+
+## Building blocks
+1. Boolean expressions (signals / `$rose` / `$fell` / `$stable` / `$past`).
+2. `sequence` — temporal pattern over cycles.
+3. `property` — sequences + implications; optionally named.
+4. `assert`/`cover`/`assume` the property.
+
+```
+sequence s_req_ack; req ##[1:4] ack; endsequence
+property p_req_ack;
+  @(posedge clk) disable iff (!rst_n) req |-> s_req_ack;
+endproperty
+a_req_ack: assert property (p_req_ack) else $error("ack missing");
+c_req_ack: cover property (@(posedge clk) disable iff (!rst_n) req ##[1:4] ack);
+```
+
+## Labels and fail actions
+- Label concurrent directives: `a_req_ack: assert property (p_req_ack) else $error("ack missing");`
+- Name properties `p_*`, sequences `s_*`, covers `c_*`.
+- Clock concurrent properties; add `disable iff (!rst_n)` when reset is active-low.
+- Do not emit tautologies (`|-> 1'b1`) unless the spec listed no real requirement.
+- Do not put concurrent `assert property` inside `always_ff` — keep them at module/bind scope.
+
+## Implication and delay
+- `|->` overlapping (same cycle consequent may start).
+- `|=>` non-overlapping (consequent starts next cycle).
+- `##N` fixed delay; `##[M:N]` bounded window (prefer for formal).
+- Avoid unbounded `##[*]` / `##[+]` in formal unless intentional liveness.
+- `$rose(sig)` / `$fell` / `$stable` / `$changed` for edge-aware props.
+
+## Protocol handshake properties (emit only matching RTL)
+- Valid/ready: once valid, hold payload until ready; often `valid && !ready |=> valid` and stable data.
+- Valid must not combinationally depend on ready (tool/lint + SVA style checks).
+- APB: PENABLE only in access after PSEL setup; PREADY stretches access.
+- AXI channel: AWVALID held until AWREADY; same for W/AR/R/B as applicable.
+- Reset: outputs idle/known under reset; use `disable iff (!rst_n)` to avoid reset noise.
+
+## Safety vs liveness
+- Safety: never happens — mutex, one-hot FSM (`$onehot0(state)`), no X on ctrl after reset (`!$isunknown(ctrl)`).
+- Liveness: eventually happens — bounded `##[1:N] grant` for formal friendliness.
+- CDC: assert after synchronizer; assume async input constraints carefully.
+
+## Bind and organization
+- Prefer `bind dut_module sva_mod u_sva (.*);` with exact ports — keeps RTL clean.
+- One intent per named assert; short comment for expected formal depth.
+- Keep SVA in `*_sva.sv` or interface; ChipSutra assertions module should not invent ports.
 
 ## Formal-friendly style
-- Prefer boolean / bit-vector ops over DPI or `$past` depth explosion.
-- Name properties; one intent per assert; short comment of expected proof depth.
-- Bind files: `bind dut_module assertions_m u_asrt (.*);` with matching port list.
+- Prefer bit-vector boolean over DPI / deep `$past`.
+- Bound delays; split complex props into named sequences.
+- `assume` only TB/environment inputs — never assume away DUT bugs on outputs.
+- Cover properties for interesting FSM arcs / handshake corners.
+
+## ChipSutra generation tips
+- When module=assertions: emit concurrent props for clocks/resets + key handshakes from RTL.
+- Name: `a_<feature>`, `c_<feature>`.
+- Include `disable iff` matching reset polarity (`rst` high-active vs `rst_n`).
+- If protocol unclear: emit smoke safety (`!$isunknown` after reset) + TODO comments — no fake AXI on counters.
+
+## Anti-patterns
+- Asserting without clocking event on concurrent props.
+- Missing `disable iff` → floods during reset.
+- Unbounded delays that formal cannot prove.
+- Assuming DUT outputs "always OK".
+- Immediate assert in wrong edge (sampling X) — use concurrent or `#0`/`#1step` carefully.
+- Copy-paste AXI asserts onto non-AXI DUT.

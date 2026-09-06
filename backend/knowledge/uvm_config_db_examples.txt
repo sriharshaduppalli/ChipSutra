@@ -1,0 +1,75 @@
+# uvm_config_db Examples
+# Path matching, scope precedence, and +UVM_CONFIG_DB_TRACE debug.
+# ChipSutra original wording. Curriculum: ChipVerify uvm_config_db Examples.
+# API reference: uvm_config_db.txt. Overview: uvm_configure_components.txt / uvm_resource_db.txt.
+
+## Methods (recap)
+```systemverilog
+uvm_config_db#(T)::set(cntxt, inst_name, field_name, value);
+bit ok = uvm_config_db#(T)::get(cntxt, inst_name, field_name, value);
+```
+
+## Scope rules
+1. Setting lives at scope ≈ `{cntxt}.{inst_name}` + `field_name`.
+2. If `cntxt` is `null`, `inst_name` is the full scope string.
+3. `inst_name` / `field_name` may use glob / regex style patterns on **set**.
+4. Higher hierarchy settings win over lower.
+5. Same hierarchy level → **last set wins**.
+6. Get succeeds only when the gettee's lookup scope **matches** the set expression.
+
+## Debug
+```text
++UVM_CONFIG_DB_TRACE
+```
+Logs every CFGDB/SET and CFGDB/GET (success + failed lookup). Use when get returns 0 unexpectedly.
+
+## Equivalent sets (same stored scope)
+From test `build_phase`, both produce scope `uvm_test_top.Friend`:
+```systemverilog
+uvm_config_db#(string)::set(null, "uvm_test_top", "Friend", "Joey");
+uvm_config_db#(string)::set(this, "", "Friend", "Joey");  // this = uvm_test_top
+```
+Env get with matching scope:
+```systemverilog
+if (uvm_config_db#(string)::get(null, "uvm_test_top", "Friend", name))
+  `uvm_info("ENV", $sformatf("Found %s", name), UVM_MEDIUM)
+```
+
+## Narrow vs broad visibility
+| Set from test | Who can get with `get(this,"",field,v)` |
+|---------------|----------------------------------------|
+| `(this, "")` or `(null,"uvm_test_top")` | Often only exact scope match patterns — prefer wildcards for children |
+| `(this, "*")` | Descendants under test |
+| `(this, "m_env")` | Env itself (not necessarily agents) |
+| `(this, "m_env.*")` | Children under env (agents), not always env itself |
+| `(this, "m_env.m_agent*")` | Agents only — **env get fails** |
+| `(this, "m_env.m_agent*")` + `(this, "m_env")` | Agents **and** env |
+| `(null, "uvm_test_top.m_env.m_agent1")` | Only agent1 |
+| `(this, "*.m_agent1")` / `(this, "m_env.m_ag*")` | Matching agent path(s) |
+
+Typical agent-only set + agent get:
+```systemverilog
+// test
+uvm_config_db#(string)::set(this, "m_env.m_agent*", "Friend", "Joey");
+// agent build — OK; env with get(this,"","Friend") — FAIL
+if (!uvm_config_db#(string)::get(this, "", "Friend", name))
+  `uvm_warning("CFG", "Friend not visible here")
+```
+
+## Recommended practice
+- Scope settings to components that need them — avoid dumping everything at `uvm_test_top` only (name collisions + accidental gets).
+- Getters use `get(this, "", field, val)` for “my scope”; setters use relative paths from test/env (`"m_agent*"`, `"m_env.*"`).
+- For vif smoke: `set(null, "uvm_test_top.*", "vif", vif)` or `"*"` then drv/mon `get(this,"","vif",vif)`.
+- Prefer one config object field over many colliding string keys (`uvm_config_db.txt`).
+
+## Beginner mistakes
+1. Set for `"m_env.m_agent*"` then get from env — scope mismatch.
+2. Expecting get wildcards to work like set globs — use `get(this,"",…)`.
+3. Field name typo — TRACE shows failed lookup.
+4. Set after children already built.
+
+## ChipSutra emit notes
+- Smoke: top sets vif broadly (`"uvm_test_top.*"` / `"*"`); components get locally.
+- Test knobs for one agent: `set(this, "m_env.m_agent0*", "…", …)` not global unless intentional.
+- When debugging Generate TB config misses: suggest `+UVM_CONFIG_DB_TRACE`.
+- Full API: `uvm_config_db.txt`.

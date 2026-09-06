@@ -1,0 +1,11 @@
+# AXI4-Stream VIP emit guide (ChipSutra)
+
+## axi4_stream handshake
+- TVALID/TREADY: master may wait on TREADY; timeout required.
+- TDATA with TKEEP/TSTRB/TUSER/TID/TDEST/TLAST only if present in RTL.
+- Packet: assert TLAST on last beat when the DUT uses packets.
+- Reset: aresetn; idle TVALID=0 after reset.
+
+## axis scoreboard
+- Queue of beats or packet assembler; compare sink outputs / accepted beats.
+- UVM: txn tdata/tlast/tkeep; monitor writes on handshake fire (VALID&&READY).

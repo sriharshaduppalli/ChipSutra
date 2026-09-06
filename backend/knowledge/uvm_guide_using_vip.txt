@@ -1,0 +1,79 @@
+# Guide - Using Verification Components
+# Integrate third-party / reused UVCs into an env + test. ChipSutra original wording.
+# Curriculum: ChipVerify Guide - Using Verification Components.
+# Pair with: uvm_guide_reusable_vip.txt, uvm_env.txt, uvm_virtual_sequencer.txt,
+# uvm_scoreboard.txt, uvm_config_db.txt.
+
+## Shift in role
+Building a VIP ≠ integrating one. Once UVCs exist per DUT IF, the job is:
+review contract → place in `uvm_env` → connect TLM → configure from test →
+drive with sequences → add **project** scoreboard/coverage — without editing UVC source.
+
+## 1. Review the UVC contract
+Before coding, identify:
+| Item | Question |
+|------|----------|
+| Cfg object | Type + fields (`vif`, `is_active`, knobs) |
+| Virtual IF | Type + config_db key from TB top |
+| Analysis ports | Agent-level `ap` (red flag if must dig into mon) |
+| Sequences | Ship library — extend vs use as-is |
+
+Well-built UVCs expose cfg + agent `ap` only.
+
+## 2. Instantiate UVCs only in uvm_env
+- Never put agents inside `uvm_test` — topology belongs in env (shareable / nestable).
+- Tests touch sequences + cfg; env owns agents/scoreboard.
+- `build_phase`: create cfgs → fill vif from config_db → `set` cfg to each agent →
+  `type_id::create` agents (and project scb).
+
+```systemverilog
+slv_cfg.is_active = UVM_PASSIVE;
+uvm_config_db#(axi_agent_cfg)::set(this, "axi_mst", "cfg", mst_cfg);
+axi_mst = axi_agent::type_id::create("axi_mst", this);
+```
+
+## 3. connect_phase owns TLM wiring
+Env connects agent analysis ports → scoreboard / coverage exports.
+Wire real sequencers into virtual sequencer handles here.
+UVC and scoreboard must not hold hard references to each other.
+
+## 4. Configure from the test (not rebuild env)
+- Prefer one `chip_env_cfg` holding all agent cfgs; test sets knobs then
+  `uvm_config_db#(chip_env_cfg)::set(this, "env", "cfg", cfg)` before `super.build`.
+- Base test builds defaults; derived tests only flip needed fields
+  (e.g. `en_coverage=0` for fast smoke).
+
+## 5. Drive only via sequences
+- `seq.start(env.axi_mst.seqr)` or prefer **virtual sequencer** for multi-IF.
+- Constrain sequence knobs externally — do not edit UVC sequence source.
+- Never poke `vif` / clocks from the test when a UVC owns that IF.
+- Virtual sequence: `uvm_virtual_sequence.txt` / `uvm_virtual_sequencer.txt`.
+
+## 6. Project checking = scoreboard
+- UVC monitor: protocol checks OK; **functional** predict/compare in project SB.
+- Multi-export scoreboard via `` `uvm_analysis_imp_decl `` when several agents feed it.
+- Do not put data correctness inside the UVC monitor.
+
+## 7. Project coverage = separate subscriber
+- Protocol coverage may ship in UVC; DUT feature coverage = your `uvm_subscriber`.
+- Connect in env `connect_phase`: `axi_mst.ap.connect(cov.analysis_export)`.
+
+## 8. Tests as scenarios, not signals
+Organize: directed / constrained-random / stress / error-inject (callbacks).
+No `vif.addr` / `@(posedge clk)` in tests if UVC abstraction is intact.
+
+## Common mistakes
+| Wrong | Right |
+|-------|-------|
+| Agents in `uvm_test` | Agents in `uvm_env` |
+| Absolute config_db paths to agents | Env distributes cfg with relative paths |
+| Every test hard-codes `env.agent.seqr` | Virtual sequencer layer |
+| Functional check in monitor | Project scoreboard |
+| Editing UVC for coverage toggles | Env/test cfg fields |
+
+## ChipSutra emit notes
+- Single-IF smoke: one agent in env + one seq from test is enough (no vseqr required).
+- Multi-IF / SoC-style Generate: env + optional env_cfg + vseqr + project SB.
+- Never invent UVC internals — match user/provided agent API (cfg name, ap, seqr).
+- Companion “how to build VIP”: `uvm_guide_reusable_vip.txt`.
+- Worked single-IF example (pattern FSM): `uvm_tb_example_pattern.txt`.

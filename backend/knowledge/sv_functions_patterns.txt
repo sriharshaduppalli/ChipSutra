@@ -1,0 +1,74 @@
+# SystemVerilog functions (ChipVerify)
+# Return a value for use in expressions; must not consume simulation time.
+# Curriculum: ChipVerify — SystemVerilog Functions
+
+## Function rules
+- Primary purpose: return a value usable in an expression.
+- **Cannot consume time**: no `@`, `#`, `fork/join`, `wait`, or other time-controlled statements.
+- **Cannot call a task** (tasks may consume time).
+- Tasks are for time-consuming TB work (`run`, reset, drive); functions for compute (`check`, `predict` helpers, `print` formatting).
+- ChipSutra: `function bit check(...)` — never `task check` with `return`.
+
+## ANSI-C style declaration
+```systemverilog
+function byte sum(int x, int y);
+  sum = x + y;          // implicit return var named like the function
+endfunction
+
+function byte mul(int x, y);
+  return x * y;         // explicit return
+endfunction
+
+// use: int s = sum(3,4);  $display("%0d", sum(5,9));
+```
+
+## Declarations and directions (legacy / mixed)
+```systemverilog
+function bit [7:0] sum;
+  input int x, y;
+  output sum;           // old-style ports still valid
+  sum = x + y;
+endfunction
+
+function byte mul(input int x, y, output int res);
+  res = x * y + 1;
+  return x * y;         // return value + output arg
+endfunction
+```
+- Prefer ANSI-C style in new ChipSutra code.
+
+## Pass by value (default)
+- Each argument is **copied** into the subroutine; changes to locals are not visible to the caller.
+
+```systemverilog
+function int fn(int a);
+  a = a + 5;
+  return a * 10;
+endfunction
+// caller a unchanged after fn(a)
+```
+
+## Pass by reference (ref)
+- Prefix argument with `ref` — subroutine sees the **original** variable; assignments update the caller.
+- Function (or task) must be **`automatic`** — `ref` is illegal with `static` lifetime.
+
+```systemverilog
+function automatic int fn(ref int a);
+  a = a + 5;
+  return a * 10;
+endfunction
+// caller a is modified
+```
+
+## ChipSutra TB usage
+- Scoreboard: `function void predict(...);` / `function bit check(...);` — pure compute, no delays.
+- Driver/monitor `run` / `reset`: **tasks** (they `@ (posedge)`).
+- Class methods default to automatic in SV classes — `ref` args OK on class functions/tasks when needed.
+- Prefer return values over `output` ports for simple helpers; use `ref`/`output` when updating caller structs.
+- `void'(f())` when discarding a function return (e.g. `$urandom`).
+
+## Anti-patterns
+- `#` or `@(posedge)` inside a `function` (illegal / non-portable).
+- `task check` that `return`s a bit (ChipSutra lint: `task_with_return`).
+- `ref` on a static-lifetime subroutine.
+- Huge side-effecting functions that should be tasks (file I/O with delays, stimulus loops).

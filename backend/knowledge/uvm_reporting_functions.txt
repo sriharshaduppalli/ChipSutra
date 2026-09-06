@@ -1,0 +1,63 @@
+# UVM Reporting Functions
+# uvm_report_* API, `uvm_* macros, verbosity enum. ChipSutra original wording.
+# Curriculum: ChipVerify Reporting Functions.
+# Pair with: uvm_reporting_classes.txt, uvm_base_classes.txt, uvm_root.txt.
+
+## Who has reporting
+Most VIP components extend `uvm_report_object` (via `uvm_component`), so they already
+own `uvm_report_info` / warning / error / fatal and the `` `uvm_* `` macros.
+
+## Calling functions
+```systemverilog
+uvm_report_info   ("TAG", $sformatf("msg"), VERBOSITY);
+uvm_report_warning("TAG", $sformatf("msg"));
+uvm_report_error  ("TAG", $sformatf("msg"));
+uvm_report_fatal  ("TAG", $sformatf("msg"));  // exits simulation
+```
+- Verbosity argument is required for **info** (filterable).
+- Warning / error / fatal do not take a verbosity level the same way; fatal ends the run.
+- Optional file/line:
+```systemverilog
+uvm_report_info(get_type_name(), "msg", UVM_NONE, `__FILE__, `__LINE__);
+```
+Disable file/line via `+UVM_REPORT_DISABLE_FILE_LINE` on the sim command line.
+
+## Prefer macros
+Macros auto-inject `__FILE__` / `__LINE__` — do not pass them by hand:
+```systemverilog
+`uvm_info   (get_type_name(), $sformatf("[Driver] ..."), UVM_LOW)
+`uvm_warning(get_type_name(), $sformatf("[Driver] ..."))
+`uvm_error  (get_type_name(), $sformatf("[Driver] ..."))
+`uvm_fatal  (get_type_name(), $sformatf("[Driver] ..."))
+```
+ChipSutra emit: always macros in generated TB; avoid raw `uvm_report_*` unless needed.
+
+## Verbosity enum
+```systemverilog
+typedef enum {
+  UVM_NONE   = 0,
+  UVM_LOW    = 100,
+  UVM_MEDIUM = 200,  // default threshold
+  UVM_HIGH   = 300,
+  UVM_FULL   = 400,
+  UVM_DEBUG  = 500
+} uvm_verbosity;
+```
+Rule of thumb: a message prints if its verbosity value is **<=** the configured threshold.
+- Threshold `UVM_HIGH` → NONE/LOW/MEDIUM/HIGH print; FULL/DEBUG stay quiet.
+- Threshold `UVM_LOW` → only NONE and LOW.
+- Default configuration is **UVM_MEDIUM**.
+
+Raise globally (common):
+```systemverilog
+uvm_top.set_report_verbosity_level_hier(UVM_HIGH);
+```
+Or via plusarg `+UVM_VERBOSITY=UVM_HIGH` when the runner supports it.
+
+## ChipSutra emit notes
+- Must-see progress: `UVM_LOW` / `UVM_MEDIUM`.
+- Per-cycle / high-volume debug: `UVM_HIGH` or above — never flood default runs.
+- SB mismatch / protocol fail: `` `uvm_error ``; unrecoverable setup: `` `uvm_fatal ``.
+- ID: `get_type_name()` or a short role tag (`"DRV"`) — keep stable across the VIP.
+- Concepts / why reporting exists: `uvm_reporting_classes.txt`.
+- Object dump strings still belong inside these macros (`uvm_object_print.txt`).

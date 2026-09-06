@@ -1,0 +1,60 @@
+# Using get_next_item()
+# Driver↔sequencer pull handshake (REQ/RSP). ChipSutra original wording.
+# Curriculum: ChipVerify Using get_next_item().
+# Pair with: uvm_driver.txt, uvm_sequencer.txt, uvm_sequence.txt.
+# Alternate style: uvm_get_put.txt.
+
+## Role
+`uvm_driver #(REQ,RSP)` pulls **REQ** items from the sequencer FIFO via `seq_item_port`
+and may return an **RSP** (often same type as REQ). Two common pull styles:
+1. **`get_next_item` + `item_done`** (this page) — ChipSutra default
+2. **`get` + `put`** — alternate (next article)
+
+## Driver side
+```systemverilog
+forever begin
+  seq_item_port.get_next_item(req);   // blocking until an item is ready
+  // drive DUT via vif using req fields ...
+  seq_item_port.item_done();          // optional: item_done(rsp)
+end
+```
+- `get_next_item` is **blocking**.
+- Must call `item_done` after drive completes — unblocks sequence `finish_item`.
+- Optional: `item_done(rsp)` places response in sequencer response FIFO.
+- Never call `item_done` without a matching successful get.
+
+## Sequence side (how items reach the FIFO)
+```systemverilog
+virtual task body();
+  my_data tx = my_data::type_id::create("tx");
+  start_item(tx);      // wait until sequencer grants / driver ready
+  void'(tx.randomize()); // late randomization OK — same object handle
+  finish_item(tx);     // blocks until driver item_done
+endtask
+```
+Call order observed in logs: sequence reaches `start_item` → driver gets item →
+drive → `item_done` → sequence `finish_item` returns.
+
+## Connect (required)
+```systemverilog
+m_drv.seq_item_port.connect(m_seqr.seq_item_export);
+```
+Missing connect → `get_next_item` hangs forever.
+Production layout: driver+sequencer inside **agent** (teaching demos may put them in test).
+
+## Timeline (one item)
+| Time | Actor | Action |
+|------|-------|--------|
+| T0 | Sequence | `start_item` / create |
+| T0 | Driver | `get_next_item` unblocks |
+| T0 | Sequence | randomize (late) |
+| T0..Tdrive | Driver | pin wiggle |
+| Tend | Driver | `item_done` |
+| Tend | Sequence | `finish_item` returns |
+
+## ChipSutra emit notes
+- Smoke/Generate: forever `get_next_item` → drive → `item_done` in driver `run_phase`.
+- Sequences: explicit `start_item` / randomize / `finish_item` (not `` `uvm_do `` by default).
+- Parameterize driver and sequencer on the same `sequence_item` type.
+- Prefer agent hierarchy over bare drv/seqr in test for real VIP.
+- Alternate `get`/`put` handshake: `uvm_get_put.txt` — do not emit unless user asks.

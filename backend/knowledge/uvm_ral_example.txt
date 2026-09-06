@@ -1,0 +1,77 @@
+# UVM Register Model Example
+# End-to-end traffic-light APB RAL stack map. ChipSutra original wording.
+# Curriculum: ChipVerify UVM Register Model Example.
+# Pair with: uvm_ral.txt, uvm_ral_classes.txt, uvm_ral_env.txt, uvm_ral_connect.txt,
+# uvm_ral_backdoor.txt, uvm_agent.txt.
+
+## What this example proves
+Full frontdoor path for a small APB CSR DUT:
+DUT regs → RAL model → adapter → APB agent → `set_sequencer` + predictor →
+test `write`/`read`/`set`/`update`/`mirror`.
+
+Use as a **pattern checklist**, not as ChipSutra’s default smoke TB.
+Emit only when user supplies a CSR map + bus protocol (or explicitly wants this demo).
+
+## DUT register map (traffic APB)
+| Offset | Reg | Access | Notes |
+|--------|-----|--------|-------|
+| `0x0` | `ctl` | RW | fields: mod_en, bl_yellow, bl_red, profile |
+| `0x4` | `timer_0` | RW | 32-bit timer word |
+| `0x8` | `timer_1` | RW | 32-bit timer word |
+| `0xC` | `stat` | RO | state[1:0] |
+
+Ports: classic APB (`pclk`, `presetn`, `paddr`, `pwdata`, `prdata`, `psel`, `pwrite`, `penable`).
+IF: `bus_if` with those signals (clocking/modports optional for teaching).
+
+## Layer map
+```
+tb_top: DUT + bus_if + config_db vif + run_test
+  my_env
+    my_agent  (driver, sequencer#(bus_pkt), monitor.ap)
+    reg_env
+      ral_sys_traffic (model) + lock_model + config_db
+      reg2apb_adapter (reg2bus / bus2reg)
+      uvm_reg_predictor#(bus_pkt)
+```
+
+`connect_phase` (parent env) — required:
+```systemverilog
+m_agent.m_mon.mon_ap.connect(m_reg_env.m_apb2reg_predictor.bus_in);
+m_reg_env.m_ral_model.default_map.set_sequencer(m_agent.m_seqr, m_reg_env.m_reg2apb);
+```
+
+## Model structure (sketch)
+- `ral_cfg_ctl` / `ral_cfg_stat` / `ral_cfg_timer` extend `uvm_reg` — fields via `configure(...)`.
+- `ral_block_traffic_cfg` extends `uvm_reg_block` — `create_map`, `add_reg` at 0/4/8/C.
+- `ral_sys_traffic` top block — `add_submap(cfg.default_map, 0)`; optional HDL path for backdoor.
+
+Prefer IP-XACT → generated model in real projects; hand model only for tiny maps.
+
+## Agent essentials
+- `bus_pkt`: addr / data / write.
+- Driver: APB setup→access (psel/penable) read/write tasks; return read data on pkt.
+- Monitor: on `psel & penable`, publish `bus_pkt` on analysis port.
+- Agent: drv↔seqr connect; mon.ap left for env→predictor.
+
+## Sequence / test API to exercise
+After reset (reset_phase or reset_seq on bus):
+```systemverilog
+uvm_config_db#(ral_sys_traffic)::get(..., "m_ral_model", m_ral_model);
+m_ral_model.cfg.timer[1].write(status, 32'hcafe_feed);
+m_ral_model.cfg.timer[1].read(status, rdata);
+m_ral_model.cfg.timer[1].set(32'hface);           // desired only
+m_ral_model.cfg.timer[1].predict(32'hcafe_feed);
+m_ral_model.cfg.timer[1].mirror(status, UVM_CHECK);
+m_ral_model.cfg.ctrl.bl_yellow.set(1);
+m_ral_model.cfg.update(status);                    // push desired → DUT
+m_ral_model.cfg.stat.write(...);                   // RO — expect policy/status behavior
+```
+
+## ChipSutra emit notes
+- Do **not** emit this full stack for generic smoke — too heavy; use bus sequences or pin TB.
+- When user wants RAL: reuse pieces from `uvm_ral_classes` / `uvm_ral_env` / `uvm_ral_connect`
+  with **their** offsets/fields/protocol — do not copy traffic-light names blindly.
+- Always: `build` → `lock_model` → config_db; parent `set_sequencer` + mon→predictor.
+- APB adapter: set `supports_byte_enable` / `provides_responses` to match driver (often 0/0).
+- Teaching DUT RTL bugs (e.g. writable RO) are for demo — user DUT access policies win.
+- Verilator: full RAL often limited — prefer frontdoor bus agent without RAL if needed.

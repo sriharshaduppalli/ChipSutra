@@ -14,7 +14,14 @@ Add `deploy/.env.prod` and `deploy/Caddyfile` to your secrets backup; they are g
 
 ## 2. DNS
 
-Point **A/AAAA** records for `chipsutra.org`, `www.chipsutra.org`, and `api.chipsutra.org` to this machine (or load balancer in front of it).
+| Host | Must point at |
+|------|----------------|
+| `chipsutra.org` / `www` | Frontend (this Caddy, or GitHub Pages / Cloudflare Pages) |
+| `api.chipsutra.org` | **This Caddy/API host only** — never the Pages IPs |
+
+**Do not** give `api` the same A/AAAA records as the marketing site. Pages (and Cloudflare custom-hostname SSL) only issue certs for hostnames you add there. If `api` hits those IPs anyway, Chrome shows **`ERR_SSL_VERSION_OR_CIPHER_MISMATCH`** / “unsupported protocol” — the TCP port is open, but there is no TLS cert for `api.chipsutra.org`.
+
+If Cloudflare proxies `api` (orange cloud): SSL/TLS mode **Full (strict)**, and wait until **SSL/TLS → Edge Certificates** lists `api.chipsutra.org`. Grey-cloud `api` to the origin if you want Caddy to terminate Let’s Encrypt instead.
 
 ## 3. Start
 

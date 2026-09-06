@@ -76,6 +76,12 @@ services:
       # REDIS_URL: redis://redis:6379/0
     volumes:
       - chipsutra_storage:/app/storage
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/health', timeout=3)\""]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 40s
 
   # Optional: shared rate limiter for multi-replica backends
   #   docker compose --profile redis up --build
@@ -100,9 +106,16 @@ services:
         REACT_APP_BACKEND_URL: http://localhost:8001
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     ports:
       - "3000:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
 
 volumes:
   mongo_data:

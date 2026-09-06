@@ -1,0 +1,73 @@
+# UVM Sequence [uvm_sequence]
+# Stimulus generator: body() creates items and sends them via sequencer to driver.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Sequence.
+# Pair with: uvm_sequencer.txt, uvm_driver.txt, uvm_transaction.txt.
+
+## Role
+- Sequences generate transactions; sequencer routes; driver drives pins.
+- Extends `uvm_sequence #(REQ)` — a **uvm_object**, not a component (no parent in hierarchy).
+- Factory: `` `uvm_object_utils `` (not component_utils).
+- Constructor: `new(string name = "...")` only — same as other objects.
+
+## Declare + body()
+```systemverilog
+class reg_sequence extends uvm_sequence #(reg_transaction);
+  `uvm_object_utils(reg_sequence)
+
+  function new(string name = "reg_sequence");
+    super.new(name);
+  endfunction
+
+  virtual task body();
+    repeat (5) begin
+      req = reg_transaction::type_id::create("req");
+      start_item(req);
+      assert(req.randomize());   // late randomize between start/finish
+      finish_item(req);
+    end
+  endtask
+endclass
+```
+- Built-in `req` is already typed to `#(reg_transaction)` — prefer it over a local `tr`.
+- `start_item` blocks until sequencer/driver ready (`get_next_item` unblocks).
+- `finish_item` waits for driver's `item_done`.
+- **Zero sim time** between start_item and finish_item (no `#` / `@(posedge)` there).
+
+## Why not `uvm_do` first
+`` `uvm_do(req) `` = create + start_item + randomize + finish_item in one macro.
+ChipSutra smoke / teaching: prefer explicit four steps for debuggability; macros later if asked.
+
+## Starting a sequence
+```systemverilog
+reg_sequence seq = reg_sequence::type_id::create("seq");
+seq.start(m_sequencer);  // runs body() to completion
+```
+- Real tests: call from test `run_phase` with raise/drop **objection** so sim does not end early.
+- Objections / default_sequence / start vs `` `uvm_do ``: `uvm_sequence_usage.txt`.
+
+## p_sequencer
+- Type-specific sequencer handle via `` `uvm_declare_p_sequencer(my_sqr_t) ``.
+- Only needed to access **custom** sequencer members/methods.
+- Plain `start_item`/`finish_item` work without it.
+- Distinct from agent's instance name `m_sequencer`.
+
+## Inline constraints (practice patterns)
+```systemverilog
+assert(req.randomize() with { wr_en == 1; rd_en == 0; });  // write-only
+```
+Keep base class constraints; specialize in sequence without editing item constraints.
+
+## Beginner mistakes
+1. Delay between start_item and finish_item.
+2. Declaring redundant local txn instead of using `req` (works but non-idiomatic).
+3. Using `` `uvm_component_utils `` on a sequence.
+4. Never calling `seq.start(sqr)` / missing objection in test.
+5. Hardcoding stimulus in driver instead of sequences.
+
+## ChipSutra emit notes (methodology=uvm)
+- One simple random sequence in smoke TB: `repeat (N)` create/start/randomize/finish.
+- Start from test run_phase with objections; match sequencer type.
+- Legalize via item constraints + optional `randomize() with`.
+- Never invent `.put()` / `driver.start(this)` as sequence API.
+- `start()` lifecycle details: `uvm_sequence_start.txt`.
+- Pure SV layered analogue: generator class + mailbox (no uvm_sequence).

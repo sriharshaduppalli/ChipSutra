@@ -1,0 +1,78 @@
+# UVM TLM Blocking Get Port
+# Consumer calls get(); producer implements get as a task — opposite of put.
+# ChipSutra original wording. Curriculum: ChipVerify UVM TLM Blocking Get Port.
+# Pair with: uvm_tlm.txt, uvm_tlm_blocking_put.txt, fifo / analysis siblings.
+
+## Put vs get (direction)
+| Style | Who initiates call | Who implements the task |
+|-------|--------------------|-------------------------|
+| Put | Producer (`put_port.put`) | Consumer (`put_imp` → `task put`) |
+| Get | Consumer (`get_port.get`) | Producer (`get_imp` → `task get`) |
+
+Get = pull: requestor blocks until producer fills the `output` transaction.
+
+## Roles
+| Side | Type | Action |
+|------|------|--------|
+| Consumer (requestor) | `uvm_blocking_get_port #(T)` | `port.get(pkt)` — blocks until imp's `get` returns |
+| Producer (supplier) | `uvm_blocking_get_imp #(T, IMP)` | Implement `task get(output T t)` — create/fill txn |
+| Parent | connect | `consumer.m_get_port.connect(producer.m_get_imp)` |
+
+Ports/imps: `new("name", this)` in `build_phase`. Connect in parent `connect_phase`.
+
+## Minimal pattern
+```systemverilog
+// Producer (componentA) — implements get
+uvm_blocking_get_imp #(Packet, componentA) m_get_imp;
+function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  m_get_imp = new("m_get_imp", this);
+endfunction
+virtual task get(output Packet pkt);
+  pkt = Packet::type_id::create("pkt");  // prefer factory over bare new
+  assert(pkt.randomize());
+  // optional delay — consumer blocked until return
+endtask
+
+// Consumer (componentB) — calls get
+uvm_blocking_get_port #(Packet) m_get_port;
+function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  m_get_port = new("m_get_port", this);
+endfunction
+task run_phase(uvm_phase phase);
+  Packet pkt;
+  phase.raise_objection(this);
+  repeat (m_num_tx) begin
+    m_get_port.get(pkt);   // stalls until CompA.get returns
+  end
+  phase.drop_objection(this);
+endtask
+
+// Parent connect_phase — port -> imp
+compB.m_get_port.connect(compA.m_get_imp);
+```
+
+## Blocking behavior
+- Consumer stuck in `get()` until producer `get` task completes.
+- Time inside producer `get` (e.g. `#20`) delays when the consumer sees the next packet.
+- Nonblocking get: `uvm_tlm_nonblocking_get.txt`.
+
+## vs smoke TB paths
+| Need | Prefer |
+|------|--------|
+| Driver pulls from sequencer | `seq_item_port.get_next_item` / `item_done` (specialized get) |
+| Monitor pushes observations | analysis_port `write` (put-like broadcast) |
+| Custom pull producer→consumer | blocking get port + get_imp |
+
+## Beginner mistakes
+1. Connecting get_imp→get_port backward — always **port.connect(imp)**.
+2. Implementing `get` as a function — blocking get_imp needs a **task** with `output T`.
+3. Wrong `IMP` type on `uvm_blocking_get_imp #(T, IMP)`.
+4. Bare `pkt = new()` in producer — prefer `type_id::create` for factory overrides.
+5. Confusing with put: who calls vs who implements.
+
+## ChipSutra emit notes
+- Smoke UVM: keep sqr↔drv pull API; do not replace with generic get_port unless user asks for TLM get demo.
+- If emitting get path: factory create in producer `get`, objections on consumer loop, connect in parent.
+- Put counterpart: `uvm_tlm_blocking_put.txt`. Overview: `uvm_tlm.txt`.

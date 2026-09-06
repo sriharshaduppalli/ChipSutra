@@ -1,0 +1,92 @@
+# UVM Factory Override
+# Substitute derived types via create() without editing every new() site.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Factory Override.
+# Pair with: uvm_object.txt, uvm_utility_field_macros.txt, uvm_test.txt.
+
+## Why factory
+`new()` hard-wires the exact type at every call site. `type_id::create()` goes through
+the UVM factory so a test can swap a compatible derived type once for many sites.
+Always create UVM components/objects with `::type_id::create` — never `new` if overrides matter.
+
+```systemverilog
+// bypasses factory
+wb_pkt m_pkt = new("m_pkt");
+// overridable
+wb_pkt m_pkt = wb_pkt::type_id::create("m_pkt");           // object
+drv = my_driver::type_id::create("drv", this);             // component (name, parent)
+```
+
+## Prerequisites
+| Class kind | Macro |
+|------------|-------|
+| `uvm_component` | `` `uvm_component_utils `` |
+| `uvm_object` / sequence_item / sequence | `` `uvm_object_utils `` |
+
+Unregistered types → overrides silently do nothing. Override type must be a **subclass** of the requested type (assignment-compatible).
+
+## Override APIs
+Prefer `_by_type` (compile-time checked) over `_by_name` (typos fail late).
+
+| Method | Scope |
+|--------|-------|
+| `set_type_override_by_type(orig, over, replace=1)` | All creates of `orig` |
+| `set_type_override_by_name("orig", "over")` | Same, by string |
+| `set_inst_override_by_type(orig, over, full_inst_path)` | Only matching path |
+| `set_inst_override_by_name("orig", "over", path)` | Path + strings |
+
+Declare overrides in `build_phase` **before** `create()` of the affected hierarchy.
+Instance overrides beat type overrides when both apply.
+
+## Type override (global)
+```systemverilog
+virtual function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  set_type_override_by_type(base_agent::get_type(), child_agent::get_type());
+  uvm_factory::get().print();
+  m_env = base_env::type_id::create("m_env", this);  // AFTER override
+endfunction
+```
+Env still writes `base_agent::type_id::create(...)` — factory returns `child_agent`.
+
+## Instance override (path-scoped)
+```systemverilog
+// relative to caller, or build absolute with get_full_name()
+set_inst_override_by_type(base_driver::get_type(), eth_driver::get_type(),
+                          {get_full_name(), ".m_top_env.m_agnt0.*"});
+// or shorter relative from test:
+set_inst_override_by_type(base_agent::get_type(), child_agent::get_type(), "m_env.*");
+```
+- Path is UVM hierarchy; `*` wildcards OK.
+- Wrong path → silent no-op. Verify with `factory.print()`.
+
+## Type vs instance
+| | Type | Instance |
+|--|------|----------|
+| Scope | All instances | One path region |
+| Path needed | No | Yes |
+| Use | Protocol/packet global upgrade | One agent/driver/seq only |
+| Priority | Lower | Higher |
+
+## Multi-override test sketch
+```systemverilog
+set_type_override_by_type(eth_packet::get_type(), eth_v2_packet::get_type());
+set_inst_override_by_type(base_driver::get_type(), eth_driver::get_type(),
+                          {get_full_name(), ".m_top_env.m_agnt0.*"});
+set_inst_override_by_type(seq1::get_type(), seq2::get_type(),
+                          "m_top_env.m_agnt1.m_seqr0.*");
+uvm_factory::get().print();
+```
+
+## Beginner mistakes
+1. Missing utils macro on base or override type.
+2. Override after `create` — too late for that object.
+3. Instance path typo / wrong relative root.
+4. Override with unrelated (non-derived) type.
+5. Using `new()` in VIP — override never applies.
+
+## ChipSutra emit notes
+- methodology=uvm: always `` `uvm_*_utils `` + `type_id::create`; never `new` for agents/drv/mon/seq/txn.
+- Smoke TB: no overrides required. Emit overrides only when user asks for derived agent/driver/seq swap.
+- Place overrides in **test** `build_phase` before env create; call `factory.print()` when debugging.
+- Config knobs (vif, is_active): `uvm_configure_components.txt` / config_db — separate from factory type substitution.
+- Broader reusable VIP checklist: `uvm_guide_reusable_vip.txt`.

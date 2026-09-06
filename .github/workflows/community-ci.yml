@@ -20,6 +20,8 @@ jobs:
       - name: Validate docker-compose files
         run: |
           docker compose config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.ghcr.yml config --quiet
+          docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --quiet
           docker compose -f docker-compose.atlas.yml config --quiet
           docker compose -f docker-compose.backend-verilator.yml config --quiet
           docker compose -f docker-compose.prod.yml --env-file deploy/env.prod.example config --quiet

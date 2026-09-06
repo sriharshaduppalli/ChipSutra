@@ -1,0 +1,28 @@
+# Memory / DRAM / SRAM VIP emit (ChipSutra)
+# Never invent JEDEC tCK/tRCD/tRP, training sequences, or vendor PHY maps.
+
+## ddr
+- DDR3/4/5 command/address/data from user controller/PHY docs only.
+- If RTL is an AXI/APB front-door, emit that bus TB + user memory_map. Do not invent a DRAM model.
+- DFI / vendor PHY behind the controller: require user VIP. Outline dfi_* only if those ports exist.
+- Refresh / bank groups / ECC: cover items when RTL exposes status. Do not invent REFab timing.
+
+## lpddr
+- Same as ddr. User knob mem_variant=lpddr or RTL names lpddr_*.
+- Do not pick LPDDR4 vs LPDDR5.
+
+## hbm
+- HBM stacks / pseudo-channels from user docs. VIP-bound. No invented tCK.
+
+## dfi
+- Drive/check only dfi_* ports present on the DUT. Hold rules from user PHY doc.
+- Never invent a DFI version or timing table.
+
+## sram
+- On-chip SRAM/RF: chip-enable, write-enable, byte-enables from RTL.
+- Independent model_mem[addr]; check rdata after the DUT's stated latency (user or 1-cycle default).
+- ECC SECDED / scrub: only if those ports or user csr_list exist.
+
+## memory_vip_bound
+- DRAM training (write leveling, Vref, read gate) and HBM PHY require user VIP.
+- ChipSutra may emit a front-door bus smoke + opaque model_reg keyed by user memory_map.

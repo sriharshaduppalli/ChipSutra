@@ -1,0 +1,259 @@
+# Pure SV layered TB vs UVM TB
+# ChipSutra original wording. Honor user methodology — never mix stacks in one generate.
+
+## Compare (same jobs, different types)
+
+Both are layered class testbenches around the user's DUT. Pure SV is ChipSutra
+Community default (Verilator). UVM is IEEE 1800.2 when the user selects it.
+Honor methodology — never mix stacks in one generate.
+
+Packed (must-know):
+- Object vs component: Pure SV = plain classes. UVM txn/seq = uvm_object;
+  drv/mon/sqr/agent/env/test/sb = uvm_component. Never txn extends uvm_component.
+  Generator is object-like → sequence (not a UVM component).
+- Active vs passive: Pure SV drives if a generator exists. UVM `is_active`;
+  smoke `UVM_ACTIVE`. No virtual sequencer for a single-agent TB.
+- Golden math is identical (counter/FIFO/mux/parity/switch); only predict/check
+  vs write() changes.
+- UVM sequence: `seq.start(sqr)` + `start_item`/`finish_item` in body() — not
+  `` `uvm_do ``, not `default_sequence`, not `get_response` unless DUT returns data.
+- Top: `module` not `program`. Pure SV `$dump`+`$finish`. UVM `run_test` (no
+  `$finish` from a sequence).
+- RAL/`uvm_reg` only with a user CSR map (Pure SV uses assoc/`model_reg`).
+- Constraints on txn/item, never on the driver. Factory override = UVM reuse;
+  Pure SV reuse = copy/adapt.
+- Time: Pure SV gen/drv/mon `task` + `@(posedge)`; SB `run()` may `get`. UVM time
+  only in `run_phase` tasks. `write()` is a **function** — no `@` / `#` inside it.
+- Driver order: Pure SV mailbox `get` then drive. UVM `get_next_item` → drive →
+  `item_done` (never `.put`, never `item_done` before drive).
+- TLM polarity: `seq_item_port` is on the **driver**; `seq_item_export` on the
+  **sequencer**. `drv.seq_item_port.connect(sqr.seq_item_export)` — never reverse,
+  never port→monitor.
+- Create: Pure SV `new(vif, mb)` in env. UVM `type_id::create("name", this)` in
+  `build_phase`; always `super.new` / `super.build_phase` / `super.connect_phase`.
+  `` `uvm_object_utils `` on txn/seq; `` `uvm_component_utils `` on components.
+- File preamble: Pure SV `timescale` only. UVM `import uvm_pkg::*;` +
+  `` `include "uvm_macros.svh" `` before classes. No `set_config_int` (OVM).
+- Top clock: BOTH stacks need `always #5 clk=~clk` and a named DUT port map.
+  UVM top still has a clock — `run_test()` does not create clk.
+- Concurrency: Pure SV env `fork`s gen/drv/mon/sb. UVM each component has its
+  own `run_phase` — do not `fork` a generator inside `uvm_env`.
+- Pin discipline (layered): only the **driver** writes DUT inputs; only the
+  **monitor** samples pins; scoreboard sees **txns** (no `virtual if`); generator
+  / sequence / test speak transactions — test must not pin-wiggle the stimulus
+  loop (post-reset peek is OK). Monitor never assigns `vif.*`.
+- Knobs: Pure SV plusarg `+N`/`+SEED` or test field. UVM `config_db#(int)` /
+  `+UVM_TESTNAME` — not `uvm_resource_db`, not `set_config_int`.
+- Extra test: Pure SV copy the TB / plusarg. UVM extra `uvm_test` + factory
+  `set_type_override` — smoke does not emit an override.
+- Objections: ChipSutra smoke raises/drops in the **test** `run_phase` only
+  (not in `body()`).
+- SVA / covergroup: bind or module/interface (Pure SV `ifndef VERILATOR`).
+  Never concurrent `assert property` inside `write()`. UVM coverage =
+  subscriber on analysis, not the monitor.
+- Smoke file: one `.sv`. No phantom `` `include `` except `"uvm_macros.svh"`.
+  No `uvm_tlm_analysis_fifo`, no clocking block, unless the user asks.
+
+### Roles
+| Role (job) | Pure SV class | UVM class / API |
+|------------|---------------|-----------------|
+| DUT ports | `interface <dut>_if` | same `interface` + `virtual` via `uvm_config_db` |
+| Transaction | `<dut>_txn` (`new()`, rand+constraint) | `uvm_sequence_item` (`uvm_object_utils`, factory create) |
+| Stimulus | `<dut>_generator` — randomize + mailbox `put`, fixed N | `uvm_sequence` `task body()` + `uvm_sequencer`; `seq.start(sqr)` |
+| Pin wiggle | `<dut>_driver` (mailbox `get`) | `uvm_driver` (`get_next_item` / `item_done`) |
+| Observe pins | `<dut>_monitor` (mailbox `put`) | `uvm_monitor` (`analysis_port.write`) — never `uvm_subscriber` as the monitor |
+| Check vs golden | `<dut>_scoreboard` (mailbox `get`, `predict`/`check`) | `uvm_scoreboard` (`analysis_imp` + `write()`) |
+| Bundle VIP | env holds gen/drv/mon/sb | `uvm_agent` holds sqr/drv/mon; env holds agent+sb |
+| Build/connect | `<dut>_env` `new()` + `fork…join` | `uvm_env` `build_phase` + `connect_phase` |
+| Test knobs | `<dut>_test` calls `env.run(N)` | `uvm_test` + objections around `seq.start` |
+| Top | module: clk, DUT, `t.run(N)`, `$finish` | module: DUT+IF, `config_db::set`, `run_test()` |
+| Construct | `new(vif, mailbox)` | factory `type_id::create` in `build_phase` |
+| Connect gen→drv | mailbox `gen2drv` (1-to-1) | `drv.seq_item_port.connect(sqr.seq_item_export)` |
+| Connect mon→sb | mailbox `mon2sb` (1-to-1) | `mon.ap.connect(sb.imp)` (analysis is 1-to-many) |
+| Time | `task` + `@(posedge)` in gen/drv/mon; SB `run()` `get` | time only in `run_phase` tasks; `write()` is a function (no `@`/`#`) |
+| Macros | none | `` `uvm_object_utils `` / `` `uvm_component_utils `` |
+| Preamble | `timescale` | `import uvm_pkg::*;` + `` `include "uvm_macros.svh" `` |
+
+UVM adds `uvm_agent` as a reusable container (sqr+drv+mon). Pure SV usually
+inlines those three on the env.
+
+### Object vs component
+- Pure SV: every TB class is a plain `class` — no parent tree, no utils macros.
+- UVM: **objects** (`uvm_object` / `uvm_sequence_item` / `uvm_sequence`) vs
+  **components** (`uvm_driver` / `monitor` / `sequencer` / `agent` / `env` /
+  `test` / `scoreboard`). Never put the transaction on `uvm_component`.
+  The Pure SV generator is an object-like role — it becomes a sequence, not a
+  component in the UVM tree.
+
+### Active vs passive
+- Pure SV: if a generator exists, the TB drives. No `is_active` knob.
+- UVM: `uvm_active_passive_enum`. `UVM_ACTIVE` builds sqr+drv+mon; `UVM_PASSIVE`
+  is monitor-only (no sequencer/driver). Community smoke is `UVM_ACTIVE`.
+  Do not emit a virtual sequencer / virtual sequence for a single-agent TB.
+
+### Golden (same math, different API)
+Counter `expected+=enable`, FIFO `q[$]`, mux select, parity `^data`, switch MSB
+split — **identical** in both stacks. Only the call site changes (`predict`/`check`
+loop vs `write()`). Never invent a different golden because methodology=uvm.
+
+### Sequence API vs generator
+- Pure SV: no `start_item` / `finish_item` / `` `uvm_do `` / `default_sequence`.
+- UVM smoke: `seq.start(sqr)` from the test; in `body()` prefer `start_item` /
+  `finish_item` (or randomize+`start_item`). Do not use `` `uvm_do `` / sequence
+  library / `default_sequence` unless the user asks. No response path
+  (`item_done(rsp)` / `get_response`) unless the DUT returns data on that txn.
+
+### Module vs program; waves
+- Both ChipSutra smokes: `module` top, not `program` (Verilator-first).
+- Pure SV: `$dumpfile`/`$dumpvars`/`$finish` in the top initial.
+- UVM: `run_test()` ends the run; optional dump in top; never `$finish` from a
+  sequence or `run_phase`.
+
+### Events / callbacks / RAL
+- Pure SV Example 2 may teach `event` / `semaphore` (dual-thread monitor). Smoke
+  stays one-thread. UVM equivalent is `uvm_event` — never mix.
+- Callbacks: Pure SV empty virtual methods; UVM `uvm_callback` — skip in smoke.
+- Registers: Pure SV scoreboard assoc array / `model_reg`. UVM `uvm_reg` / RAL
+  only with a **user** CSR map — never invent one.
+
+### Constraints and hierarchy
+- Constraints live on the txn / sequence_item (both stacks), not on the driver.
+  UVM may also constrain inside `body()`.
+- Pure SV: no `get_full_name` parent tree. UVM: factory create with parent;
+  `get_full_name` for messages. Factory override (`set_type_override`) replaces
+  copy-paste reuse; smoke does not need an override.
+
+### Phases vs tasks
+- Pure SV: ordinary methods — `task reset()`, `task run(int n)`, `function void report()`.
+  Env `fork`s generator/driver/monitor/scoreboard. No UVM phase callbacks.
+- UVM: `build_phase` (create children), `connect_phase` (TLM `.connect` ONLY here),
+  `run_phase` (time-consuming; objections), `report_phase` (PASS/FAIL).
+  Never `.connect` in `build_phase`. Never `create` children in `run_phase`.
+
+### Construction and configuration
+- Pure SV: pass `virtual if` and mailboxes through `new(vif, gen2drv, mon2sb)`.
+- UVM: `uvm_config_db#(virtual <dut>_if)::set` in top, `get` in driver/monitor
+  `build_phase` (`uvm_fatal` if missing). Do not treat constructor args as a substitute
+  for config_db vif. Factory `type_id::create` — not bare `seq = new()` for sequences.
+
+### IPC: mailbox vs TLM
+- Pure SV mailbox: blocking `put`/`get`, one producer / one consumer, typed `mailbox #(txn)`.
+- UVM TLM: sequencer↔driver is seq_item port/export (pull). Monitor→scoreboard is
+  analysis port→imp (`write()` callback, not a `get` loop). Analysis can fan-out to
+  extra scoreboards or coverage; a mailbox cannot.
+- Never put `mailbox gen2drv` inside a UVM env. Never `seq_item_port.get` in a scoreboard.
+
+### Stimulus
+- Pure SV generator: `repeat (n) begin t=new(); randomize; gen2drv.put(t); end`. Count is
+  the test knob. No sequencer, no `body()`, no `start()`.
+- UVM sequence: `class <dut>_seq extends uvm_sequence#(txn); task body();` then
+  `start_item`/`finish_item` or `seq.start(env.agent.sqr)`. Sequencer can later hold
+  multiple sequences; smoke uses one. Never `uvm_sequence#(T) seq = new()` with no class.
+
+### Test end and reporting
+- Pure SV: fixed N, then `env.report()` `$display("PASS|FAIL")`, top `$finish`.
+- UVM: `phase.raise_objection(this)` / `drop_objection(this)` in test `run_phase`.
+  Do not `$finish` from a sequence. Log with `` `uvm_info `` / `` `uvm_error `` /
+  `` `uvm_fatal ``; scoreboard `report_phase` prints golden result.
+
+### Coverage
+- Pure SV: optional `covergroup` at module scope, gated `ifndef VERILATOR`.
+- UVM: coverage collector is often `uvm_subscriber` (or extra analysis_imp) on the
+  monitor's analysis port. Subscriber is NOT the monitor.
+
+### Reset
+- Pure SV: driver `task reset()` called from the test before the stimulus loop;
+  post-reset check key outputs === '0.
+- UVM: reset in driver `run_phase` before the `get_next_item` loop, or a reset
+  sequence. Reset pin is `rst_n` (or the DUT reset) — never treat `enable==0` as reset.
+
+### Plusargs / regression
+- Pure SV: `$value$plusargs("N=%d")` / `SEED=` without recompile.
+- UVM: `+UVM_TESTNAME=` selects the test class; `+UVM_VERBOSITY=`. Community smoke
+  still hard-codes one test name in `run_test("...")`.
+
+### Reusability
+- Pure SV: classes are named and wired for **this DUT**. Reuse is copy/adapt
+  (new mailbox types, new vif). Fast for one block.
+- UVM: reuse without rewriting drv/mon — extra `uvm_sequence` / `uvm_test`,
+  `factory` type/instance override, `config_db` knobs, agent as VIP, analysis
+  TLM fan-out to extra scoreboards/coverage. RAL only with a user CSR map.
+
+### Scalability
+- Pure SV: block/IP smoke; Verilator; one env; fixed-N `fork/join`. Weak at
+  multi-interface virtual sequences and farm `+UVM_TESTNAME` regression.
+- UVM: multi-agent, virtual sequence/sequencer, RAL, objections, test
+  selection without recompile. Full UVM needs a commercial simulator;
+  Community does not claim Verilator UVM sign-off.
+
+### Who may consume time
+- Pure SV: generator/driver/monitor are `task`s with `@(posedge vif.clk)`.
+  Scoreboard `run()` is a task that `mailbox.get` (may block). `predict`/`check`
+  stay functions (no time).
+- UVM: driver/monitor `run_phase` may use `@(posedge)`. Sequence `body()` may
+  consume time. Scoreboard `write()` is a **function** — illegal to put
+  `@(posedge)` or `#n` there (Pure SV `run()` leaking into UVM).
+- Driver order: get (mailbox / `get_next_item`) → drive pins → complete
+  (`item_done` in UVM). Never `item_done` before the drive; never `.put` on
+  `seq_item_port`.
+
+### TLM polarity vs mailbox
+- Pure SV: `gen2drv.put` / `drv.get`; `mon.put` / `sb.get`. Handles created with
+  `new()` in the env.
+- UVM pull: port is on the driver, export on the sequencer —
+  `drv.seq_item_port.connect(sqr.seq_item_export)`. Reverse connect is wrong.
+  Analysis: monitor has the port (`ap.write`); scoreboard has the imp (`write()`).
+- Never `seq_item_port.connect(monitor…)` or scoreboard `seq_item_port.get`.
+
+### Create, macros, super
+- Pure SV: `gen = new(gen2drv, n); drv = new(vif, gen2drv);` in env `new()` or
+  `run()`. No parent handle. No utils macros.
+- UVM: `type_id::create("drv", this)` in `build_phase` (parent `this`).
+  Components: `` `uvm_component_utils `` + `super.new(name, parent)`.
+  Objects: `` `uvm_object_utils `` + `super.new(name)`. Always `super.build_phase`
+  and `super.connect_phase`. Sequencer is created in the **agent**, not at file
+  scope. No OVM `set_config_int`.
+
+### Top clock and DUT
+- Both: module TB with `always #5 clk = ~clk`, interface instance, named DUT
+  port map. `run_test()` does not generate a clock.
+- Pure SV then `t.run(N)` + `$dumpfile`/`$finish`.
+- UVM then `config_db::set` + `run_test("…")`. Clock still lives in the module.
+
+### Concurrency
+- Pure SV env `fork`s four threads (gen/drv/mon/sb) then `join`.
+- UVM phasing already runs component `run_phase`s in parallel. Do not `fork` a
+  `*_generator` inside `uvm_env`. One sequence started from the test is enough.
+
+### Pin discipline (who may touch the DUT)
+- Generator / sequence / test: transactions and knobs only. The test starts
+  `t.run(N)` or `seq.start(sqr)`. It may peek post-reset outputs; it must not
+  run the stimulus loop on `vif` pins.
+- Driver: the only layer that **writes** DUT inputs (`vif.enable = …`).
+- Monitor: **read** pins, pack a txn, `put` / `ap.write`. Never `vif.* =`.
+- Scoreboard: compare txn fields to an independent golden. No `virtual if`.
+  Same rule both stacks.
+
+### Knobs, factory, extra tests
+- Pure SV: plusarg `+N`/`+SEED` or a field on the test class. Reuse = copy the
+  file. No factory.
+- UVM: `uvm_config_db` for vif and optional ints; `+UVM_TESTNAME` picks a test
+  class. A second scenario is a new `uvm_test` / `uvm_sequence`, optionally
+  `set_type_override_by_type`. Smoke does **not** emit an override or
+  `uvm_resource_db`.
+
+### Objections, SVA, smoke file
+- Objections: raise/drop in the test `run_phase` around `seq.start` (ChipSutra
+  smoke). Do not also raise in `body()` (double objection).
+- Concurrent SVA lives in an interface or bind — never inside `write()` or a
+  sequence. Covergroup: Pure SV module `ifndef VERILATOR`; UVM subscriber.
+- One file: only `` `include "uvm_macros.svh" ``. No `clocking` block, no
+  `uvm_tlm_analysis_fifo`, unless the user asks. Sample with `@(posedge)` + `#1`.
+
+### Emit rules
+- methodology=sv: NO `uvm_*`, no `run_test`, no `analysis_port`, no objections.
+  Mailboxes + generator. `$dumpfile`/`$finish`.
+- methodology=uvm: NO `class *_generator`, no mailbox-as-UVM, no `t.run(N)`.
+  Example 1 TLM graph. Factory + phases + objections.
+- Never mix: `uvm_driver` + mailbox `get`; Pure SV env that `extends uvm_env`;
+  monitor `extends uvm_subscriber`; `run_test` inside a Pure SV TB.

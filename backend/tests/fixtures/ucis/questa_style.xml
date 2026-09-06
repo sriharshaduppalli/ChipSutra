@@ -1,0 +1,10 @@
+<?xml version="1.0"?>
+<ucis>
+  <coverageInstance name="tb.env.apb_agent" instanceName="apb0">
+    <covergroup name="apb_cg" covered="12" total="20"/>
+    <coverpoint name="cp_addr" coveredCount="7" totalCount="16"/>
+    <cross name="cx_dir_resp" hitCount="3" binCount="8"/>
+    <statement name="stmt_drv" pct="88.0"/>
+    <fsm name="apb_fsm" percent="55"/>
+  </coverageInstance>
+</ucis>

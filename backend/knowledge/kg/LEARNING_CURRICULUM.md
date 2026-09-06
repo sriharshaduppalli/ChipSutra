@@ -15,10 +15,33 @@ Teach ChipSutra-VLSI (and gate LLM output) on:
 | Randomization | `random`, `uvm_rand` |
 | Reusable techniques | `reuse` |
 | Reusable / extended tests | `testcases` |
-| Block protocol goldens | `protocols` (FIFO / parity / AXI-Lite / counter) |
+| Block protocol goldens | `protocols` (FIFO / parity / AXI-Lite / AHB / APB / counter) |
+| Methodologies (SV/UVM/OVM/VMM) | `methodology` |
 | UVM syntax | `uvm_syntax` |
 | Scalability | `uvm_scale`, `soc_scale` |
 | Quality | `quality` |
+
+**External curriculum map:** [ChipVerify SystemVerilog](https://chipverify.com/tutorials/systemverilog) and [UVM](https://chipverify.com/tutorials/uvm) — use as a topic checklist when authoring RAG (original ChipSutra text only; never wholesale-copy tutorials). AMBA bus emit rules cite ARM IHI 0022L (AXI), IHI 0033C (AHB), IHI 0024E (APB) as reference IDs only — do not vendor those PDFs or copy spec chapters into the repo.
+
+Deep pillar files (ChipVerify-aligned):
+
+| Pillar | RAG file | ChipVerify topic |
+|--------|----------|------------------|
+| **Must-know spine** | `sv_fundamentals_must_know.txt` | All SV pillars → TB checklist |
+| Intro / methodologies | `verification_methodologies_curriculum.txt` | [SV tutorial](https://chipverify.com/tutorials/systemverilog) |
+| Data types / control | `sv_datatypes_control_patterns.txt` | Data Types, Control Flow |
+| Arrays / collections | `sv_arrays_collections_patterns.txt` | Arrays |
+| Classes & OOP | `sv_oop_classes_patterns.txt` | Classes & OOP |
+| Randomization | `sv_randomization_patterns.txt` | Randomization |
+| Constraints / CRV | `sv_constraints_patterns.txt` | [Constraints](https://chipverify.com/systemverilog/systemverilog-constraints) |
+| Interfaces | `sv_interfaces_patterns.txt` | [Interface](https://chipverify.com/systemverilog/systemverilog-interface) |
+| Threads & IPC | `sv_threads_ipc_patterns.txt` | Threads, IPC |
+| Advanced features | `sv_advanced_features_patterns.txt` | Advanced Features |
+| Functional coverage | `covergroup_patterns.txt` | [Functional coverage](https://chipverify.com/systemverilog/systemverilog-functional-coverage) |
+| Assertions | `sva_patterns.txt` | [Assertions](https://chipverify.com/systemverilog/systemverilog-assertions) |
+| UVM | `uvm_patterns.txt` | [UVM](https://chipverify.com/tutorials/uvm) |
+
+Primary overview: [`../verification_methodologies_curriculum.txt`](../verification_methodologies_curriculum.txt).
 
 ## Regular improvement loop
 

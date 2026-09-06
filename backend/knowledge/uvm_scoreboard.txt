@@ -1,0 +1,97 @@
+# UVM Scoreboard
+# Predict expected DUT behavior; compare vs monitor transactions. Independent reference model.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Scoreboard.
+# Pair with: uvm_monitor.txt, uvm_subscriber.txt, uvm_first_tb_dut.txt.
+
+## Role vs coverage
+| Component | Job |
+|-----------|-----|
+| Coverage / subscriber | Observe and measure (bins) — does not judge correctness |
+| Scoreboard | Predict + compare — flags mismatches with `` `uvm_error `` |
+
+- Reference model / predictor: TB-owned expected state; **never** copy DUT internals or `exp = dut_out + 1`.
+- Keep compare out of the monitor so one monitor can feed many checkers.
+
+## Class skeleton
+```systemverilog
+class reg_scoreboard extends uvm_scoreboard;
+  `uvm_component_utils(reg_scoreboard)
+  uvm_analysis_imp #(reg_transaction, reg_scoreboard) ap_imp;
+
+  bit [7:0] expected_mem [16];
+  bit       written [16];
+  int       mismatch_count;
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    ap_imp = new("ap_imp", this);  // plain new — like analysis ports
+  endfunction
+
+  // write() implemented below
+endclass
+```
+- Prefer `extends uvm_scoreboard` for intent (thin base over `uvm_component`).
+- Unlike `uvm_subscriber`, **no free** `analysis_export` — declare `uvm_analysis_imp #(T, this_type)` yourself.
+- Alternate: extend `uvm_subscriber #(txn)` and put compare in `write()` — either is fine; chapter shows imp-by-hand.
+
+## Reference model write()
+```systemverilog
+virtual function void write(reg_transaction tr);
+  if (tr.wr_en) begin
+    expected_mem[tr.addr] = tr.wdata;
+    written[tr.addr]      = 1'b1;
+  end
+  else if (tr.rd_en) begin
+    if (!written[tr.addr]) begin
+      `uvm_info(get_type_name(),
+        $sformatf("addr=%0d read before any write, skipping check", tr.addr), UVM_LOW)
+    end
+    else if (tr.rdata !== expected_mem[tr.addr]) begin
+      mismatch_count++;
+      `uvm_error(get_type_name(),
+        $sformatf("Mismatch at addr=%0d: expected=0x%0h actual=0x%0h",
+                  tr.addr, expected_mem[tr.addr], tr.rdata))
+    end
+    else
+      `uvm_info(get_type_name(),
+        $sformatf("addr=%0d matched: 0x%0h", tr.addr, tr.rdata), UVM_HIGH)
+  end
+endfunction
+```
+- Branch on `wr_en`/`rd_en` (request kind), not "is rdata filled".
+- Skip check until address has been written — unwritten mem is undefined (not assumed 0).
+- Use `!==` when X must fail; chapter uses `!=` for known bytes.
+
+## connect_phase
+Usually in env (monitor inside agent — see `uvm_agent.txt`):
+
+```systemverilog
+m_agent.m_monitor.mon_analysis_port.connect(m_scoreboard.ap_imp);
+// same port can also connect to coverage.analysis_export
+```
+
+## report_phase (optional)
+```systemverilog
+function void report_phase(uvm_phase phase);
+  `uvm_info(get_type_name(), $sformatf("mismatches=%0d", mismatch_count), UVM_LOW)
+endfunction
+```
+
+## Beginner mistakes
+1. Compare inside monitor.
+2. Assume unwritten addresses are 0.
+3. Noop `write()` / always pass — ChipSutra forbids `check(); return 1` style emptiness.
+4. Circular golden from DUT outputs.
+5. Forgetting connect — silent no checks.
+
+## ChipSutra emit notes (methodology=uvm)
+- Always real independent predict (mem/queue/model) + compare on observed reads/outputs.
+- Counter: expected += enable; FIFO: `q[$]`; parity: `^data`; AXI-Lite: model regs + handshake rules.
+- Chapter `reg_*` example when teaching that DUT; user Generate uses user protocol golden.
+- Pure SV layered: scoreboard class + mailbox from monitor (same predict rules).
+- Multi-input `write_*` imps: `uvm_tlm_decl.txt`.
+- Serial pattern / FSM independent golden example: `uvm_tb_example_pattern.txt`.

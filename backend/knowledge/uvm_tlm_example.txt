@@ -1,0 +1,72 @@
+# UVM TLM Hierarchical Example
+# Nested put/get + FIFOs + export forwarding across component layers.
+# ChipSutra original wording. Curriculum: ChipVerify UVM TLM Example.
+# Builds on: uvm_tlm.txt, blocking put/get, uvm_tlm_fifo.txt.
+
+## Topology (mental model)
+```
+subComp1 --put--> [FIFO in A] --get--> subComp2 --put--> A's put_port
+                                                              |
+                                                              v
+                                                    B's put_export --> [FIFO in B] --get--> subComp3
+```
+Rates differ at each hop → FIFO depth buffers backlog (`is_full` when producer outruns consumer).
+
+## Layer roles
+| Block | Role |
+|-------|------|
+| `subComp1` | Source: `uvm_blocking_put_port`, produces packets on a timer |
+| `subComp2` | Mid: `get_port` from A's FIFO, then `put_port` forward out of A |
+| `componentA` | Owns FIFO + children; exposes `m_put_port` upward; connects child put→child get via FIFO; **child put → parent put** (port-to-port forward) |
+| `subComp3` | Slow sink: `get_port` from B's FIFO |
+| `componentB` | Owns FIFO + sink; exposes `uvm_blocking_put_export` upward; export→FIFO put; sink get→FIFO get |
+| Top env/test | `compA.m_put_port.connect(compB.m_put_export)` |
+
+## Key connect patterns
+```systemverilog
+// Inside componentA
+m_subcomp_1.m_put_port.connect(m_tlm_fifo.put_export);
+m_subcomp_2.m_get_port.connect(m_tlm_fifo.get_export);
+m_subcomp_2.m_put_port.connect(this.m_put_port);   // forward out of A
+
+// Inside componentB
+m_put_export.connect(m_tlm_fifo.put_export);       // export -> fifo
+m_subcomp_3.m_get_port.connect(m_tlm_fifo.get_export);
+
+// Top
+compA.m_put_port.connect(compB.m_put_export);      // A port -> B export
+```
+
+## Hierarchical TLM rules (emit)
+1. **Connect at the parent** that owns both ends (`connect_phase`).
+2. **Ports initiate**; **exports/imps** implement or chain — FIFO provides `put_export` / `get_export`.
+3. **Forwarding**: child `put_port.connect(parent.put_port)` promotes traffic without re-implementing `put`.
+4. **Boundary of a reusable VIP**: expose an export (or port) at the component edge; hide internal FIFO.
+5. Size FIFO depth from rate mismatch; monitor `is_full()` for debug only.
+
+## Timing intuition (example)
+- Source period ~50, mid ~100, sink ~200 → A's FIFO then B's FIFO fill.
+- Top may raise objection for a fixed window (`#1000`) so forever mid-loops can be cut off for the demo.
+
+## vs ChipSutra smoke agent stack
+| Hierarchical TLM demo | Typical UVM smoke |
+|-----------------------|-------------------|
+| Custom put/get/FIFO layers | `seq_item_port` + `analysis_port` |
+| Multi-FIFO rate teaching | Agent → env scoreboard |
+| Port→export between envs | mon.ap → sb.imp |
+
+Do not replace the standard agent stack with this hierarchy unless the user asks for a TLM hierarchy / FIFO pipeline demo.
+
+## Beginner mistakes
+1. Connecting A→B before creating ports/exports.
+2. Forgetting parent put_port / put_export — children only talk internally.
+3. Port→imp when a FIFO was intended (loses buffering).
+4. Objection only on top with infinite producers and no drain plan — hang or early kill.
+5. Exposing internal FIFO handles instead of a clean edge export.
+
+## ChipSutra emit notes
+- Teaching/demo only unless user requests multi-layer TLM.
+- Prefer factory `type_id::create` for Packet; `new` for ports/FIFO/export.
+- Cross-ref APIs: `uvm_tlm_blocking_put.txt`, `uvm_tlm_blocking_get.txt`, `uvm_tlm_fifo.txt`.
+- Port/export/imp chain catalog: `uvm_tlm_port_export_imp.txt`.
+- Next common path for real TB: analysis ports (`uvm_tlm_analysis.txt`).

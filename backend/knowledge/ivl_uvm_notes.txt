@@ -1,0 +1,12 @@
+# Icarus + IVL_UVM (ChipSutra original)
+# Clone https://github.com/AsFigo/ivl_uvm and set CHIPSUTRA_IVL_UVM or IVL_UVM_HOME.
+
+## Scope
+- IVL_UVM adds limited UVM-like messaging, plusargs, and `run_test` on Icarus (dev builds).
+- It is not Accellera UVM 1.2. ChipSutra Community sim default is Verilator Pure SV.
+- ChipSutra does not claim Verilator UVM sign-off. Prefer Pure SV for closed-loop PASS.
+
+## How ChipSutra uses it
+- `CHIPSUTRA_SIM_ADAPTER=iverilog` selects the Icarus adapter (lint via `iverilog -t null -g2012`).
+- Include path: `$CHIPSUTRA_IVL_UVM/ivl_uvm_src` when that directory exists.
+- OVL demos in IVL_UVM stay in that clone — do not copy OVL into ChipSutra.

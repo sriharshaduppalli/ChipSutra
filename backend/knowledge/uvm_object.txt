@@ -1,0 +1,87 @@
+# UVM Object [uvm_object]
+# Base for data (transactions, configs, results). Components use uvm_component (also inherits object).
+# ChipSutra original wording. Curriculum: ChipVerify UVM Object.
+# Next: transaction / sequence_item — `uvm_transaction.txt`. DUT contract: uvm_first_tb_dut.txt.
+# Full base-class chain (void/report/component/root): `uvm_base_classes.txt`.
+
+## What uvm_object is
+- Root utility base: print, copy, compare, record so authors do not rewrite them.
+- Two groups that inherit its services:
+  - Plain data: extend `uvm_object` or `uvm_sequence_item` (transactions, configs).
+  - Hierarchy: extend `uvm_component` (driver, monitor, ...) — still gets object utilities.
+- Constructor: `function new(string name="")` — **name only**, no parent (not in fixed hierarchy).
+
+## Shape that matters
+```systemverilog
+virtual class uvm_object extends uvm_void;
+  function new(string name="");
+  function void print(uvm_printer printer = null);
+  function void copy(uvm_object rhs, uvm_copier copier = null);
+  function bit  compare(uvm_object rhs, uvm_comparer comparer = null);
+  function void record(uvm_recorder recorder = null);
+  virtual function uvm_object create(string name = ""); // override via factory macro
+  virtual function string get_type_name();              // override via factory macro
+endclass
+```
+- `create` / `get_type_name` are virtual stubs — `` `uvm_object_utils `` generates real overrides.
+- `print`/`copy`/`compare` are not virtual; customize via `do_print` / `do_copy` / `do_compare` hooks
+  (dedicated ChipVerify articles later — use field macros first).
+
+## new() vs create() (factory)
+| Call | Behavior |
+|------|----------|
+| `new("name")` | Exact type; bypasses factory; no type override |
+| `type_id::create("name")` | Factory may return overridden derived type |
+
+`create` still calls `new` underneath — factory chooses **which** type's `new` runs.
+Prefer factory for anything a test might substitute (txns, configs, sequences, components).
+
+## Registering with the factory
+```systemverilog
+class my_object extends uvm_object;
+  `uvm_object_utils(my_object)
+  // fields...
+  function new(string name = "my_object");
+    super.new(name);
+  endfunction
+endclass
+
+// preferred construction
+my_object obj = my_object::type_id::create("obj");
+```
+Without `` `uvm_object_utils ``:
+- Still valid SV class; `new` works.
+- Invisible to factory — `type_id::create` fails / unavailable; no overrides.
+
+Extended form (transactions with fields):
+`` `uvm_object_utils_begin(T) `` ... field macros ... `` `uvm_object_utils_end ``
+registers fields for automatic print/copy/compare — use in sequence_item articles.
+
+## Minimal config/status object (pattern)
+```systemverilog
+class status_info extends uvm_object;
+  `uvm_object_utils(status_info)
+  string label;
+  function new(string name = "status_info");
+    super.new(name);
+  endfunction
+endclass
+```
+
+## Beginner mistakes
+1. `new` when factory create was intended — blocks type overrides.
+2. Forgetting `` `uvm_object_utils `` — breaks later when something calls `type_id::create`.
+3. Giving object constructor a parent argument like a component — wrong API.
+4. Extending `uvm_component` for a plain config/txn — use object / sequence_item.
+5. Component details (parent, build_phase): `uvm_component.txt`.
+
+## ChipSutra emit notes
+- methodology=uvm: every `uvm_sequence_item` / config / sequence uses `` `uvm_object_utils `` (or begin/end + fields).
+- Construct data via `::type_id::create`; components similarly with `` `uvm_component_utils ``.
+- Do not hand-write `create`/`get_type_name` unless advanced customization.
+- Prefer field macros over manual `do_copy`/`do_compare` for smoke TBs.
+- Pack/unpack (DPI/file/serial): `uvm_object_pack.txt` — omit from smoke unless asked.
+- Compare: `uvm_object_compare.txt`. Print: `uvm_object_print.txt`. Copy/clone: `uvm_object_copy.txt`.
+- Utils overview: `uvm_utility_field_macros.txt`. Field type catalog: `uvm_field_macros.txt`.
+- Factory overrides: `uvm_factory_override.txt`.
+- User DUT Generate: txn fields match protocol/ports — not invent from this article alone.

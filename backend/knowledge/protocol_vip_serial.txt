@@ -1,0 +1,50 @@
+# SPI / I2C / UART VIP emit guide (ChipSutra)
+# User knobs (spi_mode, i2c_role, uart_dir, baud_div) override defaults.
+# Prefer parsed RTL names. Never invent flash commands, SMBus PEC, or baud.
+
+## spi_mode0
+- CS_n assert (active-low), shift on SCLK; Mode0 (CPOL=0,CPHA=0) unless user knob or RTL params say otherwise.
+- Drive MOSI on negedge, sample MISO/rx_byte on posedge; MSB-first.
+- UVM: txn fields din/len; driver bit-bangs; never invent flash command set.
+
+## spi_mode1
+- Mode1 (CPOL=0,CPHA=1): idle clock LOW. Drive MOSI on posedge, sample on negedge.
+- Only when user knob spi_mode=1 or CPOL=0 CPHA=1. Do not assume eval slaves are Mode1.
+
+## spi_mode2
+- Mode2 (CPOL=1,CPHA=0): idle clock HIGH. Drive MOSI on posedge, sample on negedge.
+- Only when user knob spi_mode=2. Do not invent idle-high unless asked.
+
+## spi_mode3
+- Mode3 (CPOL=1,CPHA=1): idle clock HIGH. Drive MOSI on negedge, sample on posedge.
+- Only when user knob spi_mode=3.
+
+## qspi
+- Only with IO0–IO3 in RTL; cmd/addr/dummy/data phases from user controller docs.
+
+## i2c_7bit
+- START, 7-bit addr+R/W, ACK, data bytes, STOP; support clock stretch if SCL held by slave.
+- Check last_data / got_write style outputs from user slave.
+- Default ChipSutra smoke is slave write. Target addr from user knob i2c_target_addr — do not invent 7'h50.
+
+## i2c_10bit
+- Only when user knob i2c_addr_bits=10 or RTL documents 10-bit. First byte 11110xx + R/W, then remaining addr byte.
+- Do not emit 10-bit unless asked or ports/params show it.
+
+## i2c_master
+- Master DUT: TB is the slave (ACK on SDA, optional clock stretch by holding SCL).
+- Only when user knob i2c_role=master or DUT has scl_out/sda_out without a TB start pin.
+- Stretch: hold SCL low after ACK if user asked; release after N clocks from user, never invent stretch time.
+- Repeated START only if user/RTL mentions it.
+
+## uart_8n1
+- Pulse start, wait busy/done; optional bit-level sample of TX: start, 8 data LSB-first, stop.
+- Baud from user parameter / uart_baud_div — do not invent clock dividers.
+
+## uart_rx
+- Drive RX line: idle HIGH, start=0, 8 data LSB-first, stop=1. Hold each bit uart_baud_div clocks (default 1-clk/bit smoke if unset).
+- Check dout/rx_data/rx_valid. Do not invent parity/stop unless user knob uart_parity or RTL has those ports.
+- RTS/CTS only if those pins exist.
+
+## uart_tx
+- Same as uart_8n1. Prefer TX golden when din+start+tx exist unless user knob uart_dir=rx.

@@ -1,0 +1,41 @@
+# Commercial Verification IP catalog (ChipSutra reference)
+# Public industry shape (Synopsys / SmartDV / Cadence-class). Do not copy vendor source or specs.
+# ChipSutra is not a commercial VIP replacement.
+
+## what_commercial_vip_ships
+- Native SystemVerilog / UVM agent: driver, monitor, checker, coverage, cfg, sequences.
+- Built-in verification plan (vplan) + protocol coverage model aligned to the spec.
+- Optional source test suites: directed/spec-item tests that run *with* the VIP, not instead of it.
+- Latest protocol revision from the vendor — ChipSutra must not invent Gen/speed/timing numbers.
+- Integrator job: instantiate VIP in uvm_env, config_db vif, connect analysis → project scoreboard.
+
+## catalog_onchip
+- AMBA: AXI / AXI-Lite / ACE / CHI / AHB / APB / AXI-Stream. ChipSutra goldens cover Lite/APB/AHB smoke only.
+- Other on-chip BUS: Wishbone, Avalon, TileLink — ChipSutra outline; coherent fabrics need user VIP.
+
+## catalog_offchip
+- PCIe (all advertised gens), CXL, CCIX. TLP/LTSSM/credits = commercial VIP.
+- USB (including USB4-class), Ethernet (including HPC/UEC-class), UALink.
+- Display (HDMI, DisplayPort / automotive extensions). MIPI CSI/DSI/D-PHY.
+
+## catalog_memory_storage
+- DRAM: DDR / LPDDR / HBM — JEDEC timings in commercial VIP. ChipSutra: front-door bus + user memory_map.
+- Flash / storage controllers: only if user listed the VIP or CSR map. Never invent JEDEC/ONFI maps.
+
+## catalog_die_auto
+- Multi-die / UCIe: commercial VIP for flit/sideband. ChipSutra outlines ports that exist.
+- Automotive: CAN/CAN-FD ChipSutra idle/SOF smoke; LIN/FlexRay/SENT = user VIP.
+
+## build_vs_buy
+- In-house protocol stack: weeks–months to first test; compliance and coverage depend on the team; high maintenance.
+- Commercial VIP: days to first test; built-in compliance + coverage; vendor maintains spec revisions.
+- ChipSutra emits VIP-shaped smoke/outline. It does not replace a bought DDR5/PCIe/USB VIP for full compliance.
+
+## emulation
+- Some commercial VIP has a synthesizable / emulation-compatible twin. Use it only if the user said the VIP supports emu.
+- Do not claim ChipSutra Pure SV smoke is emulation VIP.
+
+## integrate_not_invent
+- If the user named a commercial VIP (or test suite): connect it — do not re-implement the protocol PHY.
+- If no VIP is attached: emit ChipSutra four-part outline; state // VIP-bound in comments.
+- Never vendor or paste Synopsys/Cadence/Siemens/SmartDV VIP source, vplans, or suite tests.

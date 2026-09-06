@@ -11,6 +11,7 @@ import json
 import logging
 import asyncio
 import io
+import shutil
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Any
 
@@ -56,14 +57,51 @@ from yosys_flow import (
 )
 from cocotb_scaffold import render_cocotb_scaffold
 from cocotb_runner import cocotb_available, pick_scaffold_files, build_make_cmd, parse_cocotb_log
-from tb_skeleton import should_use_tb_skeleton, render_randomized_tb
-from tb_lint import choose_testbench_output, lint_testbench, extract_sv
+from tb_skeleton import (
+    should_use_tb_skeleton,
+    render_randomized_tb,
+    render_class_sv_tb,
+)
+from tb_uvm_skeleton import render_uvm_smoke_tb
+from design_analyze import analyze_design, analysis_to_learning, build_tb_context_pack
+from tb_lint import (
+    choose_testbench_output,
+    lint_testbench,
+    extract_sv,
+    stamp_tb_header,
+    truncate_tb_reference,
+)
 from kg_rating import auto_score_testbench, combine_with_feedback, aggregate_learning_report
 from dv_planner import plan_generation, plan_to_learning
+from dv_user_config import (
+    parse_dv_config,
+    prompt_block as dv_config_prompt_block,
+    attach_knobs,
+    merge_with_design,
+    example_config as dv_example_config,
+)
+from tb_ral import ral_prompt_block, normalize_csr_list
+from generation_persist import generation_artifact_meta
 from dv_verify import verify_testbench, verify_status_for_learning, verilator_bin
 from llm_router import resolve_model, prewarm_ollama, prewarm_status
-from spec_checklist import analyze_spec, checklist_prompt_block
+from spec_checklist import (
+    analyze_spec,
+    checklist_prompt_block,
+    exploratory_stub_rtl,
+    spec_gate_blocks,
+)
+from spec_ir import extract_spec_ir, spec_ir_prompt_block
 from debug_classify import classify_log, debug_prompt_block
+from closed_loop import run_closed_loop
+from evidence_pack import evidence_zip_bytes
+from signoff import build_signoff_board
+from tb_methodology import (
+    normalize_methodology,
+    is_class_methodology,
+    methodology_prompt_block,
+    LABELS as TB_METH_LABELS,
+)
+
 from opensta_flow import (
     sta_bin,
     sta_command,
@@ -71,6 +109,14 @@ from opensta_flow import (
     liberty_is_plausible,
     parse_sta_log,
     default_sdc_stub,
+    demo_liberty_path,
+)
+from lab_flow import (
+    classify_hdl_files,
+    plan_lab_stages,
+    stage_failed,
+    pipeline_status,
+    run_verible_lint,
 )
 from rate_limit import enforce_rate_limit, rate_limit_status
 from storage_provider import init_storage as storage_init, put_object as put_object_impl, get_object as get_object_impl, storage_mode
@@ -96,10 +142,24 @@ APP_NAME = os.environ.get("APP_NAME", "chipsutra")
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@chipsutra.ai")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Admin@ChipSutra2026")
 
-# Free-tier quota: N generations per user per day (0 = unlimited — DEFAULT OPEN ACCESS)
-FREE_DAILY_QUOTA = int(os.environ.get("FREE_DAILY_QUOTA", "0"))
-# Set REQUIRE_EMAIL_VERIFICATION=true to block generation for unverified emails (default off = open access)
-REQUIRE_EMAIL_VERIFICATION = os.environ.get("REQUIRE_EMAIL_VERIFICATION", "false").lower() == "true"
+# Public / multi-user portal mode: tighter defaults for abuse + sim honesty
+PUBLIC_MODE = os.environ.get("CHIPSUTRA_PUBLIC_MODE", "false").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+# Free-tier quota: N generations per user per day (0 = unlimited lab mode)
+_quota_default = "50" if PUBLIC_MODE else "0"
+FREE_DAILY_QUOTA = int(os.environ.get("FREE_DAILY_QUOTA", _quota_default))
+# Set REQUIRE_EMAIL_VERIFICATION=true to block generation for unverified emails
+REQUIRE_EMAIL_VERIFICATION = os.environ.get(
+    "REQUIRE_EMAIL_VERIFICATION", "true" if PUBLIC_MODE else "false"
+).lower() == "true"
+# Refuse mock Verilator success in public mode (default on when PUBLIC_MODE)
+REFUSE_MOCK_SIM = os.environ.get(
+    "CHIPSUTRA_REFUSE_MOCK_SIM", "true" if PUBLIC_MODE else "false"
+).lower() in ("1", "true", "yes")
+_WEAK_JWT = frozenset({"", "dev-secret", "change-me", "secret", "changeme"})
 
 STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"  # legacy, unused
 
@@ -185,13 +245,44 @@ db = client[DB_NAME]
 app = FastAPI(title="ChipSutra API")
 api = APIRouter(prefix="/api")
 
+_cors_raw = os.environ.get("CORS_ORIGINS", "http://localhost:3000" if PUBLIC_MODE else "*")
+_cors_origins = [o.strip() for o in _cors_raw.split(",") if o.strip()]
+if PUBLIC_MODE and ("*" in _cors_origins or not _cors_origins):
+    logger.warning(
+        "CHIPSUTRA_PUBLIC_MODE=true but CORS_ORIGINS is open/empty — "
+        "pin to your portal origin(s)"
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=[o.strip() for o in os.environ.get("CORS_ORIGINS", "*").split(",") if o.strip()],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _client_ip(request: Request) -> str:
+    xff = (request.headers.get("x-forwarded-for") or "").strip()
+    if xff:
+        return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _assert_jwt_safe_for_public() -> None:
+    secret = (JWT_SECRET or "").strip()
+    if not PUBLIC_MODE:
+        if secret.lower() in _WEAK_JWT or len(secret) < 16:
+            logger.warning(
+                "JWT_SECRET is weak/default — fine for local lab; "
+                "set a strong secret before any shared deploy"
+            )
+        return
+    if secret.lower() in _WEAK_JWT or len(secret) < 32:
+        raise RuntimeError(
+            "CHIPSUTRA_PUBLIC_MODE requires a strong JWT_SECRET "
+            "(>=32 chars, not 'dev-secret'). "
+            "Generate with: python -c \"import secrets; print(secrets.token_hex(32))\""
+        )
 
 # =========================
 # Object Storage (delegates to storage_provider abstraction)
@@ -297,7 +388,7 @@ class GenerateIn(BaseModel):
     project_id: str
     module: str  # testbench, assertions, checkers, covergroups, spec2rtl, rtl2spec, testplan, coverage_holes, debug
     model_provider: str = "ollama"
-    model_name: str = "chipsutra-vlsi:3b"
+    model_name: str = "chipsutra-vlsi:7b"
     prompt: Optional[str] = ""
     file_ids: Optional[List[str]] = []
     language: Optional[str] = "systemverilog"
@@ -306,16 +397,18 @@ class GenerateIn(BaseModel):
     prior_output: Optional[str] = None
     # testbench path: auto (skeleton-first) | skeleton | llm
     gen_mode: Optional[str] = "auto"
+    # testbench methodology: sv | uvm | ovm | vmm (default pure SV)
+    tb_methodology: Optional[str] = "sv"
+    # Optional user DV knobs: scale, protocol_knobs, memory_map, csr_list, topology
+    dv_config: Optional[dict] = None
 
 MODULE_PROMPTS = {
     "testbench": (
-        "You are an expert VLSI verification engineer. Generate a **compact Verilator-friendly** "
-        "SystemVerilog testbench for the provided RTL in {language} (pure SV by default; "
-        "full UVM only if the user explicitly requests UVM). "
-        "Use **randomized stimulus** ($urandom_range) + a golden reference in ONE loop — "
-        "do not hardcode long directed testcase lists. "
-        "Must: exact DUT port map; $dumpfile/$dumpvars; $finish. "
-        "Never invent ports. Output ONLY SystemVerilog (~50–70 lines)."
+        "You are an expert VLSI verification engineer. Generate a Verilator-friendly "
+        "SystemVerilog testbench for the provided RTL in {language}. "
+        "Default: layered Pure SV (interface, generator, driver, monitor, scoreboard, env, test). "
+        "UVM only when methodology=uvm. Exact DUT ports; independent golden; "
+        "$dumpfile/$dumpvars/$finish. Never invent ports. Output ONLY SystemVerilog."
     ),
     "assertions": (
         "You are an expert in SystemVerilog Assertions (SVA). Generate comprehensive assertions "
@@ -364,6 +457,7 @@ def _guard_python_for_atlas() -> None:
 
 @app.on_event("startup")
 async def startup():
+    _assert_jwt_safe_for_public()
     _guard_python_for_atlas()
     try:
         await _ping_mongo_with_retries()
@@ -417,6 +511,17 @@ async def startup():
     # Cut first-token latency for ChipSutra-VLSI (background; never blocks startup)
     if os.environ.get("OLLAMA_URL"):
         asyncio.create_task(prewarm_ollama())
+    asyncio.create_task(_warm_rag_index())
+
+
+async def _warm_rag_index():
+    try:
+        import rag_vector
+
+        await asyncio.to_thread(rag_vector.warm_index)
+        logger.info("RAG vector index warm: %s", rag_vector.rag_vector_status().get("backend"))
+    except Exception as e:
+        logger.debug("RAG vector warm skipped: %s", e)
 
 async def _send_telemetry_ping():
     """Anonymous one-time startup ping. Sends only a random UUID + version. No user data."""
@@ -488,6 +593,9 @@ async def health():
         "eqy": bool(_sh.which("eqy")),
         "sby": bool(_sh.which("sby")),
         "cocotb": bool(_sh.which("cocotb-config")),
+        "iverilog": bool(_sh.which("iverilog")),
+        "verible": bool(_sh.which("verible-verilog-lint")),
+        "slang": bool(_sh.which("slang")),
         "opensta": bool(sta_bin()),
         "fst": fst_status(),
         "rate_limit": rate_limit_status(),
@@ -496,6 +604,7 @@ async def health():
         "rag": llm_rag_status(),
         "rtl_ports": rtl_ports_status(),
         "lint_feedback": lint_feedback_status(),
+        "asfigo": __import__("asfigo_bridge").tool_status(),
         "eda_tools": tool_versions(),
         "cdc": {"engine": "chipsutra-cdc-v0|v1-yosys", "status": "experimental"},
         "google_auth": google_mode(),
@@ -503,13 +612,17 @@ async def health():
             "prewarm": prewarm_status(),
             "verilator": bool(verilator_bin()),
         },
+        "public_mode": PUBLIC_MODE,
+        "free_daily_quota": FREE_DAILY_QUOTA,
+        "refuse_mock_sim": REFUSE_MOCK_SIM,
     }
 
 # =========================
 # Auth endpoints
 # =========================
 @api.post("/auth/register")
-async def register(inp: RegisterIn):
+async def register(inp: RegisterIn, request: Request):
+    _rate_limit(f"register:{_client_ip(request)}", max_calls=10, window_s=600)
     email = inp.email.lower()
     if await db.users.find_one({"email": email}):
         raise HTTPException(400, "Email already registered")
@@ -527,7 +640,8 @@ async def register(inp: RegisterIn):
     return {"access_token": token, "user": {"id": user_id, "email": email, "name": inp.name, "role": "user"}}
 
 @api.post("/auth/login")
-async def login(inp: LoginIn):
+async def login(inp: LoginIn, request: Request):
+    _rate_limit(f"login:{_client_ip(request)}", max_calls=30, window_s=300)
     email = inp.email.lower()
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(inp.password, user["password_hash"]):
@@ -586,7 +700,8 @@ async def logout(user=Depends(get_current_user)):
 # Waitlist / Contact
 # =========================
 @api.post("/waitlist")
-async def waitlist(inp: WaitlistIn):
+async def waitlist(inp: WaitlistIn, request: Request):
+    _rate_limit(f"waitlist:{_client_ip(request)}", max_calls=20, window_s=3600)
     doc = {
         "id": str(uuid.uuid4()),
         "email": inp.email.lower(),
@@ -603,7 +718,8 @@ async def waitlist(inp: WaitlistIn):
     return {"ok": True, "message": "Added to waitlist"}
 
 @api.post("/contact")
-async def contact(inp: ContactIn):
+async def contact(inp: ContactIn, request: Request):
+    _rate_limit(f"contact:{_client_ip(request)}", max_calls=20, window_s=3600)
     doc = inp.model_dump()
     doc["id"] = str(uuid.uuid4())
     doc["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -637,6 +753,45 @@ async def create_project(inp: ProjectIn, user=Depends(get_current_user)):
                            "project_created", "project", pid, inp.name)
     doc.pop("_id", None)
     return doc
+
+
+@api.post("/projects/quickstart")
+async def quickstart_counter(user=Depends(get_current_user)):
+    """First-project wizard: create a project and import the golden counter DUT."""
+    pid = str(uuid.uuid4())
+    doc = {
+        "id": pid,
+        "user_id": user["id"],
+        "workspace_id": None,
+        "name": "First project — counter",
+        "description": "60-second wizard: golden counter.sv → Generate testbench → Simulate.",
+        "design_type": "block",
+        "language": "systemverilog",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "wizard": True,
+    }
+    await db.projects.insert_one(doc)
+    path = GOLDEN_DIR / "counter.sv"
+    if not path.is_file():
+        raise HTTPException(404, "Golden counter.sv missing from this install")
+    saved = await _persist_project_text_file(
+        project_id=pid,
+        filename="counter.sv",
+        content=path.read_text(encoding="utf-8"),
+        kind="rtl",
+        content_type="text/plain",
+    )
+    doc.pop("_id", None)
+    return {
+        "project": doc,
+        "files": [saved],
+        "steps": [
+            "Select counter.sv",
+            "Generate → Testbench (Pure SV)",
+            "Simulate (Verilator)",
+        ],
+    }
 
 @api.get("/projects")
 async def list_projects(user=Depends(get_current_user)):
@@ -874,7 +1029,13 @@ def _get_file_bytes(fdoc: dict) -> bytes:
     return b""
 
 @api.post("/generate/stream")
-async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
+async def generate_stream(
+    inp: GenerateIn,
+    request: Request,
+    user=Depends(get_current_user),
+):
+    _rate_limit(f"generate:{user['id']}", max_calls=40, window_s=3600)
+    _rate_limit(f"generate_ip:{_client_ip(request)}", max_calls=80, window_s=3600)
     proj = await require_project(inp.project_id, user["id"], "editor")
     if inp.module not in MODULE_PROMPTS:
         raise HTTPException(400, "Unknown module")
@@ -937,33 +1098,46 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
         text = _get_file_text(f)
         if text:
             file_bodies.append(text)
-            file_context += f"\n\n--- FILE: {f['original_filename']} (kind={f.get('kind','')}) ---\n{text[:20000]}\n"
+            _rtl_cap = (
+                4000
+                if inp.module == "testbench"
+                else 8000
+                if inp.module in ("assertions", "covergroups", "checkers")
+                else 20000
+            )
+            file_context += (
+                f"\n\n--- FILE: {f['original_filename']} (kind={f.get('kind','')}) ---\n"
+                f"{text[:_rtl_cap]}\n"
+            )
         else:
             missing_content.append(f.get("original_filename") or f.get("id") or "file")
 
     lang = inp.language or proj.get("language", "systemverilog")
     system_msg = MODULE_PROMPTS[inp.module].format(language=lang)
     system_msg += "\n\nYou are ChipSutra, an EDA verification assistant. Be concise, precise, and technical."
-    rag_block = augment_generation_context(
-        module=inp.module,
-        prompt=(inp.prompt or "") + " " + file_context[:1200],
-        filenames=file_names,
-        # Keep RAG short for local 3B latency (especially testbench).
-        top_k=2 if inp.module in ("testbench", "assertions", "covergroups", "checkers") else 4,
-    )
-    if rag_block:
-        system_msg += (
-            "\n\n--- Domain knowledge (reference only; user RTL/spec/files override if conflict) ---\n"
-            + rag_block
-        )
+    # RAG injected after DV plan (adaptive top_k for simple DUTs — G10 latency).
 
     port_block = extract_port_context_from_texts(file_bodies)
     if port_block:
         system_msg += "\n\n--- Parsed RTL interfaces ---\n" + port_block
 
-    extra_rules = rules_for_module(inp.module, has_ports=bool(port_block))
+    extra_rules = rules_for_module(
+        inp.module,
+        has_ports=bool(port_block),
+        tb_methodology=inp.tb_methodology or "sv",
+    )
     if extra_rules:
         system_msg += "\n\n" + extra_rules
+
+    tb_meth = normalize_methodology(inp.tb_methodology or "sv", prompt=inp.prompt or "")
+    if inp.module == "testbench":
+        system_msg += "\n\n" + methodology_prompt_block(tb_meth)
+        # Soften MODULE_PROMPTS default when class methodology selected
+        if is_class_methodology(tb_meth):
+            system_msg += (
+                f"\nUser selected methodology={tb_meth} ({TB_METH_LABELS.get(tb_meth, tb_meth)}). "
+                "Do not emit a pure SV Fast-random TB unless explicitly asked."
+            )
 
     dut_hint = None
     parsed_modules: List[dict] = []
@@ -995,27 +1169,141 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
 
     user_text = (inp.prompt or "").strip()
     if not user_text:
-        user_text = default_user_prompt(inp.module, dut_hint=dut_hint)
+        user_text = default_user_prompt(inp.module, dut_hint=dut_hint, tb_methodology=tb_meth)
     if file_context:
         user_text += "\n\n" + file_context
     if inp.tool_log:
         user_text += "\n\n" + format_lint_feedback(inp.tool_log, prior_code=inp.prior_output)
+
+    dv_cfg = parse_dv_config(inp.dv_config, prompt=inp.prompt or "")
+    dv_cfg = merge_with_design(
+        dv_cfg,
+        parsed_modules,
+        rtl_text="\n".join(file_bodies[:3]) if file_bodies else "",
+        tb_methodology=tb_meth if inp.module == "testbench" else "sv",
+    )
+    if parsed_modules:
+        attach_knobs(parsed_modules[0], dv_cfg)
 
     dv_plan = plan_generation(
         module=inp.module,
         prompt=inp.prompt or "",
         tool_log=inp.tool_log or "",
         gen_mode=inp.gen_mode or "auto",
+        tb_methodology=tb_meth if inp.module == "testbench" else "sv",
         modules=parsed_modules,
         rtl_text="\n".join(file_bodies[:3]),
+        user_config=dv_cfg,
     )
 
+    # Design analysis FIRST — tight context pack (brief + VIP), not a knowledge dump
+    design_analysis = None
+    if inp.module == "testbench" and parsed_modules:
+        design_analysis = analyze_design(
+            parsed_modules,
+            rtl_text="\n".join(file_bodies[:3]),
+            tb_methodology=tb_meth,
+            prompt=inp.prompt or "",
+            user_config=dv_cfg,
+        )
+        pack = build_tb_context_pack(design_analysis, max_chars=4000, vip_chars=2000)
+        if pack:
+            system_msg += "\n\n" + pack
+        dv_plan = dict(dv_plan)
+        dv_plan["design_analysis"] = analysis_to_learning(design_analysis)
+        if design_analysis.get("protocol_variant"):
+            dv_plan["protocol_variant"] = design_analysis["protocol_variant"]
+        cfg_block = dv_config_prompt_block(dv_cfg)
+        if cfg_block:
+            system_msg += "\n\n" + cfg_block
+        ral_block = ral_prompt_block(
+            normalize_csr_list(dv_cfg.get("csr_list") or []),
+            methodology=tb_meth,
+            enable_ral=bool(dv_cfg.get("enable_ral")),
+        )
+        if ral_block:
+            system_msg += "\n\n" + ral_block
+
+    # Adaptive RAG: protocol-routed, small budget (VIP already in analysis pack)
+    _simple_proto = {
+        "counter", "parity", "mux", "alu", "shifter", "edge", "cdc",
+        "encoder", "gray", "debounce", "pwm", "generic", "switch",
+    }
+    _proto = (
+        (design_analysis or {}).get("protocol")
+        or dv_plan.get("protocol_pack")
+        or "generic"
+    ).lower()
+    _variant = ((design_analysis or {}).get("protocol_variant") or "").lower()
+    if inp.module == "testbench":
+        _rag_k = 1 if _proto in _simple_proto else 2
+        _rag_chars = 1800 if _proto in _simple_proto else 2800
+        if tb_meth == "uvm":
+            _rag_k = max(_rag_k, 2)
+            _rag_chars = max(_rag_chars, 2400)
+    elif inp.module in ("assertions", "covergroups", "checkers"):
+        _rag_k, _rag_chars = 2, 2800
+    else:
+        _rag_k, _rag_chars = 3, 3200
+    rag_block = augment_generation_context(
+        module=inp.module,
+        prompt=(inp.prompt or "") + " " + file_context[:800],
+        filenames=file_names,
+        top_k=_rag_k,
+        protocol=_proto,
+        protocol_variant=_variant,
+        methodology=tb_meth if inp.module == "testbench" else "",
+        max_chars=_rag_chars,
+    )
+    if rag_block:
+        system_msg += (
+            "\n\n--- Retrieved knowledge (secondary; RTL/analysis override) ---\n"
+            + rag_block
+        )
+    try:
+        from asfigo_packs import prompt_block as _asfigo_pack_prompt
+        _pack = _asfigo_pack_prompt(module=inp.module)
+        if _pack:
+            system_msg += "\n\n" + _pack
+    except Exception:
+        pass
+    if dv_cfg.get("enable_ral") and inp.module == "testbench":
+        ral_rag = augment_generation_context(
+            module=inp.module,
+            prompt="RAL uvm_reg_block user CSR map",
+            filenames=file_names,
+            top_k=2,
+            protocol="ral",
+            protocol_variant="uvm_ral" if tb_meth == "uvm" else "ral",
+            methodology=tb_meth,
+            max_chars=1600,
+        )
+        if ral_rag:
+            system_msg += "\n\n--- RAL knowledge (user map only) ---\n" + ral_rag
+    _scale = (dv_cfg.get("scale") or "block").lower()
+    if inp.module == "testbench" and _scale not in ("block", ""):
+        scale_rag = augment_generation_context(
+            module=inp.module,
+            prompt=f"scale {_scale} testbench orchestration topology",
+            filenames=file_names,
+            top_k=2,
+            protocol=_scale,
+            protocol_variant=_scale,
+            methodology=tb_meth,
+            max_chars=1400,
+        )
+        if scale_rag:
+            system_msg += f"\n\n--- Scale knowledge ({_scale}) ---\n" + scale_rag
+
     spec_analysis = None
+    spec_ir = None
     debug_analysis = None
     if inp.module == "spec2rtl":
         spec_blob = (inp.prompt or "") + "\n" + file_context[:8000]
         spec_analysis = analyze_spec(spec_blob, prompt=inp.prompt or "")
+        spec_ir = extract_spec_ir(spec_blob, prompt=inp.prompt or "")
         block = checklist_prompt_block(spec_analysis)
+        ir_block = spec_ir_prompt_block(spec_ir)
         if block:
             system_msg += "\n\n" + block
             if not spec_analysis.get("ready"):
@@ -1023,64 +1311,126 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
                     "\n\n[ChipSutra] Spec checklist incomplete — generate exploratory RTL with "
                     "documented // assumptions for missing clock/reset/I/O."
                 )
+        if ir_block:
+            system_msg += "\n\n" + ir_block
     if inp.module == "debug" or (inp.tool_log or "").strip():
         debug_analysis = classify_log(inp.tool_log or "", prior_code=inp.prior_output or "")
         dblock = debug_prompt_block(debug_analysis)
         if dblock and (inp.module == "debug" or (inp.tool_log or "").strip()):
             system_msg += "\n\n" + dblock
 
-    use_skeleton = should_use_tb_skeleton(
-        module=inp.module,
-        prompt=inp.prompt or "",
-        modules=parsed_modules,
-        gen_mode=inp.gen_mode or "auto",
-        tool_log=inp.tool_log,
-    )
-    # Align with planner when it prefers skeleton for TB smoke.
-    if inp.module == "testbench" and dv_plan.get("engine_preference") == "skeleton":
-        use_skeleton = True
-    elif inp.module == "testbench" and dv_plan.get("engine_preference") in ("llm", "hybrid"):
-        if (inp.gen_mode or "auto").lower() in ("llm", "model") or dv_plan["intent"].get("wants_uvm") or (inp.tool_log or "").strip():
-            use_skeleton = False
+    protocol_pack = dv_plan.get("protocol_pack") or "generic"
+    cycles = 32
+    seed = 1
+    m_cyc = re.search(r"\bcycles\s*=\s*(\d+)\b", inp.prompt or "", re.I)
+    m_seed = re.search(r"\bseed\s*=\s*(\d+)\b", inp.prompt or "", re.I)
+    if m_cyc:
+        cycles = int(m_cyc.group(1))
+    if m_seed:
+        seed = int(m_seed.group(1))
 
+    # Product intent: ALWAYS call the LLM for testbench. Templates are STYLE HINTS only.
+    # UVM: DUT-correct smoke skeleton is also the lint fallback when LLM fails hard.
     skeleton_sv = ""
+    template_engine = ""
     ref_tb = ""
-    if parsed_modules and parsed_modules[0].get("ports") and inp.module == "testbench":
-        cycles = 48
-        seed = 1
-        m_cyc = re.search(r"\bcycles\s*=\s*(\d+)\b", inp.prompt or "", re.I)
-        m_seed = re.search(r"\bseed\s*=\s*(\d+)\b", inp.prompt or "", re.I)
-        if m_cyc:
-            cycles = int(m_cyc.group(1))
-        if m_seed:
-            seed = int(m_seed.group(1))
-        ref_tb = render_randomized_tb(parsed_modules[0], cycles=cycles, seed=seed)
+    hint_tb = ""
+    gen_mode_l = (inp.gen_mode or "auto").lower().strip()
+    if inp.module == "testbench" and parsed_modules and parsed_modules[0].get("ports"):
+        ref_tb = render_randomized_tb(parsed_modules[0], cycles=max(cycles, 48), seed=seed)
+        if tb_meth == "sv" and gen_mode_l in ("skeleton", "fast", "template", "smoke"):
+            hint_tb = ref_tb
+            style = "procedural_smoke"
+        elif tb_meth == "sv":
+            hint_tb = render_class_sv_tb(parsed_modules[0], cycles=cycles, seed=seed)
+            # Bus Pure-SV: procedural smoke has proven AXI/APB handshakes for sim gate.
+            _bus_proto = (
+                (design_analysis or {}).get("protocol")
+                or protocol_pack
+                or ""
+            ).lower()
+            if _bus_proto in ("axi_lite", "axi4_lite", "axi", "apb", "apb3", "apb4"):
+                skeleton_sv = ref_tb  # render_randomized_tb — VIP handshake + model_reg
+            else:
+                skeleton_sv = hint_tb
+            style = "class_sv"
+        elif tb_meth == "uvm":
+            hint_tb = render_uvm_smoke_tb(parsed_modules[0], cycles=cycles)
+            skeleton_sv = hint_tb  # DUT-correct fallback for choose_testbench_output
+            style = "uvm"
+        else:
+            style = tb_meth
 
-    if use_skeleton and ref_tb:
-        skeleton_sv = ref_tb
-    elif inp.module == "testbench" and (inp.gen_mode or "auto").lower() in ("auto", "skeleton", "fast", "template"):
-        if (
-            ref_tb
-            and not (inp.tool_log or "").strip()
-            and not re.search(r"\b(uvm|agent|sequencer)\b", inp.prompt or "", re.I)
-        ):
-            skeleton_sv = ref_tb
-
-    # LLM path: feed the known-good TB as a mandatory structural reference (3B models
-    # otherwise invent broken clocks / circular goldens like exp=count+1).
-    if not skeleton_sv and ref_tb and inp.module == "testbench":
         port_names = [
             p.get("name") for p in (parsed_modules[0].get("ports") or []) if p.get("name")
-        ] if parsed_modules else []
-        hint = tb_golden_hint_from_ports(port_names)
-        user_text = (
-            "MANDATORY reference testbench (copy this structure; keep exact ports; "
-            "do not break the clock or golden model; output ONLY SystemVerilog, no essay):\n"
-            f"{ref_tb}\n\n"
-            f"Golden hint: {hint}\n\n"
-            "User request:\n"
-            + user_text
-        )
+        ]
+        golden_hint = tb_golden_hint_from_ports(port_names)
+        # Simple DUTs: short outline only (full gold/skeleton in prompt = multi-minute CPU TTFT).
+        # Bus protocols: optional full golden few-shot.
+        try:
+            from generation_rules import golden_ref_for_protocol, style_ref_for_protocol
+
+            golden_ref = golden_ref_for_protocol(protocol_pack)
+            ref_compact = style_ref_for_protocol(
+                protocol_pack, hint_tb, max_lines=40, methodology=tb_meth
+            )
+        except Exception:
+            golden_ref = ""
+            ref_compact = truncate_tb_reference(hint_tb, max_lines=40) if hint_tb else ""
+        if golden_ref and tb_meth == "sv":
+            ref_compact = (
+                "GOLD reference TB for this protocol class (adapt module/port names "
+                "to THIS DUT exactly):\n" + golden_ref
+            )
+
+        if is_class_methodology(tb_meth):
+            shape = (
+                (design_analysis or {}).get("recommendation") or {}
+            ).get("tb_shape") or "uvm_smoke"
+            variant = (design_analysis or {}).get("protocol_variant") or protocol_pack
+            prefix = (
+                f"Generate a {tb_meth.upper()} testbench via ChipSutra-VLSI LLM. "
+                f"First follow DESIGN ANALYSIS above (protocol={protocol_pack}, "
+                f"variant={variant}, shape={shape}). "
+                f"Golden/port hint: {golden_hint}. "
+                f"Methodology: {TB_METH_LABELS.get(tb_meth, tb_meth)}. "
+                "MUST include: DUT instance + interface + uvm_config_db set + run_test(); "
+                "scoreboard uvm_analysis_imp + write(); TLM only in connect_phase; "
+                "phase.raise_objection in test. "
+                "Copy ChipVerify first-TB wiring: monitor extends uvm_monitor (NOT uvm_subscriber); "
+                "drv.seq_item_port.connect(sqr.seq_item_export); mon.ap.connect(sb.imp); "
+                "sequence class with task body() — never uvm_sequence#(T) seq=new(). "
+                "Real UVM only — not Pure-SV $urandom smoke.\n"
+            )
+            if ref_compact and tb_meth == "uvm":
+                # Keep skeleton compact — VIP rules already in DESIGN ANALYSIS pack
+                prefix += (
+                    "DUT-correct UVM STYLE skeleton (adapt golden/predict; keep top structure):\n"
+                    f"{ref_compact}\n\n"
+                )
+            else:
+                prefix += "\n"
+        elif style == "procedural_smoke":
+            prefix = (
+                "Generate a procedural Pure SV smoke testbench via LLM (NO UVM). "
+                f"Golden/port hint: {golden_hint}. "
+                "YOU write the code; use this only as STYLE/port guidance:\n"
+                f"{ref_compact}\n\n"
+            )
+        else:
+            prefix = (
+                "Generate a LAYERED Pure SystemVerilog testbench via LLM "
+                "(NO uvm_*/ovm_*/vmm_*). Required components: interface, generator, "
+                "driver, monitor, scoreboard, environment, test, and top "
+                "(mailboxes + virtual interface; NOT txn+scoreboard-only). "
+                f"Golden/port hint: {golden_hint}.\n"
+            )
+            if ref_compact:
+                prefix += (
+                    "Structural STYLE reference (adapt to this DUT; do not paste blindly):\n"
+                    f"{ref_compact}\n\n"
+                )
+        user_text = prefix + "User request:\n" + user_text
 
     session_id = str(uuid.uuid4())
     gen_id = str(uuid.uuid4())
@@ -1091,87 +1441,495 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
     )
     resolved_provider = route.get("provider") or inp.model_provider
     resolved_model = route.get("model") or inp.model_name
+    emit_engine = "llm"
+    emit_model = resolved_model
     gen_doc = {
         "id": gen_id,
         "project_id": inp.project_id,
         "user_id": user["id"],
         "module": inp.module,
-        "provider": "skeleton" if skeleton_sv else resolved_provider,
-        "model": "tb_skeleton" if skeleton_sv else resolved_model,
+        "provider": resolved_provider,
+        "model": resolved_model,
         "prompt": inp.prompt or "",
         "file_ids": inp.file_ids or [],
         "output": "",
         "status": "streaming",
-        "engine": "skeleton" if skeleton_sv else "llm",
+        "engine": "llm",
         "router": route,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.generations.insert_one(gen_doc)
 
     async def event_gen():
-        yield f"data: {json.dumps({'type': 'meta', 'generation_id': gen_id, 'engine': 'skeleton' if skeleton_sv else 'llm', 'router': route, 'plan': plan_to_learning(dv_plan)})}\n\n"
+        _plan_learn = plan_to_learning(dv_plan)
+        if design_analysis is not None:
+            _plan_learn["design_analysis"] = analysis_to_learning(design_analysis)
+        yield f"data: {json.dumps({'type': 'meta', 'generation_id': gen_id, 'engine': 'llm', 'tb_methodology': tb_meth if inp.module == 'testbench' else None, 'router': route, 'plan': _plan_learn})}\n\n"
+        if design_analysis is not None:
+            _da = design_analysis
+            _rec = _da.get("recommendation") or {}
+            yield "data: " + json.dumps({
+                "type": "progress",
+                "stage": "design_analysis",
+                "message": (
+                    f"Analyzed DUT: protocol={_da.get('protocol')} "
+                    f"variant={_da.get('protocol_variant')} "
+                    f"timing={_da.get('timing_style')} → "
+                    f"{_rec.get('methodology')}/{_rec.get('tb_shape')}"
+                ),
+                "protocol": _da.get("protocol"),
+                "protocol_variant": _da.get("protocol_variant"),
+                "timing_style": _da.get("timing_style"),
+                "tb_shape": _rec.get("tb_shape"),
+                "brief": (_da.get("brief") or "")[:800],
+            }) + "\n\n"
+        if spec_analysis is not None:
+            _spec_msg = (
+                f"Spec checklist: {spec_analysis.get('grade')} "
+                f"(score={spec_analysis.get('score')})"
+            )
+            yield "data: " + json.dumps({
+                "type": "progress",
+                "stage": "spec_checklist",
+                "message": _spec_msg,
+                "grade": spec_analysis.get("grade"),
+                "ready": spec_analysis.get("ready"),
+            }) + "\n\n"
+        if debug_analysis is not None and not debug_analysis.get("empty"):
+            yield "data: " + json.dumps({
+                "type": "progress",
+                "stage": "debug_classify",
+                "message": debug_analysis.get("summary"),
+                "top_category": debug_analysis.get("top_category"),
+            }) + "\n\n"
         accumulated = []
         try:
-            if skeleton_sv:
-                yield f"data: {json.dumps({'type': 'progress', 'stage': 'skeleton', 'message': 'Emitting verified Fast-random TB…'})}\n\n"
-                # Stream in small chunks so the UI feels live without waiting on Ollama.
-                chunk = 120
-                for i in range(0, len(skeleton_sv), chunk):
-                    delta = skeleton_sv[i : i + chunk]
-                    accumulated.append(delta)
-                    yield f"data: {json.dumps({'type': 'delta', 'content': delta})}\n\n"
-                    await asyncio.sleep(0)
-            else:
-                yield f"data: {json.dumps({'type': 'progress', 'stage': 'llm', 'message': f'Calling {resolved_model}…', 'model': resolved_model})}\n\n"
-                # Buffer LLM tokens, then quality-gate before showing the user.
-                raw_chunks: List[str] = []
-                ntok = 0
-                async for delta in llm_stream_chat(
-                    provider=resolved_provider,
-                    model=resolved_model,
-                    system=system_msg,
-                    user_text=user_text,
-                    session_id=session_id,
-                    num_predict=num_predict_for_module(inp.module),
-                ):
-                    raw_chunks.append(delta)
-                    ntok += 1
-                    if ntok == 1 or ntok % 24 == 0:
-                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'llm', 'message': f'Generating… ({ntok} chunks)', 'chunks': ntok})}\n\n"
-                raw = "".join(raw_chunks)
-                final = raw
-                engine_tag = "llm"
-                if inp.module == "testbench" and ref_tb:
-                    ports = [p.get("name") for p in (parsed_modules[0].get("ports") or []) if p.get("name")]
-                    force_uvm = bool(re.search(r"\b(uvm|agent|sequencer)\b", inp.prompt or "", re.I))
-                    yield f"data: {json.dumps({'type': 'progress', 'stage': 'lint', 'message': 'Quality-gating TB (lint)…'})}\n\n"
-                    final, engine_tag, issues = choose_testbench_output(
-                        raw,
-                        skeleton=ref_tb,
-                        dut_name=(parsed_modules[0].get("name") if parsed_modules else None),
-                        required_ports=ports,
-                        force_uvm=force_uvm,
+            raw_chunks: List[str] = []
+            ntok = 0
+            streamed = 0
+            cancelled = False
+            skip_llm = False
+            raw = ""
+            final = ""
+            engine_tag = "llm"
+            issues: List[str] = []
+            if inp.module == "testbench" and skeleton_sv and parsed_modules:
+                try:
+                    from tb_skeleton import prefer_known_golden_skeleton
+
+                    skip_llm = prefer_known_golden_skeleton(
+                        gen_mode=gen_mode_l,
+                        tb_methodology=tb_meth,
+                        parsed_module=parsed_modules[0],
+                        prompt=inp.prompt or "",
                     )
-                    if issues:
-                        logger.info("TB lint issues=%s engine=%s", issues, engine_tag)
-                gen_doc_engine = engine_tag
-                accumulated = [final]
-                # Single replace event — avoid double-append with deltas.
-                yield f"data: {json.dumps({'type': 'replace', 'content': final, 'engine': engine_tag})}\n\n"
+                except Exception:
+                    skip_llm = False
+
+            if inp.module == "spec2rtl" and spec_analysis is not None and spec_gate_blocks(spec_analysis):
+                skip_llm = True
+                final = exploratory_stub_rtl(spec_analysis, prompt=inp.prompt or "")
+                engine_tag = "spec_gate"
+
+            async def _client_gone():
+                return await request.is_disconnected()
+
+            if skip_llm:
+                if engine_tag == "spec_gate":
+                    yield "data: " + json.dumps({
+                        "type": "progress",
+                        "stage": "spec_gate",
+                        "message": (
+                            "Spec incomplete (clock/reset/I/O) — emitting exploratory stub. "
+                            "Set CHIPSUTRA_SPEC_GATE=0 to force LLM."
+                        ),
+                        "grade": (spec_analysis or {}).get("grade"),
+                    }) + "\n\n"
+                else:
+                    yield "data: " + json.dumps({
+                        "type": "progress",
+                        "stage": "skeleton",
+                        "message": (
+                            "DUT-matched golden skeleton (skipped LLM — faster and lint-clean). "
+                            "Set gen_mode=llm to force chipsutra-vlsi."
+                        ),
+                    }) + "\n\n"
+                    final = skeleton_sv
+                    engine_tag = "skeleton"
+            else:
+                yield "data: " + json.dumps({
+                    "type": "progress",
+                    "stage": "llm",
+                    "message": (
+                        f"Calling {resolved_model}… "
+                        "(unknown/generic DUT: LLM + skeleton floor; time-boxed)"
+                    ),
+                    "model": resolved_model,
+                }) + "\n\n"
+                try:
+                    async for delta in llm_stream_chat(
+                        provider=resolved_provider,
+                        model=resolved_model,
+                        system=system_msg,
+                        user_text=user_text,
+                        session_id=session_id,
+                        num_predict=num_predict_for_module(
+                            inp.module,
+                            tb_methodology=tb_meth,
+                            protocol=(dv_plan.get("protocol_pack") or "generic"),
+                        ),
+                        cancel_check=_client_gone,
+                    ):
+                        if await request.is_disconnected():
+                            cancelled = True
+                            break
+                        raw_chunks.append(delta)
+                        ntok += 1
+                        accumulated.append(delta)
+                        yield "data: " + json.dumps({"type": "delta", "content": delta}) + "\n\n"
+                        streamed += 1
+                        if ntok == 1 or ntok % 24 == 0:
+                            yield "data: " + json.dumps({
+                                "type": "progress",
+                                "stage": "llm",
+                                "message": f"Generating… ({ntok} chunks)",
+                                "chunks": ntok,
+                            }) + "\n\n"
+                except Exception as llm_err:
+                    if inp.module == "testbench" and skeleton_sv:
+                        logger.warning("LLM generate failed; using skeleton: %s", llm_err)
+                        yield "data: " + json.dumps({
+                            "type": "progress",
+                            "stage": "skeleton",
+                            "message": f"LLM timed out or failed ({type(llm_err).__name__}); using DUT skeleton.",
+                        }) + "\n\n"
+                        final = skeleton_sv
+                        engine_tag = "skeleton_fallback"
+                        issues = ["llm_timeout_or_error"]
+                    else:
+                        raise
+                else:
+                    if cancelled or await request.is_disconnected():
+                        await db.generations.update_one(
+                            {"id": gen_id},
+                            {"$set": {"status": "cancelled", "error": "client_disconnected"}},
+                        )
+                        yield f"data: {json.dumps({'type': 'error', 'error': 'client_disconnected'})}\n\n"
+                        return
+                    raw = "".join(raw_chunks)
+                    final = raw
+                    engine_tag = "llm"
+            sva_learning: Optional[dict] = None
+            checker_learning: Optional[dict] = None
+            fcov_learning: Optional[dict] = None
+            fpga_learning: Optional[dict] = None
+            soft_gate: Optional[dict] = None
+            dut_outs: List[str] = []
+            if parsed_modules:
+                for p in parsed_modules[0].get("ports") or []:
+                    d = (p.get("direction") or "").lower()
+                    n = p.get("name")
+                    if n and d in ("output", "out", "inout"):
+                        dut_outs.append(n)
+            if inp.module == "testbench" and engine_tag not in ("skeleton", "skeleton_fallback"):
+                ports = [
+                    p.get("name")
+                    for p in (parsed_modules[0].get("ports") or [])
+                    if p.get("name")
+                ] if parsed_modules else []
+                port_specs = list((parsed_modules[0].get("ports") or [])) if parsed_modules else []
+                protocol_name = (dv_plan.get("protocol_pack") or protocol_pack or "generic")
+                yield "data: " + json.dumps({
+                    "type": "progress",
+                    "stage": "lint",
+                    "message": f"Quality-gating {tb_meth.upper()} LLM TB (lint/repair — no template replace)…",
+                }) + "\n\n"
+                # LLM-first; UVM may fall back to DUT-correct smoke skeleton if lint fails hard.
+                final, engine_tag, issues = choose_testbench_output(
+                    raw,
+                    skeleton=skeleton_sv,
+                    dut_name=(parsed_modules[0].get("name") if parsed_modules else None),
+                    required_ports=ports if tb_meth == "sv" else None,
+                    dut_outputs=dut_outs or None,
+                    force_uvm=is_class_methodology(tb_meth),
+                    protocol=protocol_name,
+                    port_specs=port_specs or None,
+                )
+                final = extract_sv(final) or final
+                # Second-pass LLM repair when class-SV still below premium bar
+                try:
+                    from tb_class_lint import score_class_sv_competitive
+                    from tb_llm_repair import should_llm_repair, llm_repair_class_sv
+                except Exception:
+                    score_class_sv_competitive = None  # type: ignore
+                    should_llm_repair = None  # type: ignore
+                    llm_repair_class_sv = None  # type: ignore
+                if (
+                    engine_tag not in ("skeleton", "skeleton_fallback")
+                    and score_class_sv_competitive
+                    and should_llm_repair
+                    and llm_repair_class_sv
+                    and re.search(r"\bclass\b", final or "")
+                    and not re.search(r"\b(uvm_|ovm_|vmm_)", final or "", re.I)
+                ):
+                    comp0 = score_class_sv_competitive(
+                        final,
+                        required_ports=ports if tb_meth == "sv" else None,
+                        dut_outputs=dut_outs or None,
+                        protocol=protocol_name,
+                        port_specs=port_specs or None,
+                    )
+                    if should_llm_repair(
+                        issues=issues or comp0.get("issues") or [],
+                        competitive_score=comp0.get("score"),
+                        premium_bar=bool(comp0.get("premium_bar")),
+                    ):
+                        yield "data: " + json.dumps({
+                            "type": "progress",
+                            "stage": "repair",
+                            "message": f"LLM self-repair via {resolved_model} (score={comp0.get('score')})…",
+                        }) + "\n\n"
+                        dut_hint = ""
+                        if parsed_modules:
+                            dut_hint = str(parsed_modules[0].get("name") or "")
+                            if ports:
+                                dut_hint += " ports=" + ",".join(ports[:16])
+                        repaired_raw, ok_stream = await llm_repair_class_sv(
+                            provider=resolved_provider,
+                            model=resolved_model,
+                            broken_sv=final,
+                            issues=issues or comp0.get("issues") or [],
+                            dut_hint=dut_hint,
+                            session_id=session_id,
+                        )
+                        if ok_stream and repaired_raw:
+                            final2, eng2, issues2 = choose_testbench_output(
+                                repaired_raw,
+                                skeleton=skeleton_sv,
+                                dut_name=(parsed_modules[0].get("name") if parsed_modules else None),
+                                required_ports=ports if tb_meth == "sv" else None,
+                                dut_outputs=dut_outs or None,
+                                force_uvm=is_class_methodology(tb_meth),
+                                protocol=protocol_name,
+                                port_specs=port_specs or None,
+                            )
+                            final2 = extract_sv(final2) or final2
+                            comp1 = score_class_sv_competitive(
+                                final2,
+                                required_ports=ports if tb_meth == "sv" else None,
+                                dut_outputs=dut_outs or None,
+                                protocol=protocol_name,
+                                port_specs=port_specs or None,
+                            )
+                            if (comp1.get("score") or 0) >= (comp0.get("score") or 0):
+                                final, engine_tag, issues = final2, "llm_repaired", issues2
+                                logger.info(
+                                    "LLM repair kept score %s -> %s",
+                                    comp0.get("score"),
+                                    comp1.get("score"),
+                                )
+                if engine_tag not in ("llm", "llm_repaired", "skeleton", "skeleton_fallback"):
+                    engine_tag = "llm"
+                if issues:
+                    logger.info("TB lint issues=%s engine=%s (kept LLM output)", issues, engine_tag)
+            elif inp.module in ("assertions", "formal_hints"):
+                # SVA quality gate (mirror TB lint/repair path, lighter)
+                try:
+                    from sva_lint import lint_sva, repair_sva, score_sva
+                    from tb_lint import extract_sv as _extract_sv
+
+                    ports = [
+                        p.get("name")
+                        for p in (parsed_modules[0].get("ports") or [])
+                        if p.get("name")
+                    ] if parsed_modules else []
+                    final = _extract_sv(final) or final
+                    ok_s, iss_s = lint_sva(final, required_ports=ports or None)
+                    if not ok_s or iss_s:
+                        clk = "clk"
+                        rst = "rst_n"
+                        for n in ports or []:
+                            nl = n.lower()
+                            if nl in ("clk", "aclk", "pclk", "hclk"):
+                                clk = n
+                            if nl in ("rst_n", "aresetn", "presetn", "hresetn"):
+                                rst = n
+                        final = repair_sva(
+                            final, clk=clk, rst_n=rst, required_ports=ports or None
+                        )
+                        ok_s, iss_s = lint_sva(final, required_ports=ports or None)
+                        engine_tag = "llm_repaired"
+                    sva_learning = score_sva(final, required_ports=ports or None)
+                    try:
+                        from asfigo_bridge import merge_into
+                        from asfigo_packs import ft_sva_catalog
+                        merge_into(sva_learning, final, kind="svalint")
+                        cat = ft_sva_catalog()
+                        if cat.get("available"):
+                            sva_learning["ft_sva"] = {
+                                "chapters": cat.get("chapters"),
+                                "examples": (cat.get("examples") or [])[:8],
+                            }
+                    except Exception:
+                        pass
+                except Exception:
+                    logger.exception("SVA lint failed; keeping raw LLM output")
+                    engine_tag = "llm"
+            elif inp.module == "covergroups":
+                try:
+                    from fcov_lint import lint_fcov, repair_fcov, score_fcov
+                    from tb_lint import extract_sv as _extract_sv
+
+                    ports = [
+                        p.get("name")
+                        for p in (parsed_modules[0].get("ports") or [])
+                        if p.get("name")
+                    ] if parsed_modules else []
+                    final = _extract_sv(final) or final
+                    ok_f, iss_f = lint_fcov(final, required_ports=ports or None)
+                    if not ok_f or iss_f:
+                        final = repair_fcov(final)
+                        ok_f, iss_f = lint_fcov(final, required_ports=ports or None)
+                        engine_tag = "llm_repaired"
+                    fcov_learning = score_fcov(final, required_ports=ports or None)
+                    try:
+                        from asfigo_bridge import merge_into
+                        merge_into(fcov_learning, final, kind="fcovlint")
+                    except Exception:
+                        pass
+                except Exception:
+                    logger.exception("FCOV lint failed; keeping raw LLM output")
+                    engine_tag = "llm"
+            elif inp.module == "checkers":
+                try:
+                    from checker_lint import lint_checker, repair_checker, score_checker
+                    from tb_lint import extract_sv as _extract_sv
+
+                    ports = [
+                        p.get("name")
+                        for p in (parsed_modules[0].get("ports") or [])
+                        if p.get("name")
+                    ] if parsed_modules else []
+                    final = _extract_sv(final) or final
+                    ok_c, iss_c = lint_checker(final, required_ports=ports or None)
+                    if not ok_c or iss_c:
+                        final = repair_checker(final)
+                        ok_c, iss_c = lint_checker(final, required_ports=ports or None)
+                        engine_tag = "llm_repaired"
+                    checker_learning = score_checker(final, required_ports=ports or None)
+                except Exception:
+                    logger.exception("Checker lint failed; keeping raw LLM output")
+                    engine_tag = "llm"
+            elif inp.module == "spec2rtl":
+                # Gate (G12): incomplete specs emit exploratory stub when CHIPSUTRA_SPEC_GATE is on.
+                has_mod = bool(re.search(r"\bmodule\b", final or "", re.I))
+                gated = engine_tag == "spec_gate"
+                soft_gate = {
+                    "module": "spec2rtl",
+                    "ok": bool(has_mod and (spec_analysis is None or spec_analysis.get("ready"))),
+                    "has_module": has_mod,
+                    "spec_ready": (spec_analysis or {}).get("ready"),
+                    "grade": (spec_analysis or {}).get("grade"),
+                    "gated": gated,
+                }
+                engine_tag = engine_tag if gated else "llm"
+                try:
+                    from fpga_lint import lint_fpga, score_fpga
+                    from asfigo_bridge import merge_into
+                    from asfigo_packs import mathlib_status
+                    from tb_lint import extract_sv as _extract_sv
+
+                    body = _extract_sv(final) or final
+                    ok_f, iss_f = lint_fpga(body)
+                    fpga_learning = score_fpga(body)
+                    fpga_learning["ok"] = ok_f
+                    fpga_learning["issues"] = iss_f
+                    merge_into(fpga_learning, body, kind="fpgalint")
+                    ml = mathlib_status()
+                    if ml.get("available"):
+                        fpga_learning["mathlib"] = {"root": ml.get("root"), "packages": ml.get("packages")}
+                except Exception:
+                    logger.exception("FPGA lint failed; keeping RTL")
+            elif inp.module == "debug":
+                soft_gate = {
+                    "module": "debug",
+                    "ok": bool(
+                        debug_analysis
+                        and not debug_analysis.get("empty")
+                        and debug_analysis.get("top_category")
+                    ),
+                    "top_category": (debug_analysis or {}).get("top_category"),
+                    "summary": (debug_analysis or {}).get("summary"),
+                }
+                engine_tag = "llm"
+            else:
+                engine_tag = "llm"
+            stamp_engine = (
+                engine_tag
+                if engine_tag in ("skeleton", "skeleton_fallback", "llm_repaired")
+                else "llm"
+            )
+            final = stamp_tb_header(
+                final,
+                engine=stamp_engine,
+                model=resolved_model or "llm",
+                protocol=f"{protocol_pack}/{tb_meth}" if inp.module == "testbench" else protocol_pack,
+            )
+            gen_doc_engine = stamp_engine
+            accumulated = [final]
+            yield "data: " + json.dumps({
+                "type": "replace",
+                "content": final,
+                "engine": stamp_engine,
+            }) + "\n\n"
             full = "".join(accumulated)
-            done_engine = "skeleton" if skeleton_sv else locals().get("gen_doc_engine", "llm")
+            done_engine = stamp_engine
+            if inp.module == "testbench" and not full.startswith("// ChipSutra engine="):
+                full = stamp_tb_header(
+                    full,
+                    engine=stamp_engine,
+                    model=resolved_model or "llm",
+                    protocol=f"{protocol_pack}/{tb_meth}",
+                )
+                accumulated = [full]
             learning: dict = {
-                "engine": done_engine,
+                "engine": stamp_engine,
                 **plan_to_learning(dv_plan),
                 "router_reason": route.get("reason"),
-                "resolved_model": None if skeleton_sv else resolved_model,
+                "resolved_model": resolved_model,
             }
+            if sva_learning is not None:
+                learning["sva"] = sva_learning
+                learning["lint_ok"] = sva_learning.get("ok")
+                learning["lint_issues"] = sva_learning.get("issues")
+                learning["premium_bar"] = sva_learning.get("premium_bar")
+            if checker_learning is not None:
+                learning["checker"] = checker_learning
+                learning["lint_ok"] = checker_learning.get("ok")
+                learning["lint_issues"] = checker_learning.get("issues")
+                learning["premium_bar"] = checker_learning.get("premium_bar")
+            if fcov_learning is not None:
+                learning["fcov"] = fcov_learning
+                learning["lint_ok"] = fcov_learning.get("ok")
+                learning["lint_issues"] = fcov_learning.get("issues")
+                learning["premium_bar"] = fcov_learning.get("premium_bar")
+            if fpga_learning is not None:
+                learning["fpga"] = fpga_learning
+            if soft_gate is not None:
+                learning["soft_gate"] = soft_gate
             if spec_analysis is not None:
                 learning["spec_checklist"] = {
                     "ready": spec_analysis.get("ready"),
                     "grade": spec_analysis.get("grade"),
                     "score": spec_analysis.get("score"),
                     "gaps": (spec_analysis.get("gaps") or [])[:6],
+                }
+            if spec_ir is not None:
+                learning["spec_ir"] = {
+                    "port_count": spec_ir.get("port_count"),
+                    "requirement_count": spec_ir.get("requirement_count"),
+                    "clocks": spec_ir.get("clocks"),
+                    "resets": spec_ir.get("resets"),
                 }
             if debug_analysis is not None and not debug_analysis.get("empty"):
                 learning["debug_classify"] = {
@@ -1182,34 +1940,93 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
             if inp.module == "testbench":
                 ports = []
                 dut_name = None
+                dut_outs = []
+                port_specs = []
                 if parsed_modules:
                     dut_name = parsed_modules[0].get("name")
                     ports = [p.get("name") for p in (parsed_modules[0].get("ports") or []) if p.get("name")]
-                lint_ok, lint_issues = lint_testbench(
-                    extract_sv(full) or full,
-                    dut_name=dut_name,
-                    required_ports=ports or None,
+                    port_specs = list(parsed_modules[0].get("ports") or [])
+                    for p in parsed_modules[0].get("ports") or []:
+                        d = (p.get("direction") or "").lower()
+                        n = p.get("name")
+                        if n and d in ("output", "out", "inout"):
+                            dut_outs.append(n)
+                protocol_name = (dv_plan.get("protocol_pack") or protocol_pack or "generic")
+                body_sv = extract_sv(full) or full
+                is_class_sv = bool(
+                    re.search(r"\bclass\b", body_sv)
+                    and not re.search(r"\b(uvm_|ovm_|vmm_)", body_sv, re.I)
                 )
-                auto = auto_score_testbench(full, done_engine, lint_ok, lint_issues)
-                learning.update(
-                    {
-                        "lint_ok": lint_ok,
-                        "lint_issues": lint_issues,
-                        **auto,
-                        "final_score": auto["auto_score"],
-                    }
+                if is_class_sv:
+                    from tb_class_lint import lint_class_sv_tb, score_class_sv_competitive
+
+                    lint_ok, lint_issues = lint_class_sv_tb(
+                        body_sv,
+                        dut_name=dut_name,
+                        required_ports=ports or None,
+                        dut_outputs=dut_outs or None,
+                        protocol=protocol_name,
+                        port_specs=port_specs or None,
+                    )
+                    competitive = score_class_sv_competitive(
+                        body_sv,
+                        required_ports=ports or None,
+                        dut_outputs=dut_outs or None,
+                        protocol=protocol_name,
+                        port_specs=port_specs or None,
+                    )
+                    auto = auto_score_testbench(full, stamp_engine, lint_ok, lint_issues)
+                    learning.update(
+                        {
+                            "lint_ok": lint_ok,
+                            "lint_issues": lint_issues,
+                            **auto,
+                            "final_score": auto["auto_score"],
+                            "competitive": competitive,
+                            "premium_bar": competitive.get("premium_bar"),
+                        }
+                    )
+                else:
+                    lint_ok, lint_issues = lint_testbench(
+                        body_sv,
+                        dut_name=dut_name,
+                        required_ports=ports or None,
+                        dut_outputs=dut_outs or None,
+                    )
+                    if re.search(r"\b(uvm_|ovm_|vmm_)", body_sv, re.I):
+                        try:
+                            from tb_uvm_lint import lint_uvm_tb
+
+                            _uok, uiss = lint_uvm_tb(body_sv)
+                            lint_issues = list(dict.fromkeys((lint_issues or []) + uiss))
+                            lint_ok = lint_ok and _uok
+                        except Exception:
+                            pass
+                    auto = auto_score_testbench(full, stamp_engine, lint_ok, lint_issues)
+                    learning.update(
+                        {
+                            "lint_ok": lint_ok,
+                            "lint_issues": lint_issues,
+                            **auto,
+                            "final_score": auto["auto_score"],
+                        }
+                    )
+                try:
+                    from asfigo_bridge import merge_into
+                    merge_into(learning, body_sv, kind="svck")
+                except Exception:
+                    pass
+                # Verilator when available (auto) or when CHIPSUTRA_VERIFY_TB=true — never template-replace.
+                _verify_env = os.environ.get("CHIPSUTRA_VERIFY_TB", "auto").lower()
+                _do_verify = _verify_env in ("1", "true", "yes") or (
+                    _verify_env in ("auto", "") and bool(verilator_bin())
                 )
-                # Verifier loop: Verilator lint-only on TB + DUT; fallback to skeleton if LLM fails compile.
-                if os.environ.get("CHIPSUTRA_VERIFY_TB", "true").lower() not in ("0", "false", "no"):
-                    yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': 'Verilator verify (lint-only)…'})}\n\n"
+                if _do_verify and tb_meth == "sv":
+                    yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': 'Verilator lint (auto when installed)…'})}\n\n"
                     rtl_sources = []
                     for i, body in enumerate(file_bodies[:6]):
                         fn = (file_names[i] if i < len(file_names) else f"dut_{i}.sv") or f"dut_{i}.sv"
                         rtl_sources.append((fn, body))
-                    tb_top = None
-                    m_tb = re.search(r"\bmodule\s+([A-Za-z_]\w*)", full or "")
-                    if m_tb:
-                        tb_top = m_tb.group(1)
                     vres = verify_testbench(
                         rtl_sources,
                         extract_sv(full) or full,
@@ -1217,34 +2034,194 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
                         mode="lint",
                     )
                     learning.update(verify_status_for_learning(vres))
-                    if vres.get("ok") is False and not vres.get("skipped") and ref_tb and done_engine in ("llm", "llm_repaired"):
-                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify_repair', 'message': 'Verilator failed — falling back to verified template…'})}\n\n"
-                        header = (
-                            "// ChipSutra: LLM TB failed Verilator verify "
-                            f"({vres.get('reason')}); using verified randomized template.\n"
-                        )
-                        full = header + ref_tb.lstrip()
-                        done_engine = "skeleton_fallback"
-                        learning["engine"] = done_engine
-                        learning["verify_repaired"] = True
-                        yield f"data: {json.dumps({'type': 'replace', 'content': full, 'engine': done_engine})}\n\n"
-                        vres2 = verify_testbench(
-                            rtl_sources,
-                            extract_sv(full) or full,
-                            tb_name=f"{(dut_name or 'dut')}_tb.sv",
-                            mode="lint",
-                        )
-                        learning.update(verify_status_for_learning(vres2))
-                        auto2 = auto_score_testbench(full, done_engine, True, [])
-                        learning.update({**auto2, "final_score": auto2["auto_score"], "lint_ok": True})
-                    elif vres.get("skipped"):
-                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': 'Verilator not installed — skipped compile verify'})}\n\n"
+                    if vres.get("skipped"):
+                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': 'Verilator not installed — skipped'})}\n\n"
                     elif vres.get("ok"):
                         yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': 'Verilator lint OK'})}\n\n"
                     else:
                         verr = ", ".join((vres.get("errors") or ["failed"])[:3])
-                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': f'Verilator issues: {verr}'})}\n\n"
+                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': f'Verilator issues (LLM output kept): {verr}'})}\n\n"
+                        _compile_fixed = False
+                        # 1) Mechanical re-pass, then RE-VERIFY the fixed output
+                        if is_class_sv:
+                            try:
+                                from tb_class_lint import repair_class_sv_tb, lint_class_sv_tb as _lcs
 
+                                fixed = repair_class_sv_tb(
+                                    extract_sv(full) or full,
+                                    required_ports=ports or None,
+                                    dut_outputs=dut_outs or None,
+                                    port_specs=port_specs or None,
+                                    dut_name=dut_name,
+                                )
+                                _okf, _issf = _lcs(
+                                    fixed,
+                                    dut_name=dut_name,
+                                    required_ports=ports or None,
+                                    dut_outputs=dut_outs or None,
+                                    protocol=protocol_name,
+                                    port_specs=port_specs or None,
+                                )
+                                vres_fix = verify_testbench(
+                                    rtl_sources, fixed,
+                                    tb_name=f"{(dut_name or 'dut')}_tb.sv", mode="lint",
+                                )
+                                if vres_fix.get("ok") or _okf or len(_issf) < len(lint_issues or []):
+                                    full = stamp_tb_header(
+                                        fixed,
+                                        engine="llm_repaired",
+                                        model=resolved_model or "llm",
+                                        protocol=f"{protocol_pack}/{tb_meth}",
+                                    )
+                                    learning["lint_issues"] = _issf
+                                    learning["lint_ok"] = _okf
+                                    learning["verify_post_repair"] = True
+                                    learning.update(verify_status_for_learning(vres_fix))
+                                    _compile_fixed = bool(vres_fix.get("ok"))
+                                    yield "data: " + json.dumps({
+                                        "type": "replace",
+                                        "content": full,
+                                        "engine": "llm_repaired",
+                                    }) + "\n\n"
+                                    if _compile_fixed:
+                                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': 'Verilator OK after mechanical repair'})}\n\n"
+                                    else:
+                                        vres = vres_fix  # feed latest errors to the LLM pass
+                            except Exception:
+                                pass
+                        # 2) Compiler-error LLM self-repair — feed real %Error lines to the model
+                        _comp_repair_on = os.environ.get(
+                            "CHIPSUTRA_COMPILER_REPAIR", "true"
+                        ).lower() not in ("0", "false", "no")
+                        if (
+                            not _compile_fixed
+                            and _comp_repair_on
+                            # Procedural bus-protocol TBs (AXI/APB) need it too
+                            and (is_class_sv or protocol_pack in ("axi_lite", "axi4_lite", "apb"))
+                            and llm_repair_class_sv
+                            and (vres.get("errors") or [])
+                        ):
+                            try:
+                                from tb_class_lint import repair_class_sv_tb as _mech
+
+                                yield f"data: {json.dumps({'type': 'progress', 'stage': 'repair', 'message': f'Compiler-error self-repair via {resolved_model}…'})}\n\n"
+                                cand_raw, _oks = await llm_repair_class_sv(
+                                    provider=resolved_provider,
+                                    model=resolved_model,
+                                    broken_sv=extract_sv(full) or full,
+                                    issues=learning.get("lint_issues") or [],
+                                    dut_hint=(dut_name or ""),
+                                    session_id=session_id,
+                                    compiler_errors=vres.get("errors") or [],
+                                )
+                                if _oks and cand_raw:
+                                    cand = extract_sv(cand_raw) or cand_raw
+                                    cand = _mech(
+                                        cand,
+                                        required_ports=ports or None,
+                                        dut_outputs=dut_outs or None,
+                                        port_specs=port_specs or None,
+                                        dut_name=dut_name,
+                                    )
+                                    vres2 = verify_testbench(
+                                        rtl_sources, cand,
+                                        tb_name=f"{(dut_name or 'dut')}_tb.sv", mode="lint",
+                                    )
+                                    if vres2.get("ok"):
+                                        full = stamp_tb_header(
+                                            cand,
+                                            engine="llm_repaired",
+                                            model=resolved_model or "llm",
+                                            protocol=f"{protocol_pack}/{tb_meth}",
+                                        )
+                                        learning.update(verify_status_for_learning(vres2))
+                                        learning["verify_compiler_repair"] = True
+                                        yield "data: " + json.dumps({
+                                            "type": "replace",
+                                            "content": full,
+                                            "engine": "llm_repaired",
+                                        }) + "\n\n"
+                                        yield f"data: {json.dumps({'type': 'progress', 'stage': 'verify', 'message': 'Verilator OK after compiler-error self-repair'})}\n\n"
+                            except Exception:
+                                logger.exception("compiler-error self-repair failed")
+
+                        # 3) Closed loop: sim-run → classify/repair ≤N → skeleton → mutation → evidence
+                        if tb_meth == "sv" and rtl_sources:
+                            try:
+                                from tb_class_lint import repair_class_sv_tb as _loop_mech
+
+                                async def _loop_llm(tb_code, classified, vrun, extra_hint=""):
+                                    if not llm_repair_class_sv:
+                                        return tb_code, False
+                                    errs = list(vrun.get("errors") or [])[:8]
+                                    templates = list((classified or {}).get("templates") or [])[:4]
+                                    if extra_hint:
+                                        templates.append(extra_hint[:400])
+                                    return await llm_repair_class_sv(
+                                        provider=resolved_provider,
+                                        model=resolved_model,
+                                        broken_sv=extract_sv(tb_code) or tb_code,
+                                        issues=learning.get("lint_issues") or [],
+                                        dut_hint=(dut_name or ""),
+                                        session_id=session_id,
+                                        compiler_errors=errs + templates,
+                                    )
+
+                                def _mech(code: str) -> str:
+                                    return _loop_mech(
+                                        extract_sv(code) or code,
+                                        required_ports=ports or None,
+                                        dut_outputs=dut_outs or None,
+                                        port_specs=port_specs or None,
+                                        dut_name=dut_name,
+                                    )
+
+                                loop = await run_closed_loop(
+                                    tb_sv=extract_sv(full) or full,
+                                    rtl_sources=rtl_sources,
+                                    tb_name=f"{(dut_name or 'dut')}_tb.sv",
+                                    dut_name=dut_name or "dut",
+                                    protocol=protocol_name or protocol_pack or "generic",
+                                    skeleton_sv=skeleton_sv or "",
+                                    stamp=lambda code, engine, model, protocol: stamp_tb_header(
+                                        code, engine=engine, model=model, protocol=protocol
+                                    ),
+                                    mechanical_repair=_mech if is_class_sv else None,
+                                    llm_repair=_loop_llm if llm_repair_class_sv else None,
+                                    analysis=design_analysis,
+                                    tool_versions=tool_versions(),
+                                    model=resolved_model or "llm",
+                                )
+                                for ev in loop.events:
+                                    yield f"data: {json.dumps(ev)}\n\n"
+                                if loop.tb_sv and loop.tb_sv.strip():
+                                    full = loop.tb_sv
+                                if loop.engine:
+                                    done_engine = loop.engine
+                                learning.update(loop.learning or {})
+                            except Exception:
+                                logger.exception("closed-loop sim/repair/mutation failed")
+
+            saved_file = None
+            try:
+                dut_save = "dut"
+                if parsed_modules:
+                    dut_save = parsed_modules[0].get("name") or "dut"
+                saved_file = await _persist_generation_output(
+                    project_id=inp.project_id,
+                    module=inp.module,
+                    content=full,
+                    dut_name=dut_save,
+                    methodology=tb_meth if inp.module == "testbench" else "sv",
+                )
+                if saved_file:
+                    learning["saved_file"] = {
+                        "id": saved_file.get("id"),
+                        "name": saved_file.get("original_filename"),
+                        "kind": saved_file.get("kind"),
+                    }
+            except Exception:
+                logger.exception("auto-save generated artifact failed")
             await db.generations.update_one(
                 {"id": gen_id},
                 {
@@ -1257,10 +2234,23 @@ async def generate_stream(inp: GenerateIn, user=Depends(get_current_user)):
                     }
                 },
             )
-            yield f"data: {json.dumps({'type': 'done', 'generation_id': gen_id, 'engine': done_engine, 'learning': learning})}\n\n"
+            done_payload = {
+                "type": "done",
+                "generation_id": gen_id,
+                "engine": done_engine,
+                "learning": learning,
+            }
+            if saved_file:
+                done_payload["saved_file"] = {
+                    "id": saved_file.get("id"),
+                    "name": saved_file.get("original_filename"),
+                    "kind": saved_file.get("kind"),
+                }
+            yield f"data: {json.dumps(done_payload)}\n\n"
         except Exception as e:
             logger.exception("Generation error")
-            err = str(e)
+            # Timeout exceptions often have empty str() — keep the class name
+            err = str(e).strip() or type(e).__name__
             await db.generations.update_one({"id": gen_id}, {"$set": {"status": "error", "error": err}})
             yield f"data: {json.dumps({'type': 'error', 'error': err})}\n\n"
 
@@ -1274,6 +2264,91 @@ async def get_generation(gen_id: str, user=Depends(get_current_user)):
         raise HTTPException(404, "Generation not found")
     await require_project(doc["project_id"], user["id"], "viewer")
     return doc
+
+
+@api.get("/generations/{gen_id}/evidence")
+async def download_generation_evidence(gen_id: str, user=Depends(get_current_user)):
+    """ZIP: evidence.json + TB + attached RTL. Community sign-off lite, not UCIS."""
+    doc = await db.generations.find_one({"id": gen_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Generation not found")
+    await require_project(doc["project_id"], user["id"], "viewer")
+    learn = doc.get("learning") or {}
+    evidence = learn.get("evidence") or {
+        "chipsutra_evidence": "1.0",
+        "dut_name": "dut",
+        "sim_pass": learn.get("sim_pass"),
+        "mutation": learn.get("mutation") or {},
+        "notes": ["Rebuilt on download — original evidence.json missing."],
+    }
+    files: dict = {}
+    tb = doc.get("output") or ""
+    if tb.strip():
+        files["tb.sv"] = tb
+    for fid in (doc.get("file_ids") or [])[:8]:
+        fdoc = await db.files.find_one(
+            {"id": fid, "project_id": doc["project_id"], "is_deleted": {"$ne": True}},
+            {"_id": 0},
+        )
+        if not fdoc:
+            continue
+        name = fdoc.get("original_filename") or f"{fid}.sv"
+        files[f"rtl/{name}"] = _get_file_text(fdoc)
+    sim_tail = (learn.get("verify_errors") or [])
+    if sim_tail:
+        files["sim_errors.txt"] = "\n".join(str(x) for x in sim_tail)
+    blob = evidence_zip_bytes(document=evidence, files=files)
+    dut = (evidence.get("dut_name") or "dut").replace(" ", "_")
+    return Response(
+        content=blob,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="chipsutra_{dut}_evidence.zip"'},
+    )
+
+
+@api.get("/projects/{pid}/signoff")
+async def project_signoff(pid: str, user=Depends(get_current_user)):
+    """Community readiness tiles. ChipSutra does not claim vendor sign-off."""
+    await require_project(pid, user["id"], "viewer")
+    gens = await db.generations.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(40)
+    covs = await db.coverage_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(10)
+    cdcs = await db.cdc_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(10)
+    formals = await db.formal_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(10)
+    sims = await db.simulations.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(10)
+    synths = await db.synth_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(5)
+    stas = await db.sta_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(5)
+    board = build_signoff_board(
+        generations=gens,
+        coverage_runs=covs,
+        cdc_runs=cdcs,
+        formal_runs=formals,
+        simulations=sims,
+        synth_runs=synths,
+        sta_runs=stas,
+    )
+    board["project_id"] = pid
+    return board
+
+
+@api.get("/projects/{pid}/signoff.zip")
+async def project_signoff_zip(pid: str, user=Depends(get_current_user)):
+    """ZIP: signoff.json + latest TB evidence. Not a vendor UCIS dump."""
+    await require_project(pid, user["id"], "viewer")
+    gens = await db.generations.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(40)
+    board = build_signoff_board(generations=gens)
+    files: dict = {"signoff.json": json.dumps(board, indent=2)}
+    tb = next((g for g in gens if g.get("module") == "testbench"), None)
+    if tb and (tb.get("output") or "").strip():
+        files["tb.sv"] = tb["output"]
+        ev = (tb.get("learning") or {}).get("evidence")
+        if ev:
+            files["evidence.json"] = json.dumps(ev, indent=2)
+    blob = evidence_zip_bytes(document=board, files=files)
+    return Response(
+        content=blob,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="chipsutra_{pid[:8]}_signoff.zip"'},
+    )
 
 @api.get("/projects/{pid}/generations")
 async def list_generations(pid: str, user=Depends(get_current_user)):
@@ -1809,14 +2884,55 @@ async def simulate_stream(inp: SimulateIn, user=Depends(get_current_user)):
     await db.simulations.insert_one(sim_doc)
 
     async def evgen():
-        yield f"data: {json.dumps({'type':'meta','simulation_id': sim_id, 'engine': sim_doc['engine']})}\n\n"
         log_lines = []
         def log(line: str, level: str = "info"):
             log_lines.append(line)
             return f"data: {json.dumps({'type':'log','level':level,'line':line})}\n\n"
 
+        from commercial_sim_pack import looks_like_uvm, uvm_refuse_message, uvm_test_name
+
+        tb_blob = ""
+        fdocs = await db.files.find(
+            {"id": {"$in": all_ids}, "project_id": inp.project_id, "is_deleted": {"$ne": True}},
+            {"_id": 0},
+        ).to_list(50)
+        for f in fdocs:
+            body = _get_file_text(f)
+            if inp.tb_file_id and f.get("id") == inp.tb_file_id:
+                tb_blob = body
+                break
+            if looks_like_uvm(body):
+                tb_blob = body
+        if looks_like_uvm(tb_blob):
+            test = uvm_test_name(tb_blob)
+            await db.simulations.update_one(
+                {"id": sim_id},
+                {"$set": {"status": "export", "engine": "vendor_export", "logs": [uvm_refuse_message(test)]}},
+            )
+            yield f"data: {json.dumps({'type':'meta','simulation_id': sim_id, 'engine': 'vendor_export'})}\n\n"
+            yield log(uvm_refuse_message(test), "warn")
+            yield log("Use Export vendor pack in Simulate for filelist + Questa/VCS/Xcelium scripts.", "info")
+            yield f"data: {json.dumps({'type':'vendor_pack','test': test, 'simulation_id': sim_id})}\n\n"
+            yield f"data: {json.dumps({'type':'done','simulation_id': sim_id, 'status': 'export', 'engine': 'vendor_export'})}\n\n"
+            return
+
+        yield f"data: {json.dumps({'type':'meta','simulation_id': sim_id, 'engine': sim_doc['engine']})}\n\n"
+
         if not VERILATOR_BIN:
-            # MOCK fallback
+            if REFUSE_MOCK_SIM:
+                yield log(
+                    "[error] Verilator not installed — refusing mock PASS "
+                    "(set CHIPSUTRA_REFUSE_MOCK_SIM=false for lab demos only)",
+                    "error",
+                )
+                status = "error"
+                await db.simulations.update_one(
+                    {"id": sim_id},
+                    {"$set": {"status": status, "engine": "unavailable", "logs": log_lines}},
+                )
+                yield f"data: {json.dumps({'type':'done','simulation_id': sim_id, 'status': status, 'engine': 'unavailable'})}\n\n"
+                return
+            # MOCK fallback (lab / demos only)
             yield log("[mock] Verilator not available in this environment", "warn")
             yield log("[mock] Parsing RTL files ...")
             await asyncio.sleep(0.2)
@@ -2495,6 +3611,12 @@ CHIPLET_TEMPLATES = [
     },
 ]
 
+@api.get("/dv-config/example")
+async def dv_config_example():
+    """Example CHIPSUTRA_DV_CONFIG / GenerateIn.dv_config. RTL ports still win."""
+    return dv_example_config()
+
+
 @api.get("/templates")
 async def list_templates():
     return CHIPLET_TEMPLATES
@@ -3066,6 +4188,93 @@ async def _unique_project_filename(project_id: str, filename: str) -> str:
     return f"{filename}_{uuid.uuid4().hex[:8]}"
 
 
+async def _upsert_project_text_file(
+    *,
+    project_id: str,
+    filename: str,
+    content: str,
+    kind: str = "artifact",
+    content_type: str = "text/plain",
+) -> dict:
+    """Replace the live generate artifact of the same name+kind, or insert it."""
+    existing = await db.files.find_one(
+        {
+            "project_id": project_id,
+            "original_filename": filename,
+            "kind": kind,
+            "is_deleted": {"$ne": True},
+        },
+        {"_id": 0},
+    )
+    data = content.encode("utf-8")
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if existing:
+        file_id = existing["id"]
+        storage_path = existing.get("storage_path")
+        try:
+            r = put_object(
+                f"{APP_NAME}/projects/{project_id}/{file_id}.{ext or 'txt'}",
+                data,
+                content_type,
+            )
+            storage_path = r["path"]
+        except Exception:
+            pass
+        updates = {
+            "size": len(data),
+            "content_type": content_type,
+            "storage_path": storage_path,
+            "inline_content": content if storage_path is None else None,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        await db.files.update_one({"id": file_id, "project_id": project_id}, {"$set": updates})
+        doc = {**existing, **updates, "original_filename": filename, "kind": kind}
+        return {k: v for k, v in doc.items() if k not in ("inline_content", "_id")}
+    file_id = str(uuid.uuid4())
+    storage_path = None
+    try:
+        r = put_object(f"{APP_NAME}/projects/{project_id}/{file_id}.{ext or 'txt'}", data, content_type)
+        storage_path = r["path"]
+    except Exception:
+        pass
+    doc = {
+        "id": file_id,
+        "project_id": project_id,
+        "original_filename": filename,
+        "ext": ext,
+        "kind": kind,
+        "size": len(data),
+        "content_type": content_type,
+        "storage_path": storage_path,
+        "inline_content": content if storage_path is None else None,
+        "is_deleted": False,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.files.insert_one(doc)
+    return {k: v for k, v in doc.items() if k not in ("inline_content", "_id")}
+
+
+async def _persist_generation_output(
+    *,
+    project_id: str,
+    module: str,
+    content: str,
+    dut_name: str,
+    methodology: str = "sv",
+) -> Optional[dict]:
+    text = (content or "").strip()
+    if len(text) < 8:
+        return None
+    kind, filename = generation_artifact_meta(module, dut_name, methodology)
+    return await _upsert_project_text_file(
+        project_id=project_id,
+        filename=filename,
+        content=content,
+        kind=kind,
+        content_type="text/plain",
+    )
+
+
 async def _persist_project_text_file(
     *,
     project_id: str,
@@ -3400,7 +4609,7 @@ async def scaffold_cocotb(pid: str, inp: CocotbScaffoldIn, user=Depends(get_curr
     top = inp.top_module or _extract_top_module(text)
     if not top:
         raise HTTPException(400, "Could not detect top module")
-    generated = render_cocotb_scaffold(top, rtl["original_filename"])
+    generated = render_cocotb_scaffold(top, rtl["original_filename"], rtl_text=text)
     docs = []
     for name, content in generated.items():
         saved = await _persist_project_text_file(
@@ -3698,7 +4907,13 @@ async def sta_stream(inp: StaRunIn, user=Depends(get_current_user)):
         stats: dict = {}
         note: Optional[str] = None
         binary = sta_bin()
-        engine = "opensta" if (binary and liberty_doc) else "mock"
+        demo_path = None if liberty_doc else demo_liberty_path()
+        if binary and liberty_doc:
+            engine = "opensta"
+        elif binary and demo_path:
+            engine = "opensta_demo"
+        else:
+            engine = "mock"
         top = inp.top_module or _extract_top_module(_get_file_text(netlist_doc))
         yield f"data: {json.dumps({'type':'meta','sta_id': run_id,'engine': engine,'top_module': top})}\n\n"
 
@@ -3706,12 +4921,13 @@ async def sta_stream(inp: StaRunIn, user=Depends(get_current_user)):
             missing = []
             if not binary:
                 missing.append("sta/opensta binary")
-            if not liberty_doc:
+            if not liberty_doc and not demo_path:
                 missing.append("liberty (.lib) file")
             note = (
                 f"[mock] Timing not run — missing: {', '.join(missing)}. "
-                "Install OpenSTA (`sta`) via OSS CAD Suite / Docker and upload a liberty (.lib) "
-                "for your target library, then re-run. Netlist and SDC are ready."
+                "Install OpenSTA (`sta`) via OSS CAD Suite / Docker. "
+                "ChipSutra ships backend/fixtures/chipsutra_demo.lib for smoke; "
+                "sky130/foundry .lib for real STA — see docs/STA_LIBERTY.md."
             )
             logs.append(note)
             yield f"data: {json.dumps({'type':'log','level':'warn','line':note})}\n\n"
@@ -3726,8 +4942,12 @@ async def sta_stream(inp: StaRunIn, user=Depends(get_current_user)):
                         fh.write(_get_file_text(netlist_doc))
                     written = [netlist_path]
 
-                    liberty_name = _sta_local_name(liberty_doc, "library.lib")
-                    liberty_text = _get_file_text(liberty_doc)
+                    liberty_name = _sta_local_name(liberty_doc, "library.lib") if liberty_doc else "chipsutra_demo.lib"
+                    if liberty_doc:
+                        liberty_text = _get_file_text(liberty_doc)
+                    else:
+                        liberty_text = Path(demo_path).read_text(encoding="utf-8")
+                        yield f"data: {json.dumps({'type':'log','level':'info','line':'[sta] using ChipSutra demo liberty (not a foundry PDK)'})}\n\n"
                     liberty_path = os.path.join(tmp, liberty_name)
                     with open(liberty_path, "w", encoding="utf-8") as fh:
                         fh.write(liberty_text)
@@ -3827,6 +5047,254 @@ async def sta_stream(inp: StaRunIn, user=Depends(get_current_user)):
 async def list_sta_runs(pid: str, user=Depends(get_current_user)):
     await require_project(pid, user["id"], "viewer")
     return await db.sta_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(30)
+
+
+# ---- One-click Lab: lint → sim → synth → STA ----
+class LabIn(BaseModel):
+    project_id: str
+    rtl_file_ids: List[str] = Field(default_factory=list)
+    tb_file_id: Optional[str] = None
+    top_module: Optional[str] = None
+    skip_sim: bool = False
+    sim_time_ns: int = 1000
+    liberty_file_id: Optional[str] = None
+    sdc_file_id: Optional[str] = None
+    clock_name: str = "clk"
+    period_ns: float = 10.0
+    stop_on_fail: bool = True
+    scaffold_sta: bool = True
+
+
+async def _iter_sse_json(body_iterator):
+    """Parse SSE `data: {...}` frames from a StreamingResponse body iterator."""
+    buf = ""
+    async for chunk in body_iterator:
+        text = chunk.decode("utf-8", errors="ignore") if isinstance(chunk, (bytes, bytearray)) else str(chunk)
+        buf += text
+        while "\n\n" in buf:
+            part, buf = buf.split("\n\n", 1)
+            line = part.strip()
+            if not line.startswith("data:"):
+                continue
+            try:
+                yield json.loads(line[5:].strip())
+            except Exception:
+                continue
+
+
+@api.post("/lab/plan")
+async def lab_plan(inp: LabIn, user=Depends(get_current_user)):
+    """Return the stage plan for a project without running tools."""
+    await require_project(inp.project_id, user["id"], "viewer")
+    files = await db.files.find(
+        {"project_id": inp.project_id, "is_deleted": {"$ne": True}},
+        {"_id": 0},
+    ).to_list(500)
+    buckets = classify_hdl_files(files)
+    rtl_ids = list(inp.rtl_file_ids) or [f["id"] for f in buckets["rtl"]]
+    tb_id = inp.tb_file_id or (buckets["tb"][0]["id"] if buckets["tb"] else None)
+    stages = plan_lab_stages(
+        has_rtl=bool(rtl_ids),
+        has_tb=bool(tb_id),
+        skip_sim=bool(inp.skip_sim),
+        has_verible=bool(shutil.which("verible-verilog-lint")),
+    )
+    return {
+        "rtl_file_ids": rtl_ids,
+        "tb_file_id": tb_id,
+        "liberty_file_id": inp.liberty_file_id or (buckets["liberty"][0]["id"] if buckets["liberty"] else None),
+        "sdc_file_id": inp.sdc_file_id or (buckets["sdc"][0]["id"] if buckets["sdc"] else None),
+        "stages": stages,
+    }
+
+
+@api.post("/lab/stream")
+async def lab_stream(inp: LabIn, user=Depends(get_current_user)):
+    """Compose lint → (sim) → synth → STA into one SSE stream."""
+    await require_project(inp.project_id, user["id"], "editor")
+    files = await db.files.find(
+        {"project_id": inp.project_id, "is_deleted": {"$ne": True}},
+        {"_id": 0},
+    ).to_list(500)
+    buckets = classify_hdl_files(files)
+    rtl_ids = list(inp.rtl_file_ids) or [f["id"] for f in buckets["rtl"]]
+    if not rtl_ids:
+        raise HTTPException(400, "No synthesizable RTL files found for Lab pipeline")
+    tb_id = inp.tb_file_id
+    if tb_id is None and buckets["tb"]:
+        tb_id = buckets["tb"][0]["id"]
+    liberty_id = inp.liberty_file_id or (buckets["liberty"][0]["id"] if buckets["liberty"] else None)
+    sdc_id = inp.sdc_file_id or (buckets["sdc"][0]["id"] if buckets["sdc"] else None)
+    stages = plan_lab_stages(
+        has_rtl=True,
+        has_tb=bool(tb_id),
+        skip_sim=bool(inp.skip_sim),
+        has_verible=bool(shutil.which("verible-verilog-lint")),
+    )
+    lab_id = str(uuid.uuid4())
+    await db.lab_runs.insert_one(
+        {
+            "id": lab_id,
+            "project_id": inp.project_id,
+            "user_id": user["id"],
+            "status": "streaming",
+            "stages": [s["id"] for s in stages],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+
+    async def evgen():
+        results: List[dict] = []
+        yield f"data: {json.dumps({'type': 'meta', 'lab_id': lab_id, 'stages': stages})}\n\n"
+
+        for stage in stages:
+            sid = stage["id"]
+            yield f"data: {json.dumps({'type': 'stage_start', 'stage': sid, 'label': stage['label']})}\n\n"
+            status = "error"
+            note = None
+            try:
+                if sid == "verible":
+                    rtl_docs = [f for f in files if f.get("id") in set(rtl_ids)]
+                    named = [
+                        (f.get("original_filename") or "dut.sv", _get_file_text(f))
+                        for f in rtl_docs
+                    ]
+                    vr = run_verible_lint(named)
+                    status = vr.get("status") or "error"
+                    note = vr.get("note")
+                    for line in (vr.get("log") or note or "verible lint").splitlines()[:40]:
+                        if line:
+                            yield f"data: {json.dumps({'type': 'log', 'stage': sid, 'level': 'info', 'line': line})}\n\n"
+                    resp = None
+                elif sid == "lint":
+                    resp = await simulate_stream(
+                        SimulateIn(
+                            project_id=inp.project_id,
+                            rtl_file_ids=rtl_ids,
+                            tb_file_id=tb_id,
+                            top_module=inp.top_module,
+                            mode="lint",
+                            use_lint_policy=True,
+                        ),
+                        user,
+                    )
+                elif sid == "sim":
+                    resp = await simulate_stream(
+                        SimulateIn(
+                            project_id=inp.project_id,
+                            rtl_file_ids=rtl_ids,
+                            tb_file_id=tb_id,
+                            top_module=inp.top_module,
+                            mode="run",
+                            sim_time_ns=max(50, int(inp.sim_time_ns or 1000)),
+                            use_lint_policy=True,
+                        ),
+                        user,
+                    )
+                elif sid == "synth":
+                    resp = await synth_stream(
+                        SynthIn(
+                            project_id=inp.project_id,
+                            rtl_file_ids=rtl_ids,
+                            top_module=inp.top_module,
+                            mode="synth",
+                        ),
+                        user,
+                    )
+                elif sid == "sta":
+                    nonlocal_sdc = sdc_id
+                    if inp.scaffold_sta and not nonlocal_sdc:
+                        try:
+                            scaffolded = await scaffold_opensta(
+                                inp.project_id,
+                                OpenStaScaffoldIn(
+                                    rtl_file_id=rtl_ids[0],
+                                    top_module=inp.top_module,
+                                    clock_name=inp.clock_name or "clk",
+                                    period_ns=float(inp.period_ns or 10.0),
+                                ),
+                                user,
+                            )
+                            if isinstance(scaffolded, dict):
+                                for fdoc in scaffolded.get("files") or []:
+                                    fname = (fdoc.get("original_filename") or "").lower()
+                                    if fname.endswith(".sdc") and fdoc.get("id"):
+                                        nonlocal_sdc = fdoc["id"]
+                                        break
+                                msg = "[lab] OpenSTA SDC scaffold generated"
+                                yield f"data: {json.dumps({'type': 'log', 'stage': sid, 'level': 'info', 'line': msg})}\n\n"
+                        except Exception as e:
+                            warn = f"[lab] STA scaffold skipped: {e}"
+                            yield f"data: {json.dumps({'type': 'log', 'stage': sid, 'level': 'warn', 'line': warn})}\n\n"
+                    resp = await sta_stream(
+                        StaRunIn(
+                            project_id=inp.project_id,
+                            netlist_file_id=None,
+                            liberty_file_id=liberty_id,
+                            sdc_file_id=nonlocal_sdc,
+                            top_module=inp.top_module,
+                            clock_name=inp.clock_name or "clk",
+                            period_ns=float(inp.period_ns or 10.0),
+                        ),
+                        user,
+                    )
+                else:
+                    yield f"data: {json.dumps({'type': 'log', 'stage': sid, 'level': 'error', 'line': f'unknown stage {sid}'})}\n\n"
+                    resp = None
+
+                if resp is not None:
+                    async for event in _iter_sse_json(resp.body_iterator):
+                        et = event.get("type")
+                        if et == "done":
+                            status = event.get("status") or "error"
+                            note = event.get("note") or note
+                            yield f"data: {json.dumps({**event, 'stage': sid})}\n\n"
+                        elif et == "log":
+                            yield f"data: {json.dumps({**event, 'stage': sid})}\n\n"
+                        elif et in ("meta", "stats", "artifact", "lint_report"):
+                            yield f"data: {json.dumps({**event, 'stage': sid})}\n\n"
+                            if et == "stats" and event.get("note"):
+                                note = event.get("note")
+            except HTTPException as he:
+                status = "error"
+                msg = f"[lab] {sid} HTTP {he.status_code}: {he.detail}"
+                yield f"data: {json.dumps({'type': 'log', 'stage': sid, 'level': 'error', 'line': msg})}\n\n"
+            except Exception as e:
+                status = "error"
+                msg = f"[lab] {sid} failed: {e}"
+                yield f"data: {json.dumps({'type': 'log', 'stage': sid, 'level': 'error', 'line': msg})}\n\n"
+
+            failed = stage_failed(sid, status)
+            results.append({"stage": sid, "status": status, "failed": failed, "note": note})
+            yield f"data: {json.dumps({'type': 'stage_done', 'stage': sid, 'status': status, 'failed': failed, 'note': note})}\n\n"
+            if failed and inp.stop_on_fail:
+                yield f"data: {json.dumps({'type': 'log', 'stage': sid, 'level': 'error', 'line': f'[lab] aborting pipeline after {sid} failure'})}\n\n"
+                break
+
+        overall = pipeline_status(results)
+        await db.lab_runs.update_one(
+            {"id": lab_id},
+            {
+                "$set": {
+                    "status": overall,
+                    "results": results,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            },
+        )
+        yield f"data: {json.dumps({'type': 'done', 'status': overall, 'lab_id': lab_id, 'results': results})}\n\n"
+
+    return StreamingResponse(
+        evgen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@api.get("/projects/{pid}/lab-runs")
+async def list_lab_runs(pid: str, user=Depends(get_current_user)):
+    await require_project(pid, user["id"], "viewer")
+    return await db.lab_runs.find({"project_id": pid}, {"_id": 0}).sort("created_at", -1).to_list(30)
 
 
 # ---- CDC / RDC analyzer (heuristic + optional Yosys JSON) ----
@@ -3960,6 +5428,122 @@ async def list_cdc_runs(pid: str, user=Depends(get_current_user)):
 # Add a new AI module: formal_hints (LLM)
 MODULE_PROMPTS["formal_hints"] = "You are a formal-verification expert. Given the RTL below, generate 8–12 SVA-style formal properties suitable for SymbiYosys / JasperGold: mix of `assert property`, `assume property`, and `cover property`. Include a short comment for each explaining the intent and expected proof depth. Output only SystemVerilog code."
 
+
+class FormalPackIn(BaseModel):
+    spec: str = ""
+    prompt: str = ""
+    dut: str = "dut"
+    depth: int = 20
+    sby_log: Optional[str] = None
+
+
+@api.post("/formal/pack")
+async def formal_pack_from_spec(inp: FormalPackIn, user=Depends(get_current_user)):
+    """Spec IR → SVA + .sby. Optional CEX log classification."""
+    from formal_pack import build_formal_pack, classify_cex
+
+    pack = build_formal_pack(inp.spec, prompt=inp.prompt, dut=inp.dut or "dut", depth=inp.depth)
+    if inp.sby_log:
+        pack["cex_debug"] = classify_cex(inp.sby_log, prior_sva=pack.get("sva") or "")
+    return pack
+
+
+class DebugClassifyIn(BaseModel):
+    tool_log: str = ""
+    prior_output: Optional[str] = None
+
+
+class DvPackIn(BaseModel):
+    project_id: str
+    file_ids: List[str] = []
+    tb_methodology: str = "sv"
+
+
+class VendorPackIn(BaseModel):
+    project_id: str
+    rtl_file_ids: List[str] = []
+    tb_file_id: Optional[str] = None
+
+
+@api.post("/debug/classify")
+async def debug_classify_log(inp: DebugClassifyIn, user=Depends(get_current_user)):
+    """Ranked fail causes from a sim/lint log. No LLM."""
+    _ = user
+    return classify_log(inp.tool_log or "", prior_code=inp.prior_output or "")
+
+
+@api.post("/generate/pack")
+async def generate_dv_pack(inp: DvPackIn, user=Depends(get_current_user)):
+    """TB + SVA + covergroup + testplan ZIP from parsed RTL (skeleton, no LLM)."""
+    from dv_pack import build_dv_pack, dv_pack_zip
+
+    await require_project(inp.project_id, user["id"], "editor")
+    ids = list(inp.file_ids or [])
+    fdocs = []
+    if ids:
+        fdocs = await db.files.find(
+            {"id": {"$in": ids}, "project_id": inp.project_id, "is_deleted": {"$ne": True}},
+            {"_id": 0},
+        ).to_list(20)
+    if not fdocs:
+        fdocs = await db.files.find(
+            {
+                "project_id": inp.project_id,
+                "is_deleted": {"$ne": True},
+                "$or": [
+                    {"ext": {"$in": ["v", "sv"]}},
+                    {"original_filename": {"$regex": r"\.(v|sv)$", "$options": "i"}},
+                ],
+            },
+            {"_id": 0},
+        ).to_list(20)
+    rtl = "\n\n".join(_get_file_text(f) for f in fdocs if _get_file_text(f))
+    if not rtl.strip():
+        raise HTTPException(400, "Upload RTL (.v/.sv) before generating a DV pack")
+    pack = build_dv_pack(rtl, methodology=inp.tb_methodology or "sv")
+    blob = dv_pack_zip(pack)
+    dut = (pack.get("dut") or "dut").replace(" ", "_")
+    return Response(
+        content=blob,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="chipsutra_{dut}_dv_pack.zip"'},
+    )
+
+
+@api.post("/simulate/vendor-pack")
+async def simulate_vendor_pack(inp: VendorPackIn, user=Depends(get_current_user)):
+    """UVM filelist + Questa/VCS/Xcelium scripts. Not a Verilator run."""
+    from commercial_sim_pack import build_vendor_files, vendor_pack_zip
+
+    await require_project(inp.project_id, user["id"], "editor")
+    ids = list(inp.rtl_file_ids or [])
+    if inp.tb_file_id and inp.tb_file_id not in ids:
+        ids.append(inp.tb_file_id)
+    fdocs = await db.files.find(
+        {"id": {"$in": ids}, "project_id": inp.project_id, "is_deleted": {"$ne": True}},
+        {"_id": 0},
+    ).to_list(30)
+    sources = []
+    tb_sv = ""
+    tb_name = "tb.sv"
+    for f in fdocs:
+        name = f.get("original_filename") or "src.sv"
+        body = _get_file_text(f)
+        sources.append((name, body))
+        if inp.tb_file_id and f.get("id") == inp.tb_file_id:
+            tb_sv = body
+            tb_name = name
+    if not sources:
+        raise HTTPException(400, "Select RTL/TB files for the vendor pack")
+    files = build_vendor_files(sources, tb_name=tb_name, tb_sv=tb_sv)
+    blob = vendor_pack_zip(files)
+    return Response(
+        content=blob,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="chipsutra_uvm_vendor_pack.zip"'},
+    )
+
+
 # ---- GitHub Actions CI ----
 @api.get("/ci/github-workflow")
 async def ci_github_workflow():
@@ -3987,23 +5571,56 @@ jobs:
         if: env.CHIPSUTRA_TOKEN != ''
         env:
           CHIPSUTRA_TOKEN: ${{ secrets.CHIPSUTRA_TOKEN }}
+          CHIPSUTRA_API: ${{ vars.CHIPSUTRA_API }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.number }}
+          GITHUB_SHA: ${{ github.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          curl -X POST https://chipsutra.ai/api/ci/webhook \\
-            -H "Authorization: Bearer $CHIPSUTRA_TOKEN" \\
-            -H "Content-Type: application/json" \\
-            -d '{"repo":"'${{ github.repository }}'","pr":"'${{ github.event.number }}'","sha":"'${{ github.sha }}'"}'
+          python3 - <<'PY'
+          import json, os, subprocess, urllib.request
+          base = os.environ.get("BASE_SHA") or "HEAD~1"
+          head = os.environ.get("GITHUB_SHA") or "HEAD"
+          try:
+              diff = subprocess.check_output(["git", "diff", f"{base}...{head}"], text=True, errors="replace")
+          except subprocess.CalledProcessError:
+              diff = ""
+          payload = json.dumps({
+              "repo": os.environ.get("GITHUB_REPOSITORY", ""),
+              "pr": str(os.environ.get("PR_NUMBER") or ""),
+              "sha": head,
+              "diff": diff,
+              "comment": True,
+          }).encode()
+          url = (os.environ.get("CHIPSUTRA_API") or "https://chipsutra.ai/api").rstrip("/") + "/ci/webhook"
+          req = urllib.request.Request(
+              url, data=payload,
+              headers={
+                  "Authorization": "Bearer " + os.environ["CHIPSUTRA_TOKEN"],
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          urllib.request.urlopen(req, timeout=60)
+          PY
 """
     return Response(content=yaml, media_type="text/yaml", headers={"Content-Disposition": "attachment; filename=chipsutra.yml"})
 
 class CIWebhookIn(BaseModel):
-    repo: str
+    repo: str = "local"
     pr: Optional[str] = None
     sha: Optional[str] = None
     event: Optional[str] = "pull_request"
+    diff: Optional[str] = None
+    comment: bool = False
+
 
 @api.post("/ci/webhook")
 async def ci_webhook(inp: CIWebhookIn, user=Depends(get_current_user)):
-    """Placeholder GitHub CI webhook. Persists the event; future: kick off AI review."""
+    """Review a PR diff (lint + classify). Optionally post a GitHub comment."""
+    from ci_review import maybe_post_github_comment, review_diff
+
+    review = review_diff(inp.diff or "")
     doc = {
         "id": str(uuid.uuid4()),
         "user_id": user["id"],
@@ -4011,11 +5628,29 @@ async def ci_webhook(inp: CIWebhookIn, user=Depends(get_current_user)):
         "pr": inp.pr,
         "sha": inp.sha,
         "event": inp.event,
-        "status": "queued",
+        "status": "done" if review.get("ok") else "needs_attention",
+        "review": review,
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
+    posted = {"posted": False}
+    if inp.comment and inp.pr:
+        posted = maybe_post_github_comment(
+            repo=inp.repo,
+            pr=str(inp.pr),
+            body=review.get("comment") or "",
+        )
+        doc["github_comment"] = posted
     await db.ci_events.insert_one(doc)
-    return {"ok": True, "event_id": doc["id"], "message": "Event queued. AI review will run when webhook worker ships."}
+    doc.pop("_id", None)
+    return {"ok": True, "event_id": doc["id"], "review": review, "github_comment": posted}
+
+
+@api.post("/ci/review-diff")
+async def ci_review_diff(inp: CIWebhookIn, user=Depends(get_current_user)):
+    """Paste a unified diff for an on-box review (no GitHub required)."""
+    from ci_review import review_diff
+
+    return review_diff(inp.diff or "")
 
 @api.get("/ci/events")
 async def list_ci_events(user=Depends(get_current_user)):

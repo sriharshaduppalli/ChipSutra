@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
@@ -61,6 +62,17 @@ def liberty_is_plausible(text: str) -> bool:
     """Cheap sanity check so we fail early instead of deep inside OpenSTA."""
     low = (text or "")[:20000].lower()
     return "library" in low and ("cell" in low or "wire_load" in low)
+
+
+def demo_liberty_path() -> Optional[str]:
+    """Bundled INV/BUF/NAND2/DFF liberty for laptop STA smoke (not a foundry PDK)."""
+    p = Path(__file__).resolve().parent / "fixtures" / "chipsutra_demo.lib"
+    return str(p) if p.is_file() else None
+
+
+def demo_netlist_path() -> Optional[str]:
+    p = Path(__file__).resolve().parent / "fixtures" / "inv_chain.v"
+    return str(p) if p.is_file() else None
 
 
 def parse_sta_log(log: str) -> Dict[str, Any]:

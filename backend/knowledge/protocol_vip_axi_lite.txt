@@ -1,0 +1,41 @@
+# AXI4-Lite / AXI5-Lite VIP emit guide (ChipSutra)
+# Distilled for TB emit from ARM AMBA AXI IHI 0022 Issue L (AXI5 family).
+# Issue L removed the AXI3/AXI4/AXI4-Lite chapters — ChipSutra eval DUTs are
+# still AXI4-Lite style (single-beat register slaves). Prefer user RTL names.
+# Never invent CSR maps, IDs, QoS, or AXI5-only pins (BCOMP, wake-up, credits).
+
+## axi valid_ready handshake
+- Transfer occurs only when VALID and READY are both HIGH at a rising ACLK.
+- Transmitter must not wait for READY before asserting VALID (deadlock if both wait).
+- Once VALID is HIGH, keep payload stable and hold VALID until the handshake cycle.
+- Receiver may wait for VALID before asserting READY; READY may drop before VALID.
+- Drive VALID LOW during reset (ARESETn active-low). After deassert, settle one ACLK.
+
+## axi write channels
+- Channels are independent except handshake dependencies: AW and W may overlap;
+  BVALID must not wait for BREADY; manager may wait for BVALID before BREADY.
+- Single-beat Lite: one W beat per AW. If WLAST exists, assert it on that beat.
+- WSTRB: one bit per byte of WDATA. Honor strobes in the scoreboard; do not assume
+  all-ones unless RTL ignores WSTRB. Inactive byte lanes: do not update the model.
+- After AW/W handshake, wait BVALID; check BRESP===2'b00 (OKAY) on the happy path.
+- Watchdog every READY/VALID wait (timeout ~40 cycles). Never hang forever.
+
+## axi read channels
+- AR handshake then R handshake. Sample RDATA only when RVALID && RREADY.
+- If RLAST exists on a Lite slave, it is HIGH on the single beat.
+- Check RRESP===2'b00. Index the model by aligned word (addr[3:2] for 32-bit,
+  4-location map) — never use the full byte address as a 0..3 array index.
+
+## axi4_lite vs axi5_lite
+- AXI4-Lite (ChipSutra `axi_lite_slave`): no bursts, typically no AxID, WSTRB present,
+  BRESP/RRESP 2-bit. Do not drive AWLEN/AWBURST unless the DUT has those ports.
+- AXI5-Lite (IHI 0022L): still length-1; exclusive accesses not supported; do not
+  invent credited transport, AWPENDING, or coherency channels unless parsed from RTL.
+- If the DUT is `s_axi_*`, use those names. If plain `awvalid`, use those.
+
+## axi_lite scoreboard
+- Independent model_reg keyed by aligned address. predict_write after confirmed
+  AW+W handshake (or after OKAY BRESP). predict_read returns the model — never
+  golden = RDATA alone.
+- UVM: txn fields awaddr/wdata/wstrb/araddr/write; analysis_imp.write updates model.
+- No RAL unless the user supplies a register map.

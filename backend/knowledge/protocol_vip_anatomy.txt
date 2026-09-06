@@ -1,0 +1,41 @@
+# Verification IP (VIP) — industry meaning (ChipSutra)
+# VIP = reusable verification component for one protocol (PCIe, USB, DDR, AXI, …).
+# Not a DUT. Not a one-shot pin-toggle TB.
+
+## what_is_vip
+- VIP is a reusable component that verifies one protocol or interface inside the simulation TB.
+- It sits between the testbench (tests/sequences) and the DUT. Tests stay behavioral; VIP owns protocol pin timing.
+- SoCs often fail from incomplete protocol verify, not wrong RTL. DDR/PCIe/AXI have many modes and timings — gaps appear when that logic is built from scratch.
+- Protocol VIP understands the spec: generates legal traffic, checks compliance, monitors passively, measures coverage.
+- Drop the same VIP into many projects via cfg + factory, not a fork.
+
+## four_parts
+- Stimulus / driver: valid and constrained-random protocol traffic onto DUT pins. Tests say *what*; driver knows *how*.
+- Monitor: passive. Observes the bus without affecting it; packs traffic into txns.
+- Checker: protocol-rule mistakes (handshake order, illegal commands, timing vs user/VIP tables). Not the project data scoreboard.
+- Coverage: which legal protocol cases were exercised (bins / crosses / vplan).
+- Agent wraps driver+monitor (+ sequencer). Cfg selects active vs passive and en_coverage.
+
+## vip_vs_bfm
+- BFM (bus functional model) drives pins / issues transactions. It is stimulus only.
+- VIP = BFM-class driver plus monitor, protocol checker, and coverage. Compliance is built in.
+- ChipSutra block smoke may be BFM-like (drive + simple scoreboard). scale=ip must be VIP-shaped (all four parts).
+- Do not call a pin-wiggle driver a VIP. Do not skip checker/coverage when the user asked for VIP.
+
+## uvm_fit
+- Commercial and ChipSutra IP-scale VIP integrate as a UVM agent: virtual IF, sequencer → driver, monitor analysis port.
+- Env owns the agent; tests constrain sequences + cfg. Project scoreboard subscribes to the agent ap.
+- Look for: UVM-native, flexible cfg, built-in asserts, coverage model, documented contract.
+
+## chipsutra_emit
+- scale=ip or “reusable VIP”: emit all four parts + cfg. Still one DUT. Exact RTL port names.
+- Pure SV: driver / monitor / scoreboard-as-checker / covergroup (`ifndef VERILATOR).
+- UVM: uvm_driver / uvm_monitor / protocol asserts or checker / uvm_subscriber covergroup.
+- Project data scoreboard stays outside the VIP (monitor does not own DUT-functional compare).
+
+## commercial_vs_outline
+- ChipSutra can emit a VIP-shaped agent for protocols we have goldens/knobs for (APB, AXI-Lite, SPI, …).
+- Commercial VIP (Synopsys-class): native UVM agent + built-in vplan/coverage + optional spec test suites.
+- Catalog typically includes AMBA, PCIe, CXL, USB, Ethernet, MIPI, DRAM/Flash, display, UCIe/multi-die, automotive.
+- Official timing tables live in that VIP. ChipSutra connects it; never invents JEDEC/PCI-SIG/MIPI numbers.
+- “Require user VIP” means instantiate/connect that block — still emit driver/monitor/checker/coverage if no VIP is attached.

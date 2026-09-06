@@ -39,6 +39,13 @@ _RULES: List[Tuple[re.Pattern, str, str, str, str]] = [
         "Prefer pure SV TB (no UVM) for Verilator, or use a UVM-capable simulator.",
     ),
     (
+        re.compile(r"\b(BMC failed|Assert failed|SBY.*FAIL|counterexample|cex\b)", re.I),
+        "formal",
+        "error",
+        "Formal CEX",
+        "Open the CEX VCD, check reset polarity and sampled enables, then tighten the failing property.",
+    ),
+    (
         re.compile(r"\$finish|\$stop", re.I),
         "sim",
         "info",
@@ -94,6 +101,20 @@ _RULES: List[Tuple[re.Pattern, str, str, str, str]] = [
         "Unused signal / lint",
         "Often benign in smoke TBs; silence with policy or remove unused decls.",
     ),
+    (
+        re.compile(r"unexpected\s+\$end|missing\s+endmodule|truncated\s+module|syntax error.*end of file", re.I),
+        "parse",
+        "error",
+        "Incomplete module",
+        "Close the TB with `endmodule`; never stop mid-assignment. Prefer the skeleton fallback.",
+    ),
+    (
+        re.compile(r"rd_data[^\n]{0,40}(?:X|'x|unknown)|after reset[^\n]{0,40}rd_data", re.I),
+        "xprop",
+        "error",
+        "FIFO rd_data X after reset",
+        "Do not check rd_data==='0 after reset (FWFT mem may be X); check empty/full only.",
+    ),
 ]
 
 
@@ -148,6 +169,29 @@ def classify_log(tool_log: str = "", *, prior_code: str = "") -> Dict[str, Any]:
     else:
         top = findings[0]["category"]
         summary = f"{len(findings)} finding(s); primary: {findings[0]['title']}."
+
+    if prior_code and re.search(r"\bmodule\b", prior_code) and not re.search(
+        r"\bendmodule\b", prior_code
+    ):
+        key = ("parse", "Incomplete module")
+        if key not in seen:
+            seen.add(key)
+            findings.append(
+                {
+                    "category": "parse",
+                    "severity": "error",
+                    "title": "Incomplete module",
+                    "hint": "Prior TB has `module` but no `endmodule` — finish the file or use skeleton fallback.",
+                    "match": "module without endmodule",
+                }
+            )
+            findings.sort(key=lambda f: sev_rank.get(f["severity"], 9))
+            templates.insert(
+                0,
+                "Incomplete module: finish with endmodule; do not glue $finish onto a truncated body.",
+            )
+            top = findings[0]["category"]
+            summary = f"{len(findings)} finding(s); primary: {findings[0]['title']}."
 
     if prior_code and "module" in prior_code and any(f["category"] == "ports" for f in findings):
         templates.insert(0, "Re-run Generate with gen_mode=skeleton using the same RTL file selection.")

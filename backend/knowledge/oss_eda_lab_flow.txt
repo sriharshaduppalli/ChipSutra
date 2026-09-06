@@ -1,0 +1,55 @@
+# Open-source EDA lab flow (ChipVerify Lab-style)
+# One platform pattern: write HDL → simulate → synth (SkyWater) → STA → waves → lint.
+# ChipSutra maps many of these tools already; prefer user-installed binaries when present.
+
+## Lab capability map (marketing features)
+- Write Verilog/SystemVerilog; run simulations; synthesize with SkyWater 130nm PDK; view waveforms; analyze timing — from one UI.
+- Simulators: **Icarus Verilog** and **Verilator**.
+- Synthesis: **Yosys** + **SkyWater 130nm** PDK.
+- Timing: **OpenSTA** (needs liberty `.lib`).
+- Interactive waveform viewer (VCD/FST-class dumps).
+- FSM extraction and schematic view.
+- Lint / code quality checks.
+- Shareable project links; GitHub import and sync.
+
+## Tool roles (what each step proves)
+| Step | Tool | Proves |
+|------|------|--------|
+| Lint | Verilator `--lint-only` / Yosys read | Syntax, basic structural health |
+| Sim | Verilator (TB) or Icarus | Functional PASS/FAIL, waves |
+| Synth | Yosys (+ PDK liberty/techmap) | Gate mapping, area/cell counts |
+| STA | OpenSTA + `.lib` | Setup/hold, slack, critical path |
+| Waves | VCD/`$dumpvars` viewer | Debug mismatches |
+| FSM/schematic | Yosys show / FSM detect | Structure for review |
+
+## ChipSutra alignment (already in product)
+- **Verilator**: TB lint, `--binary` sim-run PASS gate, VCD dumps, coverage hooks (`dv_verify`, Simulate API).
+- **Yosys**: synthesis / equiv / optional CDC JSON paths in `server.py` when `yosys` on PATH.
+- **OpenSTA**: timing scaffold + SSE run when `sta` + liberty available; mock when missing.
+- **Open Lab**: one SSE/UI chain over the above tools (`lab_flow.py` + `/api/lab/stream`).
+- **Icarus / Verible / slang**: detected on PATH (`/api/health` + `eda_tools.tool_versions`). Verible is an optional Lab stage when installed. Verilator remains the TB PASS gate.
+- **SymbiYosys**: formal hints / SBY when installed.
+- **Lint**: TB/RTL lint + competitive score (not only Lab “code quality”).
+- **LLM Generate**: Pure SV / UVM TB and RTL assist — Lab focuses on classic edit/sim; ChipSutra adds AI DV loop.
+
+## Gaps vs a full Lab UX (honest)
+- SkyWater PDK bundling / one-click PDK install — not shipped as default community asset (user/Docker provides `.lib` / PDK).
+- First-class Icarus runner — Verilator-first; Icarus optional if on PATH (not primary TB gate).
+- Rich interactive wave UI / FSM schematic — improve vs dump+external viewer.
+- Shareable project links + GitHub sync — product/workspace features (partially roadmap), not the sim engine.
+
+## Shipped Lab pipeline
+- `POST /api/lab/stream` (+ `/api/lab/plan`) and project **Open Lab** button.
+- Chains lint → sim (if TB) → Yosys synth → OpenSTA; aborts on hard fail; STA may be `mock` without `sta` + liberty.
+
+## ChipSutra generate / verify guidance
+- Default TB: Verilator-friendly (`module` top, `$dumpfile`/`$dumpvars`, `$finish`, no unsupported program/DPI unless asked).
+- For synth/STA asks: emit synthesizable RTL; keep TB out of synth file lists; point STA at liberty matching the PDK (SkyWater `sky130_*` libs when user provides them).
+- Never invent PDK cell timings — use uploaded/user `.lib` or leave TODO.
+- Prefer local/on-prem tool path (India EDA / air-gap) over cloud-only Lab when privacy matters.
+
+## Anti-patterns
+- Claiming SkyWater timing without a liberty file.
+- Synthesizing the testbench as if it were RTL.
+- Assuming Icarus and Verilator accept identical SV class/UVM subsets.
+- Skipping sim PASS and jumping to STA on a functionally broken netlist.

@@ -63,6 +63,14 @@ def format_lint_feedback(
     parts = [
         "--- Tool / simulation feedback (fix these; do not ignore) ---",
     ]
+    try:
+        from debug_classify import classify_log, debug_prompt_block
+
+        dblock = debug_prompt_block(classify_log(clipped, prior_code=prior_code or ""))
+        if dblock:
+            parts.append(dblock)
+    except Exception:
+        pass
     if findings:
         parts.append("Key findings:")
         parts.extend(f"- {f}" for f in findings)

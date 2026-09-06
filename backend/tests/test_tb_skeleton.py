@@ -10,6 +10,9 @@ from tb_skeleton import (
     detect_counter_model,
     detect_fifo_model,
     detect_parity_model,
+    module_has_known_golden,
+    prefer_known_golden_skeleton,
+    render_class_sv_tb,
     render_randomized_tb,
     render_from_rtl_texts,
     should_use_tb_skeleton,
@@ -171,18 +174,17 @@ def test_stream_smoke():
 
 def test_should_use_skeleton_policy():
     mods = extract_modules(COUNTER)
-    assert should_use_tb_skeleton(module="testbench", modules=mods, gen_mode="auto")
-    assert should_use_tb_skeleton(module="testbench", modules=mods, gen_mode="skeleton")
-    # Explicit LLM mode always calls the model (skeleton remains lint fallback)
+    # Auto / llm = class-based Pure SV via LLM (no procedural smoke)
+    assert not should_use_tb_skeleton(module="testbench", modules=mods, gen_mode="auto")
     assert not should_use_tb_skeleton(module="testbench", modules=mods, gen_mode="llm")
+    # Explicit smoke / Fast-random only
+    assert should_use_tb_skeleton(module="testbench", modules=mods, gen_mode="skeleton")
+    assert should_use_tb_skeleton(module="testbench", modules=mods, gen_mode="fast")
     assert not should_use_tb_skeleton(
         module="testbench", modules=mods, gen_mode="llm", prompt="full UVM agent please"
     )
     assert not should_use_tb_skeleton(
         module="testbench", modules=mods, gen_mode="auto", prompt="full UVM agent please"
-    )
-    assert not should_use_tb_skeleton(
-        module="testbench", modules=mods, gen_mode="auto", tool_log="Error: ..."
     )
     assert not should_use_tb_skeleton(module="assertions", modules=mods, gen_mode="auto")
     assert not should_use_tb_skeleton(module="testbench", modules=[], gen_mode="auto")
@@ -206,6 +208,44 @@ def test_fifo_queue_golden_from_golden_rtl():
     assert "empty mismatch" in sv
     assert "rd_data mismatch" in sv
     assert "logic [7:0] wr_data" in sv
+
+
+def test_class_sv_fifo_uses_queue_golden_not_noop():
+    rtl = """
+    module sync_fifo8 #(
+      parameter WIDTH = 8, parameter DEPTH = 8
+    ) (
+      input wire clk, input wire rst_n,
+      input wire wr_en, input wire [7:0] wr_data, input wire rd_en,
+      output wire [7:0] rd_data, output wire full, output wire empty,
+      output reg [3:0] count
+    );
+    endmodule
+    """
+    from tb_semantic import lint_semantic_golden
+
+    mod = extract_modules(rtl)[0]
+    sv = render_class_sv_tb(mod, cycles=16, seed=1)
+    assert "q[$]" in sv
+    assert "function bit check(); return 1;" not in sv
+    assert "beats++" not in sv
+    assert "sb.q.size() >= 8) t.wr_en = 1'b0" in sv or "q.size() >= 8" in sv
+    assert "q.size() == 0" in sv and "rd_en = 1'b0" in sv
+    assert "post-reset empty not 1" in sv or "empty !== 1'b1" in sv
+    assert "rd_data !== '0" not in sv
+    issues = lint_semantic_golden(sv, protocol="fifo")
+    assert "semantic_fifo_no_queue" not in issues
+    assert "semantic_noop_check" not in issues
+    assert "semantic_fifo_reset_rd_data" not in issues
+    for needle in (
+        "interface sync_fifo8_if",
+        "class sync_fifo8_generator",
+        "class sync_fifo8_driver",
+        "class sync_fifo8_monitor",
+        "class sync_fifo8_scoreboard",
+        "class sync_fifo8_env",
+    ):
+        assert needle in sv, needle
 
 
 def test_parity_xor_golden():
@@ -241,3 +281,144 @@ def test_axi_lite_smoke_golden():
     assert "always #5 aclk" in sv
     assert "s_axi_awvalid" in sv
     assert "AXI RDATA mismatch" in sv
+    assert "ghost write" in sv
+    assert "W-only ghost" in sv
+    assert "Mid-test reset" in sv
+
+
+def test_apb_uppercase_port_names():
+    rtl = """
+    module apb_regs (
+        input wire PCLK,
+        input wire PRESETn,
+        input wire PSEL,
+        input wire PENABLE,
+        input wire PWRITE,
+        input wire [7:0] PADDR,
+        input wire [31:0] PWDATA,
+        output wire PREADY,
+        output reg [31:0] PRDATA
+    );
+    endmodule
+    """
+    mod = extract_modules(rtl)[0]
+    sv = render_randomized_tb(mod, cycles=24, seed=4)
+    assert "PSEL = 1'b1" in sv
+    assert "psel = 1'b1" not in sv
+    assert "ghost write without PSEL" in sv
+    assert "Mid-test reset" in sv
+
+
+def test_class_sv_parity_not_noop():
+    rtl = (Path(__file__).resolve().parents[1] / "scripts" / "eval_suite" / "duts" / "sample_parity.sv").read_text(
+        encoding="utf-8"
+    )
+    mod = extract_modules(rtl)[0]
+    sv = render_class_sv_tb(mod, cycles=16, seed=1)
+    assert "beats++" not in sv.replace(" ", "")
+    assert "function bit check(); return 1;" not in sv
+    assert "^" in sv and "parity" in sv
+
+
+def test_class_sv_alu_combo_no_virtual():
+    rtl = (Path(__file__).resolve().parents[1] / "scripts" / "eval_suite" / "duts" / "alu4.sv").read_text(
+        encoding="utf-8"
+    )
+    mod = extract_modules(rtl)[0]
+    sv = render_class_sv_tb(mod, cycles=16, seed=1)
+    assert "virtual " not in sv
+    assert "function bit check(); return 1;" not in sv
+    assert "a + b" in sv
+
+
+def test_class_sv_fifo_count_width_not_1bit():
+    rtl = (Path(__file__).resolve().parents[1] / "scripts" / "eval_suite" / "duts" / "sync_fifo8.sv").read_text(
+        encoding="utf-8"
+    )
+    mod = extract_modules(rtl)[0]
+    sv = render_class_sv_tb(mod, cycles=16, seed=1)
+    assert "q[$]" in sv
+    assert "logic count;" not in sv
+    assert "logic [3:0] count" in sv or "bit [3:0] count" in sv
+
+
+def test_class_sv_apb_and_axi_have_model_reg():
+    root = Path(__file__).resolve().parents[1] / "scripts" / "eval_suite" / "duts"
+    for fname in ("apb_regs.sv", "axi_lite_slave.sv"):
+        mod = extract_modules((root / fname).read_text(encoding="utf-8"))[0]
+        sv = render_class_sv_tb(mod, cycles=16, seed=1)
+        assert "model_reg" in sv, fname
+        assert "beats++" not in sv.replace(" ", ""), fname
+        assert "function bit check(); return 1;" not in sv, fname
+
+
+def test_unknown_dut_generic_check_is_not_noop():
+    rtl = """
+module weird_block (
+  input wire clk,
+  input wire rst_n,
+  input wire [3:0] foo,
+  output wire [3:0] bar
+);
+endmodule
+"""
+    mod = extract_modules(rtl)[0]
+    sv = render_class_sv_tb(mod, cycles=8, seed=1)
+    assert "function bit check(); return 1;" not in sv
+    assert "$isunknown" in sv
+    assert not module_has_known_golden(mod)
+    assert not prefer_known_golden_skeleton(
+        gen_mode="auto", parsed_module=mod
+    )
+
+
+def test_packed_mux_wishbone_avalon_fsm_goldens():
+    packed = extract_modules(
+        """
+        module mux_pack(input [1:0] sel, input [31:0] data, output [7:0] y);
+        endmodule
+        """
+    )[0]
+    from tb_skeleton import detect_mux_model, classify_ports
+
+    mx = detect_mux_model(classify_ports(packed["ports"]))
+    assert mx and mx.get("kind") == "packed"
+    sv = render_class_sv_tb(packed, cycles=8, seed=1)
+    assert "+:" in sv and "function bit check(); return 1;" not in sv
+
+    wb = extract_modules(
+        """
+        module wb_slave(
+          input clk, input rst_n, input cyc, input stb, input we,
+          input [7:0] adr, input [31:0] dat_i, output ack, output [31:0] dat_o
+        ); endmodule
+        """
+    )[0]
+    wbsv = render_class_sv_tb(wb, cycles=8, seed=1)
+    assert "model_reg" in wbsv and "wb_write" in wbsv
+    assert prefer_known_golden_skeleton(parsed_module=wb)
+
+    av = extract_modules(
+        """
+        module avs(
+          input clk, input rst_n, input [7:0] address, input write, input read,
+          input [31:0] writedata, output [31:0] readdata, output waitrequest
+        ); endmodule
+        """
+    )[0]
+    avsv = render_class_sv_tb(av, cycles=8, seed=1)
+    assert "waitrequest" in avsv and "model_reg" in avsv
+
+    fsm = extract_modules(
+        "module fsm4(input clk, input rst_n, input ev, output [3:0] state); endmodule"
+    )[0]
+    fsv = render_class_sv_tb(fsm, cycles=8, seed=1)
+    assert "$onehot0" in fsv and "function bit check(); return 1;" not in fsv
+
+
+def test_prefer_known_golden_for_counter_unless_forced_llm():
+    mod = extract_modules(COUNTER)[0]
+    assert module_has_known_golden(mod)
+    assert prefer_known_golden_skeleton(gen_mode="auto", parsed_module=mod)
+    assert not prefer_known_golden_skeleton(gen_mode="llm", parsed_module=mod)
+

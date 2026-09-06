@@ -1,0 +1,117 @@
+# UVM Basics / Introduction (ChipVerify curriculum map)
+# IEEE 1800.2 industry framework on SystemVerilog. ChipSutra original wording.
+# Deep emit patterns: `uvm_patterns.txt`. Hierarchy detail: `uvm_class_hierarchy.txt`.
+# Methodologies ladder: `verification_methodologies_curriculum.txt`.
+# Curriculum: ChipVerify UVM Tutorial / Introduction. External: https://chipverify.com/tutorials/uvm
+
+## What UVM is
+- Universal Verification Methodology — class library + methodology for modular, reusable SoC/IP verification.
+- Built on SystemVerilog (IEEE 1800); standardized as IEEE 1800.2 (Accellera → IEEE).
+- Traits ChipSutra must honor when methodology=uvm: standardized APIs, modular VIP (agents), factory + config_db configurability, reusable across projects.
+- Analogy: standardized building patterns (agent / sequence / scoreboard) instead of one-off frameworks per company.
+
+## Why industry uses UVM
+- Interoperability across Synopsys / Cadence / Siemens / Aldec tools.
+- VIP reuse (AXI, PCIe, DDR, APB, proprietary) — agents shared across projects.
+- Large SoCs: many agents + RAL for hundreds of CSRs; without UVM each team reinvented phasing/TLM/factory.
+- ChipSutra: emit real `uvm_*` only when user selects UVM — never invent parallel frameworks.
+
+## OVM to UVM evolution
+| Era | Notes |
+|-----|--------|
+| OVM 2008 | Mentor+Cadence; base classes, TLM, phases, factory — no formal IEEE standard |
+| UVM 2011+ | OVM successor; IEEE 1800.2; better standardization, RTL+TLM, VIP modularity, deprecation path |
+
+UVM fixed OVM gaps: formal standard, less tight DUT coupling, maintainability via deprecation not silent breaks.
+Migration: OVM→UVM is architectural cousin; ChipSutra methodology=ovm emits `ovm_*` only; never mix `uvm_*` with `ovm_*`. Prefer UVM for new work.
+
+Versions (reference): 1.0 -> 1.1 -> 1.2 (common industry) -> IEEE 1800.2-2020. ChipSutra default target: **UVM 1.2-style** APIs unless user specifies newer.
+How to obtain/compile the library (Accellera, `$UVM_HOME`, bundled sim): `uvm_installation.txt`.
+
+## Seven pillars UVM provides
+1. **Components** — extend `uvm_driver`, `uvm_monitor`, `uvm_scoreboard`, `uvm_agent`, `uvm_env`, `uvm_test`.
+2. **Transactions** — `uvm_sequence_item` with `rand` fields + field macros (print/copy/compare).
+3. **Phases** — build → connect → run (time) → extract/check/report (deterministic order).
+4. **Reporting** — `` `uvm_info/`uvm_warning/`uvm_error/`uvm_fatal `` with ID + verbosity.
+5. **config_db** — typed set/get for vif, knobs, handles without globals.
+6. **Coverage** — SV covergroups inside UVM components / subscribers.
+7. **RAL** — `uvm_reg_*` when CSR map exists; never invent addresses.
+
+## Component hierarchy (must emit)
+- Static vs dynamic split (component vs object/txn/sequence): see `uvm_class_hierarchy.txt`.
+```
+uvm_test
+  └── uvm_env
+        ├── uvm_agent (active: sequencer + driver + monitor; passive: monitor)
+        ├── uvm_scoreboard (+ optional coverage subscriber)
+        └── (more agents / RAL predictor as needed)
+```
+- Driver: sequence_item → pin wiggles via virtual interface.
+- Monitor: pins → reconstructed txn → `analysis_port.write`.
+- Sequencer: routes sequences to driver (`seq_item_port` / `get_next_item`).
+- Agent: protocol VIP boundary; active vs passive via `is_active` / config.
+- Env: connects TLM (monitor ap → scoreboard); holds agents.
+- Test: factory overrides, config_db knobs, start sequences, objections.
+- Top (module): DUT + interface, `uvm_config_db::set(..., "vif", ...)`, `run_test()`.
+
+## Transactions (sequence_item)
+- Extend `uvm_sequence_item`; `rand` DUT-relevant fields only (exact ports / protocol).
+- Register with `` `uvm_object_utils `` / field macros — get print, copy, compare.
+- Sequences generate items; drivers convert to pins — do not drive pins from the test class.
+
+## Phases (order that matters)
+| Phase | Job |
+|-------|-----|
+| build_phase | Construct children top-down (`type_id::create`) |
+| connect_phase | TLM connect bottom-up |
+| end_of_elaboration / start_of_simulation | Sanity before time |
+| run_phase | Stimulus + monitor (consumes time); raise/drop objection |
+| extract → check → report → final | Collect, score, summarize |
+
+Always call `super.<phase>(phase)` when overriding. Do not invent custom phase names unless advanced user asks.
+
+## Messaging
+- `` `uvm_info("ID", msg, UVM_LOW|MEDIUM|HIGH) `` for normal traffic.
+- `` `uvm_error `` for scoreboard mismatch; `` `uvm_fatal `` for null vif / failed config_db get.
+- Prefer UVM macros over bare `$display` inside components.
+
+## config_db pattern (required)
+```systemverilog
+// top / test
+uvm_config_db#(virtual bus_if)::set(null, "uvm_test_top.*", "vif", vif);
+// agent / driver / monitor
+if (!uvm_config_db#(virtual bus_if)::get(this, "", "vif", vif))
+  `uvm_fatal(get_type_name(), "vif not in config_db")
+```
+No global interface handles; no fake `.configure(vif)` APIs.
+
+## Coverage & RAL (intro level)
+- Covergroups sample transactions in monitor/subscriber; bins/cross for holes.
+- RAL: high-level `reg.write`/`read`/`mirror` when map provided; frontdoor via adapter.
+- ChipSutra: RAL only if user supplies CSR map / addresses — never invent.
+- Chapter opener: `uvm_ral.txt`.
+
+## Prerequisites (before generating UVM)
+Must already know (see SV pillar files): classes/inheritance/virtual methods, rand/constraints,
+interfaces + modport/clocking, queues/dynamic arrays, parameterized classes.
+Without OOP, UVM factory/phases are nonsense — for weak SV ask, prefer methodology=sv layered first.
+
+## Common beginner mistakes (avoid in emit)
+1. Jumping to UVM without SV OOP → emit Pure SV layered if user is not on methodology=uvm.
+2. Dumping entire IEEE manual into a smoke TB → keep compact: item/seq/drv/mon/agent/env/test/top.
+3. Learning all of RAL/callbacks/virtual sequences on day one → omit unless asked.
+4. Passive reading of tutorials → ChipSutra emit must be simulatable structure with real APIs.
+5. Fake APIs: `.put()` as UVM, `driver.start(this)`, invented phases, missing utils macros.
+
+## ChipSutra emit defaults (methodology=uvm)
+- Compact UVM 1.2 smoke: sequence_item, one sequence, driver, monitor, sequencer, agent, scoreboard, env, test, top.
+- Exact DUT ports; virtual interface + config_db; factory create; `` `uvm_component_utils `` / `` `uvm_object_utils ``.
+- One random sequence; independent scoreboard predict; objections in run_phase.
+- Note Verilator UVM limits — commercial sim often required; do not claim Verilator UVM PASS by default.
+- Forbidden: mixing ovm_*/uvm_*; synthesizing TB; inventing RAL maps.
+
+## Learning order (curriculum)
+1. SV OOP + IF + constraints -> 2. Hello UVM (`run_test`) — see `uvm_hello.txt`
+-> 3. item + driver -> 4. sequencer + monitor + scoreboard -> 5. agent/env/test
+-> 6. phases/config_db -> 7. TLM deep / factory overrides -> 8. coverage -> 9. RAL.
+Deep patterns continue in later ChipVerify UVM pages -> expand `uvm_patterns.txt` as ingested.

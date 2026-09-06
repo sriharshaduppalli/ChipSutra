@@ -1,0 +1,18 @@
+# Fast-Track SVA study map (ChipSutra original — not book listings)
+# Optional local catalog: clone https://github.com/AsFigo/ft_sva_BenCohen and set CHIPSUTRA_FT_SVA_DIR.
+# Do not paste those .sv bodies into Generate.
+
+## Concurrent vs immediate
+- Protocol/safety: concurrent `assert property (@(posedge clk) disable iff (!rst_n) ...);`
+- Point-in-time checks: immediate `assert (expr) else $error("...");` inside procedural code.
+- Label every concurrent directive (`a_req: assert property ...`).
+
+## Multiclock and handshake
+- One sampled clock per property unless the DUT has two named clocks.
+- Req/ack: hold req until ack; bounded `##[1:N] ack` for formal.
+- Do not invent a second clock domain.
+
+## AI-assisted SVA
+- Bind only to parsed DUT ports.
+- Fail action `else $error("...")` on asserts; covers need no fail AB.
+- Skip tautologies (`|-> 1'b1`) when the spec has a real requirement.

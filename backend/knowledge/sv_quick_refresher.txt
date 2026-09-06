@@ -1,0 +1,89 @@
+# SystemVerilog Quick Refresher (ChipVerify cheat-sheet map)
+# SV = Verilog superset (IEEE 1800). This file is an INDEX + RTL golden rules.
+# Deep detail lives in sibling pillar files — do not invent DUT ports.
+# Curriculum: ChipVerify SystemVerilog Quick Refresher.
+
+## What SV adds (map to ChipSutra knowledge)
+| Topic | ChipSutra deep file |
+|-------|---------------------|
+| Data types / logic vs bit | `sv_datatypes_control_patterns.txt`, `sv_fundamentals_must_know.txt` |
+| Arrays / queues / AA | `sv_arrays_collections_patterns.txt` |
+| Classes / OOP | `sv_oop_classes_patterns.txt` |
+| Random / constraints | `sv_randomization_patterns.txt`, `sv_constraints_patterns.txt` |
+| Covergroups | `covergroup_patterns.txt` |
+| SVA | `sva_patterns.txt` |
+| Interfaces / modport / clocking | `sv_interfaces_patterns.txt` |
+| Threads / mailbox / semaphore / event | `sv_threads_ipc_patterns.txt` |
+| Functions | `sv_functions_patterns.txt` |
+| Packages / extern / local / callback / `define / DPI / program | `sv_advanced_features_patterns.txt` |
+| Layered TB roles + examples | `layered_tb_components.txt`, `sv_tb_example_*.txt` |
+| UVM | `uvm_patterns.txt`, `verification_methodologies_curriculum.txt` |
+
+## Data types (one-screen)
+- `logic` — preferred 4-state; replaces wire/reg for single-driver nets.
+- Multi-driver / tri-state still needs `wire`.
+- TB speed: `bit`/`int`/`byte` (2-state); DUT-facing checks prefer `logic` + `===`.
+- Enum FSM: `typedef enum logic [N:0] {...}` with explicit width.
+- Packed struct/union — synthesizable bus bundles; unpacked struct — TB modeling only.
+- Queues `q[$]`, dynamic/associative arrays — verification only (FIFO golden = queue).
+
+## Always blocks (explicit intent)
+- `always_comb` — blocking `=`; auto sensitivity; tools warn on latches.
+- `always_ff @(posedge clk ...)` — nonblocking `<=` only.
+- `always_latch` — intentional latches only.
+- Prefer these over bare `always @(*)` / `always @(posedge)`.
+
+## unique / priority
+- `unique case/if` — full + parallel (no overlap); sim warns on no/multi match.
+- `unique0` — parallel only (overlap warn).
+- `priority case/if` — full; first-match OK (priority encoders).
+- Replaces unreliable `full_case`/`parallel_case` pragmas.
+
+## Interfaces / clocking / virtual IF
+- Bundle ports + `modport` master/slave/monitor.
+- Clocking blocks: sample `#1step`, drive skew — race-free TB (esp. UVM).
+- Classes use `virtual interface` — no ports on classes.
+- ChipSutra Pure SV: IF + modports DRV/MON; combo DUTs may avoid heavy VIF on Verilator.
+
+## Randomization / coverage / SVA (pointers)
+- `rand`/`randc`, `dist` `:=` vs `:/`, implication `->`, `foreach`, `solve before`, `constraint_mode`/`rand_mode`.
+- Covergroup: bins / illegal / ignore / cross / transitions; `sample()` or clock.
+- SVA: immediate vs concurrent; `|->` / `|=>` / `##[m:n]`; always `disable iff (!rst_n)`.
+- See pillar files for patterns ChipSutra emits.
+
+## IPC one-liners
+- `fork join` / `join_any` / `join_none`; `wait fork`; careful `disable fork`.
+- `mailbox #(T)`, `semaphore`, `event` / `triggered`.
+- ChipSutra layered: gen→drv and mon→sb mailboxes; separate `new()`.
+
+## Synthesis golden rules (SV edition)
+1. `logic` not wire/reg (except multi-driver → `wire`).
+2. `always_comb` / `always_ff` / `always_latch` — never plain `always` for new RTL.
+3. `=` in comb, `<=` in ff.
+4. `unique`/`priority` on case/if when intent is full/parallel.
+5. Explicit-width enums for FSMs.
+6. Packed structs + packages for shared types (prefer over `` `define ``).
+7. Interfaces for complex buses; `$clog2` for address widths.
+8. `'0`/`'1` context fills; `` `default_nettype none ``; one module per file.
+
+## Synthesizable vs verification-only
+| Yes (RTL) | No (TB / formal side) |
+|-----------|------------------------|
+| logic, packed struct/union, enum, typedef | classes, queues, dynamic/AA, string |
+| always_comb/ff/latch, generate, packages (types/params/auto funcs) | randomization, covergroups, mailboxes, semaphores |
+| interfaces/modports (tool-dependent but common) | DPI, program block, `$display`-only helpers |
+| assertions ignored/stripped by synth — keep for sim/formal | |
+
+## Common pitfalls
+- `int`/`bit` on RTL ports → no X-prop; use `logic`.
+- Unpacked struct on RTL port → tool pain; pack it.
+- Enum defaulting to 32-bit `int` → specify `logic [N:0]`.
+- Blocking assigns in `always_ff` → tool error / sim-synth mismatch.
+- Assertions without `disable iff (!rst_n)` → reset false fails.
+- `.*` silent wrong connects — OK in TB, risky in RTL.
+- ChipSutra TB: noop `check(); return 1`, circular golden, stuck `rst_n`.
+
+## ChipSutra emit defaults (reminder)
+- Pure SV layered: IF/gen/drv/mon/sb/env/test; `module` top; `always #5 clk`; `$dumpfile`/`$finish`.
+- Independent scoreboard golden; real constraints; Verilator-friendly subset.
+- UVM only when methodology=uvm — real `uvm_*` APIs + utils macros.

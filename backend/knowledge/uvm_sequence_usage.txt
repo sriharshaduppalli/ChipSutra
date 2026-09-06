@@ -1,0 +1,93 @@
+# How to create and use a sequence (lifecycle)
+# Objections, start() vs `uvm_do, default_sequence. Complements uvm_sequence.txt (body API).
+# ChipSutra original wording. Curriculum: ChipVerify How to create and use a sequence.
+
+## Sequence as container
+- One `uvm_sequence_item` = one transfer; a sequence = organized collection (or nested sequences).
+- Plans use many sequences (reset, directed, stress); composition / libraries = later articles.
+- Smoke TB: one random sequence is enough.
+
+## Two ways to start
+| Method | Typical caller | Sequencer |
+|--------|----------------|-----------|
+| `seq.start(m_sequencer)` | Test `run_phase` | Explicit argument |
+| `` `uvm_do(sub_seq) `` | Inside another sequence `body()` | Implicit: parent's sequencer |
+
+Tests always use `start()` — no parent sequence to inherit a sequencer from.
+`` `uvm_do `` is for sub-sequences; not a substitute for test-level `start(sqr)`.
+
+```systemverilog
+// Test (preferred ChipSutra smoke)
+seq = reg_sequence::type_id::create("seq");
+phase.raise_objection(this);
+seq.start(m_sequencer);
+phase.drop_objection(this);
+```
+
+## Objections — keep run_phase alive
+UVM ends run when no objections remain. Sequences do not object by default.
+
+### Pattern A (common): test wraps start()
+```systemverilog
+task run_phase(uvm_phase phase);
+  reg_sequence seq = reg_sequence::type_id::create("seq");
+  phase.raise_objection(this);
+  seq.start(m_sequencer);   // blocks until body() done
+  phase.drop_objection(this);
+endtask
+```
+Sequence need not know about objections.
+
+### Pattern B: default_sequence — sequence self-objects
+When started via config_db default_sequence, nothing wraps `start()`:
+
+```systemverilog
+virtual task pre_body();
+  uvm_phase starting_phase = get_starting_phase();
+  if (starting_phase != null)
+    starting_phase.raise_objection(this);
+endtask
+
+virtual task post_body();
+  uvm_phase starting_phase = get_starting_phase();
+  if (starting_phase != null)
+    starting_phase.drop_objection(this);
+endtask
+```
+- `get_starting_phase()` non-null **only** for default_sequence path.
+- Always null-check — bare `get_starting_phase().raise_objection` crashes on direct `start()`.
+- Raise in `pre_body` (before body), not mid-`body` (race window).
+
+## Default sequence via config_db
+```systemverilog
+uvm_config_db#(uvm_object_wrapper)::set(
+  this, "<sqr_hier_path>.run_phase", "default_sequence",
+  reg_sequence::type_id::get());
+```
+- Sequencer auto-starts sequence at run_phase — no hand `start()`.
+- Path must match real hierarchy once agent/env exist.
+- Use Pattern B objections for this path.
+
+## End-to-end reminder
+create/randomize in body -> sequencer -> driver pins -> DUT;
+monitor may broadcast in parallel; objection held until sequence completes.
+
+## Deprecated note
+Avoid legacy `uvm_sequence_utils` / `uvm_sequencer_utils` — use `` `uvm_object_utils `` / `` `uvm_component_utils ``.
+
+## Beginner mistakes
+1. Objection inside `body()` after setup (too late) when using pre/post_body pattern.
+2. No null check on `get_starting_phase()`.
+3. Using `` `uvm_do `` from test instead of `start(sqr)`.
+4. No objection at all — sim ends at time 0 before stimulus.
+5. Double-objection (test + sequence) without understanding — prefer one owner.
+
+## ChipSutra emit notes (methodology=uvm)
+- Default smoke: **Pattern A** — test raise/drop around `seq.start(sqr)`.
+- Explicit start_item/finish_item in body (see `uvm_sequence.txt`); `` `uvm_do `` expand/caveats: `uvm_sequence_macros.txt`.
+- Mention default_sequence only if user asks config-driven start.
+- Never omit objections on timed stimulus sequences.
+- Deep objection API / drain / auto: `uvm_objection.txt`.
+- `start()` args / pre_body order / parent_sequence: `uvm_sequence_start.txt`.
+- Multi-IF coordination: `uvm_virtual_sequence.txt`.
+- Random mix of peer sequences: `uvm_sequence_library.txt`.

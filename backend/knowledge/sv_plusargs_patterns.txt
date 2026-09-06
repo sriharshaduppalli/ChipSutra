@@ -1,0 +1,95 @@
+# SystemVerilog command-line plusargs (ChipVerify)
+# Avoid TB recompilation: pass +ARGS at sim runtime (like bash/perl flags).
+# Curriculum: https://chipverify.com — SystemVerilog Command Line Arguments
+
+## Why plusargs
+- Recompile is expensive; regressions need many seeds / modes / txn counts on the same binary.
+- Simulators accept optional runtime args that always start with `+`.
+- SV reads them via `$test$plusargs` and `$value$plusargs` (plusargs system functions).
+- ChipSutra sims already use Verilator plusargs (e.g. `+verilator+rand+reset+2`); user TBs may add `+SEED=` / `+N=` / `+TEST=`.
+
+## Syntax
+```systemverilog
+$test$plusargs("user_string");           // presence only → non-zero if match
+$value$plusargs("user_string", variable); // presence + parse value into variable
+```
+- No space between name, `=`, and value on the command line: `+STRING=Joey` (not `+STRING = Joey`).
+- Plusargs are **case-sensitive**.
+- Matching is by **prefix**: `+STANDBY` matches `$test$plusargs("STAND")` and `$test$plusargs("S")`.
+
+## $test$plusargs (flag / mode)
+- Use when you only need to know whether an arg was supplied (no value).
+- Searches the plusarg list for a user string (literal or variable; null chars ignored).
+- Returns non-zero if some supplied plusarg's prefix matches all characters of the string; else 0.
+
+```systemverilog
+module tb;
+  initial begin
+    if ($test$plusargs("STANDBY"))
+      $display("STANDBY argument is found ...");
+    if ($test$plusargs("STAND"))
+      $display("STAND substring is found ...");  // also true for +STANDBY
+    if ($test$plusargs("WINTER"))
+      $display("No match..");
+  end
+endmodule
+// run: +STANDBY
+```
+
+## $value$plusargs (name=value)
+- Like `$test$plusargs`, but also stores the value after `=` into a variable.
+- Returns non-zero on match and fills the variable; on no match returns 0 and leaves the variable unchanged.
+- `user_string` form: `"plusarg_name format"` where format uses `$display`-style conversion:
+  - `%d` decimal, `%o` octal, `%h`/`%x` hex, `%b` binary
+  - `%e`/`%f`/`%g` real, `%s` string (no conversion)
+- Wrong format for the value → runtime format error (e.g. `%0d` with `Joey`).
+
+```systemverilog
+module tb;
+  string var1;
+  bit [31:0] data;
+  initial begin
+    if ($value$plusargs("STRING=%s", var1))
+      $display("STRING=%s", var1);
+    if ($value$plusargs("NUMBER=%0d", data))
+      $display("NUMBER=%0d", data);
+  end
+endmodule
+// +STRING=Joey   or  +STRING="Joey"
+// +NUMBER=100
+```
+
+## Plusarg edge cases (ChipVerify)
+- `+STRING` without `=` → not recognized by `$value$plusargs("STRING=%s", ...)`.
+- `+STRING=` → empty string value.
+- `++STRING=Joey` → first `+` introduces the plusarg; remaining `+STRING` can match a pattern that includes `+` in the user string.
+- Numeric text with `%s` stays a string; with `%0d`/`%0h` converts as specified.
+- Prefer unique full names (`SEED`, `N_TXN`) so short prefixes do not false-match.
+
+## ChipSutra usage (when to emit)
+- Default generated TB may keep a hardcoded seed: `void'($urandom(1));` and fixed `t.run(32)`.
+- When the user asks for regression knobs / plusargs, emit in top `initial` before construct/run:
+
+```systemverilog
+int unsigned n = 32;
+int unsigned seed = 1;
+string test_name;
+initial begin
+  void'($value$plusargs("N=%d", n));
+  void'($value$plusargs("SEED=%d", seed));
+  void'($value$plusargs("TEST=%s", test_name));
+  void'($urandom(seed));
+  // ... build test, t.run(n);
+end
+```
+
+- Document run: `+SEED=42 +N=64` (tool-specific placement after sim exe / Verilator binary).
+- UVM: also `+UVM_TESTNAME=` / verbosity plusargs — only when methodology=UVM.
+- Do not invent vendor-only plusargs; stick to portable `$test$plusargs` / `$value$plusargs`.
+
+## Anti-patterns
+- Relying on short prefixes (`$test$plusargs("S")`) that match many flags.
+- Spaces in `+NAME = value`.
+- Wrong format specifier → runtime `$value$plusargs` format error.
+- Expecting plusargs to work at elaboration without runtime support (they are simulation runtime).
+- Forcing `program` just to use plusargs — module TB is fine.

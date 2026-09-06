@@ -1,0 +1,77 @@
+# ChipVerify Testbench Example Adder (teaching map)
+# Layered Pure SV around a combinational adder; TB clock for sync; independent golden; bug injection.
+# Curriculum: ChipVerify SystemVerilog Testbench Example Adder. Prefer user RTL ports/polarity.
+
+## Example overview
+- DUT is **combinational** (no DUT clock): `sum`/`carry` from `a + b`, gated by reset.
+- TB still uses a **mock clock** (`clk_if.tb_clk`) so driver/monitor agree on drive vs sample edges — models combo logic sitting between flops.
+- Full stack: Packet (txn) · generator · driver · monitor · scoreboard · env · test · `adder_if` · top.
+- Lesson: scalable OOP TB even for a tiny DUT; **inject a design bug** to prove the scoreboard catches errors (same spirit as ChipSutra mutation tests).
+
+## Design cues
+- Ports via interface or module: `rstn`, `a[7:0]`, `b[7:0]`, `sum[7:0]`, `carry`.
+- Industry / ChipSutra active-low reset golden:
+  - `!rstn` → `{carry,sum} == 0`
+  - `rstn` → `{carry,sum} == a + b` (9-bit concat)
+- ChipVerify article also shows an **inverted-reset bug** (`if (rstn) clear else add`) — scoreboard must follow the **spec**, not the buggy RTL, so errors appear when polarity is wrong.
+- Always match **user RTL** reset polarity; never invent `rstn` vs `rst_n` names.
+
+## Transaction (Packet)
+- `rand bit rstn`, `rand bit [7:0] a, b`; observed `sum`, `carry`.
+- Randomize reset with data so TB checks both reset and add paths.
+- `print(tag)`, `copy(Packet tmp)` for scoreboard reference clone.
+- ChipSutra: `class <dut>_txn;` — real constraints; optional `rstn dist {0:=1, 1:=3}`.
+
+## Generator / driver / event
+- Generator: `loop` items, `put` to `drv_mbx`, `@(drv_done)` back-pressure.
+- Driver: two virtual IFs (`adder_if`, `clk_if`); `@(posedge tb_clk)` then drive `rstn/a/b`; `->drv_done`.
+- Combo DUT: driving on TB clock is a sampling convention, not a DUT pin.
+
+## Monitor
+- `@(posedge tb_clk); #1;` then sample `a,b,rstn,sum,carry` into a new Packet → `scb_mbx`.
+- `#1` lets combinational outputs settle after the drive edge (ChipSutra mux/counter monitors use the same idea).
+
+## Scoreboard (independent adder golden)
+```systemverilog
+// Spec-level predict (active-low reset)
+if (!item.rstn) { exp_carry, exp_sum } = 0;
+else            { exp_carry, exp_sum } = item.a + item.b;
+// compare to item.carry / item.sum — never expected = dut.sum only
+```
+- Article pattern: `copy` packet then overwrite carry/sum with predicted values, compare fields.
+- ChipSutra: increment `errors`, one PASS/FAIL in `env.report` for fixed-N runs.
+- **Noop check forbidden** — adder must compute `a+b`, not `return 1`.
+
+## Environment / test / interfaces
+- Env wires both virtual IFs, mailboxes, `drv_done`; `fork` gen/drv/mon/sb `join_any` (exit when generator done).
+- `adder_if`: DUT signals. `clk_if`: TB-only clock (`always #10` in article; ChipSutra often `#5` in one top clock).
+- Top: instantiate IFs + DUT, assign vif handles into env, `run`, timed `$finish`.
+- DUT may be `module my_adder(adder_if _if)` (IF port) or ChipSutra-style `.a(vif.a)` port map — both OK; match user RTL.
+
+## Combinational DUT + Verilator note
+- Combo + virtual interface can DIDNOTCONVERGE on some Verilator versions (see mux path).
+- ChipSutra emit options for combo adders/muxes:
+  1. Compact class TB without VIF (preferred for Verilator smoke), or
+  2. Layered stack with module-level nets + TB clock, keep VIF usage simple.
+- Still teach the layered roles for scalability.
+
+## Bug injection (checker proof)
+- Flip reset polarity or change `+` to `-` in DUT → scoreboard must **FAIL**.
+- If TB still PASS, the checker is weak (circular golden / noop / wrong polarity).
+- Aligns with ChipSutra mutation bench (off-by-one, stuck reset, op bugs).
+
+## ChipSutra vs article
+| Topic | Article | ChipSutra default |
+|-------|---------|-------------------|
+| DUT clock | None; separate `clk_if` | TB `clk` even if DUT combo |
+| Reset polarity | Follow article/DUT carefully | Prefer active-low `rst_n` per user RTL |
+| Lifetime | forever + `#50 $finish` | fixed-N join + finish |
+| Scoreboard | Per-field $display | `errors` + report |
+| VIF | Dual IF (adder + clk) | One IF + top clk common |
+
+## Anti-patterns
+- Circular golden: `expected_sum = sum`.
+- Forgetting `#1` settle on combo outputs.
+- Not randomizing / not checking reset path.
+- Assuming checker is good without a failing mutant / buggy DUT run.
+- Emitting heavy dual-VIF layered TB for a 5-port combo adder when user only asked for a quick smoke (still OK if methodology=layered).

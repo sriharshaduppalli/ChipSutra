@@ -4,7 +4,7 @@ import { Shield, Loader2, X, Play, Waves } from "lucide-react";
 import { toast } from "sonner";
 import { Link } from "react-router-dom";
 
-export default function FormalPanel({ project, selectedFileIds, onClose }) {
+export default function FormalPanel({ project, selectedFileIds, onClose, onSendDebug }) {
   const [running, setRunning] = useState(false);
   const [logs, setLogs] = useState([]);
   const [status, setStatus] = useState(null);
@@ -14,6 +14,9 @@ export default function FormalPanel({ project, selectedFileIds, onClose }) {
   const [mode, setMode] = useState("prove");
   const [properties, setProperties] = useState([]);
   const [cexFileId, setCexFileId] = useState(null);
+  const [specText, setSpecText] = useState("");
+  const [packing, setPacking] = useState(false);
+  const [pack, setPack] = useState(null);
 
   const rtlIds = selectedFileIds.filter(fid => {
     const f = (project.files || []).find(x => x.id === fid);
@@ -62,6 +65,30 @@ export default function FormalPanel({ project, selectedFileIds, onClose }) {
     setRunning(false);
   };
 
+  const buildPack = async () => {
+    setPacking(true);
+    setPack(null);
+    try {
+      const res = await fetch(`${API}/formal/pack`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({
+          spec: specText,
+          prompt: specText,
+          dut: topModule || "dut",
+          depth,
+        }),
+      });
+      if (!res.ok) throw new Error("pack failed");
+      const data = await res.json();
+      setPack(data);
+      toast.success("SVA pack built from Spec IR");
+    } catch {
+      toast.error("Spec pack failed");
+    }
+    setPacking(false);
+  };
+
   const colorFor = (lvl) => lvl === "error" ? "text-red-400" : lvl === "warn" ? "text-amber-400" : lvl === "success" ? "text-emerald-400" : "text-slate-300";
 
   return (
@@ -89,7 +116,25 @@ export default function FormalPanel({ project, selectedFileIds, onClose }) {
             {running ? <><Loader2 size={12} className="animate-spin" /> Proving...</> : <><Play size={12} /> Run Formal</>}
           </button>
         </div>
-        <div className="p-2 border-b border-[#1E293B] font-mono text-[10px] text-slate-500">RTL must contain <span className="text-emerald-400">`assert property`</span>, <span className="text-emerald-400">`assume property`</span>, or <span className="text-emerald-400">`cover property`</span>. Use the AI module "Formal Hints" to draft them.</div>
+        <div className="p-2 border-b border-[#1E293B] font-mono text-[10px] text-slate-500">RTL must contain <span className="text-emerald-400">`assert property`</span>, <span className="text-emerald-400">`assume property`</span>, or <span className="text-emerald-400">`cover property`</span>. Or paste a spec below to emit a conservative BMC pack (not Jasper sign-off).</div>
+        <div className="px-4 py-2 border-b border-[#1E293B] space-y-2">
+          <textarea
+            value={specText}
+            onChange={(e) => setSpecText(e.target.value)}
+            placeholder="Clock clk, reset rst_n, enable, count[7:0]. REQ-1: increment when enable is high."
+            className="w-full h-16 bg-[#0B0E14] border border-[#1E293B] px-2 py-1 text-[11px] font-mono text-slate-200"
+            data-testid="formal-spec"
+          />
+          <button type="button" onClick={buildPack} disabled={packing} className="btn-outline-neon text-[10px]" data-testid="formal-pack">
+            {packing ? "Building…" : "Build SVA pack from spec"}
+          </button>
+          {pack?.sva && (
+            <pre className="max-h-28 overflow-auto text-[10px] text-slate-400 font-mono whitespace-pre-wrap" data-testid="formal-pack-sva">{pack.sva}</pre>
+          )}
+          {pack?.sby && (
+            <pre className="max-h-16 overflow-auto text-[10px] text-slate-500 font-mono whitespace-pre-wrap">{pack.sby}</pre>
+          )}
+        </div>
         {properties.length > 0 && (
           <div className="px-4 py-2 border-b border-[#1E293B] max-h-28 overflow-auto">
             <div className="font-mono text-[10px] text-slate-400 mb-1">PROPERTY TABLE</div>
@@ -117,6 +162,16 @@ export default function FormalPanel({ project, selectedFileIds, onClose }) {
                 <div className="mt-2 text-amber-400 flex items-center gap-1">
                   <Waves size={12} /> CEX VCD saved. <Link to={`/app/waveform?pid=${project.id}&file_id=${cexFileId}`} className="underline">Open Waveform →</Link>
                 </div>
+              )}
+              {onSendDebug && logs.length > 0 && (
+                <button
+                  type="button"
+                  className="mt-2 font-mono text-[10px] uppercase tracking-widest text-emerald-400 hover:underline"
+                  data-testid="formal-send-debug"
+                  onClick={() => onSendDebug(logs.map((l) => l.line).join("\n"))}
+                >
+                  Send log to Debug module
+                </button>
               )}
             </div>
           )}

@@ -75,6 +75,7 @@ def test_build_manifest_shape():
     assert "created_at" in m
     versions = tool_versions()
     assert "eqy" in versions and "opensta" in versions and "cocotb" in versions
+    assert "iverilog" in versions and "verible_lint" in versions and "slang" in versions
 
 
 def test_eqy_and_coverage_helpers_smoke():

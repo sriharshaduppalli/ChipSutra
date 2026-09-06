@@ -1,0 +1,96 @@
+# Hello UVM (minimal testbench)
+# Smallest runnable UVM: uvm_test + uvm_env + top run_test — no DUT/IF/config_db yet.
+# ChipSutra original wording. Curriculum: ChipVerify Hello UVM!
+# Next step for real VIP: DUT+IF contract in uvm_first_tb_dut.txt, then agent/driver/monitor.
+
+## Goal
+Prove UVM phasing and factory: print via `` `uvm_info `` from env `run_phase`.
+Skeleton of every real TB: thin test, heavier env, one-line top.
+
+## Minimal structure
+```
+module tb_top  -->  run_test("base_test")
+uvm_test (base_test)
+  └── uvm_env (my_env)  -->  `uvm_info "Hello UVM!"
+```
+No DUT, interface, sequences, or config_db required for this smoke.
+
+## Test class pattern
+```systemverilog
+class base_test extends uvm_test;
+  `uvm_component_utils(base_test)
+  my_env m_top_env;
+
+  function new(string name, uvm_component parent = null);
+    super.new(name, parent);
+  endfunction
+
+  virtual function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+    m_top_env = my_env::type_id::create("m_top_env", this);
+  endfunction
+
+  virtual function void end_of_elaboration_phase(uvm_phase phase);
+    uvm_top.print_topology();
+  endfunction
+endclass
+```
+- Always `super.build_phase(phase)` first.
+- Prefer `type_id::create` over `new` (factory overrides later).
+- Topology print confirms `uvm_test_top` / child names.
+
+## Env class pattern
+```systemverilog
+class my_env extends uvm_env;
+  `uvm_component_utils(my_env)
+
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+
+  function void build_phase(uvm_phase phase);
+    super.build_phase(phase);
+  endfunction
+
+  task run_phase(uvm_phase phase);
+    `uvm_info(get_name(), "Hello UVM ! Simulation has started.", UVM_LOW)
+  endtask
+endclass
+```
+- `` `uvm_info(ID, msg, verbosity) `` preferred over bare `$display` / raw `uvm_report_*`.
+- Reporting chapter: `uvm_reporting_classes.txt`, `uvm_reporting_functions.txt`.
+- `UVM_LOW` prints under typical default thresholds (safe "always show").
+
+## Top module
+```systemverilog
+module tb_top;
+  import uvm_pkg::*;
+  `include "uvm_macros.svh"
+  initial begin
+    run_test("base_test");   // or run_test() + +UVM_TESTNAME=base_test
+  end
+endmodule
+```
+- `run_test` starts the full phase schedule (build -> ... -> run -> report...).
+- Production: leave `run_test()` empty and select via `+UVM_TESTNAME=<test>` (no recompile to switch).
+- With DUT+IF: see `uvm_tb_top.txt` (config_db set before run_test).
+
+## What a clean log shows
+- `[RNTST] Running test base_test...`
+- Topology table: `uvm_test_top` / `m_top_env`
+- User message tagged with component name (e.g. `[m_top_env]`)
+- Report summary: INFO > 0, WARNING/ERROR/FATAL = 0 for this smoke
+- Banner/version string is tool-specific; structure of topology + summary is what matters
+
+## Beginner mistakes
+1. Skip `super.build_phase` — breaks base config inheritance silently.
+2. `new()` instead of factory `create` — loses type/inst overrides.
+3. `run_test()` with neither string nor `+UVM_TESTNAME` — no test / immediate fail.
+4. Expecting this smoke to verify a DUT — it does not; add agent/vif next.
+
+## ChipSutra emit notes
+- For methodology=uvm smoke without RTL: test+env+top as above is valid teaching output.
+- For real DUT Generate: still emit full agent stack + config_db vif (see `uvm_patterns.txt`).
+- Do not invent DUT ports in Hello-style examples; keep no-DUT when user asks for Hello UVM.
+- Verilator: full UVM often unsupported — note commercial/EDA Playground for running Hello.
+- Objection: tiny INFO-only `run_phase` may finish at time 0; real stimulus uses raise/drop objections.

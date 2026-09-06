@@ -1,0 +1,88 @@
+# Build Your First UVM Testbench - DUT + interface contract
+# Chapter running example for ChipVerify UVM "Building Your First Testbench".
+# ChipSutra original wording. Later driver/monitor/agent articles reference THIS contract.
+# Do not invent ports — use user RTL when Generate has real DUT; use this when teaching UVM chapter flow.
+
+## Running example purpose
+One fixed DUT + interface for the whole first-TB chapter so each UVM component article
+(driver, monitor, sequencer, ...) teaches methodology, not a new protocol.
+
+## DUT: reg_block (register file)
+- 16 locations x 8-bit (`mem[0:15]`), addr width 4.
+- Ops: write byte to `mem[addr]`; read byte back on `rdata`.
+- No bursts, no CDC, no completion/ack — fixed known latency on purpose.
+
+### Timing (must model in monitor/driver)
+| Op | Behavior |
+|----|----------|
+| Write | On posedge when `wr_en`: store `wdata` into `mem[addr]` same edge — done |
+| Read | On posedge when `rd_en`: `rdata` updates; value valid for TB **one cycle later** |
+| Reset | `rst_n` low: clear `rdata` (active-low) |
+
+No handshake (`ack`/`PREADY`) — latency is fixed. Do not sample `rdata` on the same cycle as `rd_en`.
+
+Priority in example RTL: reset, then `wr_en`, else `rd_en` (if both high same edge, write wins).
+
+## Interface: reg_if
+```systemverilog
+interface reg_if (input bit clk);
+  logic        rst_n;
+  logic        wr_en;
+  logic        rd_en;
+  logic [3:0]  addr;
+  logic [7:0]  wdata;
+  logic [7:0]  rdata;
+endinterface
+```
+
+### Signal directions (for driver vs monitor)
+| Signal | Driven by | Notes |
+|--------|-----------|--------|
+| clk | top (IF port) | timing reference |
+| rst_n | TB | active-low |
+| wr_en, rd_en | TB | one-cycle pulses |
+| addr, wdata | TB | write/read address; write data |
+| rdata | DUT | read data; sample after 1-cycle latency |
+
+Driver drives TB-side only; never drives `rdata`.
+Monitor samples **all** signals to reconstruct transactions (including TB-driven ones).
+
+## DUT module shape (interface port)
+```systemverilog
+module reg_block (reg_if vif);
+  logic [7:0] mem [0:15];
+  always @(posedge vif.clk or negedge vif.rst_n) begin
+    if (!vif.rst_n) vif.rdata <= 8'h00;
+    else if (vif.wr_en) mem[vif.addr] <= vif.wdata;
+    else if (vif.rd_en) vif.rdata <= mem[vif.addr];
+  end
+endmodule
+```
+Single IF handle instead of a long port list — scales when driver + monitor + top all need access.
+
+## How pieces connect (chapter picture)
+1. Top instantiates one `reg_if` + clock/reset — full module: `uvm_tb_top.txt`.
+2. DUT connects to that IF instance.
+3. Same IF handle passed into UVM via `uvm_config_db#(virtual reg_if)::set` (driver/monitor get).
+Structure matches production AXI/APB TBs — longer signals, same one-IF / shared-handle idea.
+
+## Where this pattern shows up
+Memory-mapped CSR / peripheral register files; simplified stand-in for APB/AHB-Lite register space
+without dragging full bus protocol into UVM learning.
+
+## Beginner mistakes
+1. Loose individual DUT ports instead of an interface — painful once monitor/second consumer appears.
+2. Sampling `rdata` same cycle as `rd_en` — captures stale data; need +1 cycle.
+3. Driver driving `rdata` or waiting for a nonexistent ack.
+4. Inventing extra protocol signals for this chapter DUT.
+
+## Transaction for this DUT
+- `reg_transaction` (`uvm_sequence_item`) mirrors IF fields; see `uvm_transaction.txt`.
+
+## ChipSutra emit notes
+- Teaching / Hello-chapter UVM around this DUT: use exact `reg_if` / `reg_block` contract above.
+- User Generate with their RTL: **prefer user ports** — do not force reg_block if DUT differs.
+- Scoreboard golden: associative array or `logic [7:0] model[16]` updated on writes; compare read data after latency.
+- Pure SV layered default still preferred for Verilator; methodology=uvm uses IF + config_db + agents.
+- Extend exercise (64 regs): addr `[5:0]`, mem `[0:63]` — only when user asks.
+- Full UVM stack for this style DUT: `uvm_tb_example1.txt`.

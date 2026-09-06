@@ -69,6 +69,17 @@ def test_cocotb_scaffold():
     assert "@cocotb.test()" in files["test_counter.py"]
 
 
+def test_cocotb_scaffold_uses_parsed_clk_rst():
+    rtl = """
+    module counter_en(input wire clk, input wire rst_n, input wire enable, output reg [3:0] count);
+    endmodule
+    """
+    files = render_cocotb_scaffold("counter_en", "counter_en.sv", rtl_text=rtl)
+    py = files["test_counter_en.py"]
+    assert 'Clock(dut.clk' in py
+    assert "dut.rst_n.value" in py
+
+
 def test_cocotb_runner_helpers():
     docs = [
         {"original_filename": "Makefile", "ext": "", "kind": "tb"},

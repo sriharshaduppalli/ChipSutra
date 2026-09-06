@@ -31,19 +31,18 @@ ChipSutra is an **AI verification copilot** with a growing OSS EDA engine layer 
 - **FST** via `fst2vcd`; **UCIS/IMC/URG/CSV** coverage adapters
 - **Closed-loop UX**: Generate hole tests + Apply seeds → Regression; sim log **auto-attach** to `tool_log`
 - Optional **Redis** rate limiter (`REDIS_URL`, compose `--profile redis`)
+- Native **SVA / covergroup lint** + optional [AsFigo SVALint / FCOVLint](./ASFIGO_LINTERS.md) PATH wrappers
 
 ## Still missing (priority)
 
-See the full 30/60/90 architecture: **[ADVANCED_DV_ARCHITECTURE.md](./ADVANCED_DV_ARCHITECTURE.md)**.
+Honest leftovers after the Community close-the-loop wave. See **[ADVANCED_DV_ARCHITECTURE.md](./ADVANCED_DV_ARCHITECTURE.md)**.
 
-1. DV Planner → Verifier (compile/sim) → Debug repair loop
-2. Spec IR + Sign-off evidence dashboard
-3. Default self-host path that pulls GHCR images (skip local rebuild)
-4. Demo liberty / sky130 path so STA smoke is non-mock by default
-5. Ollama pre-warm + optional sentence-transformers packaging
-6. CI webhook worker: PR diff → lint → optional AI review
-7. Multi-revision LEC (UI currently compares RTL vs auto-synth netlist)
-8. Richer first-project wizard / screen recording
+1. Vendor simulators (Questa/VCS/Xcelium) — Community has **adapter stubs only**; no sign-off claim
+2. Publishing a LoRA/GGUF `chipsutra-vlsi:*-ft` weight (docs + Modelfile example exist; training stays on your GPU)
+3. Optional 60s screen-recording GIF under `docs/screenshots/` (storyboard is in `docs/screenshots/README.md`)
+4. Foundry PDK / Sky130 liberty in-tree — **never**; user supplies `.lib` (see [STA_LIBERTY.md](./STA_LIBERTY.md))
+
+Shipped this wave: GHCR `:edge` pull overlay, demo liberty + STA fallback, RAG index warm at boot, CI diff review worker, UCIS dialect fixtures, first-project wizard, Spec-IR formal pack, sim adapter stubs, multi-revision LEC UI.
 
 ## Enterprise-only (by design)
 

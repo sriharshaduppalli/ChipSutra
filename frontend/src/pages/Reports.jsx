@@ -1,19 +1,32 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
-import { FileText, Download } from "lucide-react";
+import { FileText, Download, ShieldAlert } from "lucide-react";
+
+const TILE_COLOR = {
+  pass: "text-emerald-400 border-emerald-500/40",
+  fail: "text-red-400 border-red-500/40",
+  skip: "text-amber-400 border-amber-500/40",
+  missing: "text-slate-500 border-[#1E293B]",
+};
 
 export default function Reports() {
   const [projects, setProjects] = useState([]);
   const [selected, setSelected] = useState(null);
   const [gens, setGens] = useState([]);
+  const [signoff, setSignoff] = useState(null);
 
   useEffect(() => {
     api.get("/projects").then(r => setProjects(r.data));
   }, []);
 
   useEffect(() => {
-    if (!selected) return;
+    if (!selected) {
+      setGens([]);
+      setSignoff(null);
+      return;
+    }
     api.get(`/projects/${selected}/generations`).then(r => setGens(r.data));
+    api.get(`/projects/${selected}/signoff`).then(r => setSignoff(r.data)).catch(() => setSignoff(null));
   }, [selected]);
 
   const download = (g) => {
@@ -25,11 +38,22 @@ export default function Reports() {
     URL.revokeObjectURL(url);
   };
 
+  const downloadSignoff = async () => {
+    if (!selected) return;
+    const { data } = await api.get(`/projects/${selected}/signoff.zip`, { responseType: "blob" });
+    const url = URL.createObjectURL(data);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `chipsutra_signoff_${selected.slice(0, 8)}.zip`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="p-8" data-testid="reports-page">
       <div className="pin-badge mb-2 inline-block">ARTIFACTS</div>
       <h1 className="font-display text-3xl font-bold mb-1">Reports & Downloads</h1>
-      <p className="font-mono text-xs text-slate-400 mb-6">Download every generation artifact you've produced.</p>
+      <p className="font-mono text-xs text-slate-400 mb-6">Download every generation artifact you've produced. Readiness tiles are not vendor sign-off.</p>
 
       <div className="grid grid-cols-12 gap-4">
         <div className="col-span-12 md:col-span-4 card-surface p-4">
@@ -45,6 +69,47 @@ export default function Reports() {
           </div>
         </div>
         <div className="col-span-12 md:col-span-8 card-surface p-4">
+          {signoff && selected && (
+            <div className="mb-6" data-testid="signoff-board">
+              <div className="flex items-center justify-between mb-2">
+                <div className="font-mono text-xs uppercase tracking-widest text-slate-400">
+                  Readiness {signoff.score}/100
+                </div>
+                <button
+                  type="button"
+                  onClick={downloadSignoff}
+                  className="btn-outline-neon text-xs inline-flex items-center gap-1"
+                  data-testid="signoff-zip"
+                >
+                  <Download size={12} /> sign-off zip
+                </button>
+              </div>
+              <div className="flex items-start gap-2 font-mono text-[10px] text-amber-400/90 mb-3">
+                <ShieldAlert size={12} className="mt-0.5 shrink-0" />
+                ChipSutra does not claim vendor sign-off (Questa/VCS/Xcelium UCIS).
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
+                {(signoff.tiles || []).map((t) => (
+                  <div
+                    key={t.name}
+                    className={`border px-2 py-2 ${TILE_COLOR[t.status] || TILE_COLOR.missing}`}
+                    data-testid={`signoff-tile-${t.name}`}
+                  >
+                    <div className="font-mono text-[10px] uppercase tracking-widest">{t.name}</div>
+                    <div className="font-mono text-xs">{t.status}</div>
+                    {t.detail && <div className="font-mono text-[10px] text-slate-500 mt-1">{t.detail}</div>}
+                  </div>
+                ))}
+              </div>
+              {(signoff.residual_risk || []).length > 0 && (
+                <ul className="font-mono text-[10px] text-slate-500 space-y-0.5 mb-4">
+                  {signoff.residual_risk.slice(0, 6).map((r) => (
+                    <li key={r}>· {r}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
           <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-3">Generation Artifacts</div>
           {!selected ? (
             <div className="font-mono text-xs text-slate-500 text-center py-16">Select a project on the left.</div>

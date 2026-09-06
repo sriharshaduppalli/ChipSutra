@@ -1,0 +1,71 @@
+# UVM Sequencer [uvm_sequencer]
+# Pull-model bridge: sequences <-> driver. Does not generate stimulus or drive pins.
+# ChipSutra original wording. Curriculum: ChipVerify UVM Sequencer.
+# Pair with: uvm_driver.txt. Sequences next: body() / start_item.
+
+## Role
+- Manages **when/order** items reach the driver; sequences generate items.
+- Lives in agent with driver + monitor (agent article later).
+- **Pull model**: driver asks when ready (`get_next_item`); sequencer does not push blindly.
+
+## Ports (automatic)
+| Side | Built-in | Class |
+|------|----------|--------|
+| Driver | `seq_item_port` | `uvm_seq_item_pull_port` on `uvm_driver` |
+| Sequencer | `seq_item_export` | `uvm_seq_item_pull_export` on `uvm_sequencer` |
+
+Same idea as subscriber's auto `analysis_export` — connect once in `connect_phase`.
+
+## Declare / create
+Often no custom class needed:
+
+```systemverilog
+uvm_sequencer #(reg_transaction) m_sequencer;
+// build_phase:
+m_sequencer = uvm_sequencer#(reg_transaction)::type_id::create("m_sequencer", this);
+```
+
+`uvm_sequencer #(REQ, RSP=REQ)` — one type param sets both when request+response share one item class.
+
+Optional thin wrapper (intent / future knobs):
+
+```systemverilog
+class reg_sequencer extends uvm_sequencer #(reg_transaction);
+  `uvm_component_utils(reg_sequencer)
+  // e.g. int max_transactions;
+  function new(string name, uvm_component parent);
+    super.new(name, parent);
+  endfunction
+endclass
+```
+Use custom class when sequences need sequencer-side properties/methods (`p_sequencer`).
+
+## connect_phase (direction matters)
+```systemverilog
+virtual function void connect_phase(uvm_phase phase);
+  super.connect_phase(phase);
+  m_driver.seq_item_port.connect(m_sequencer.seq_item_export);  // port -> export
+endfunction
+```
+- **Wrong**: `export.connect(port)` — will not resolve correctly.
+- Create both in `build_phase`; connect only in `connect_phase` (handles must exist first).
+- Missing connect => `get_next_item` blocks forever (often no loud error).
+- Handshake details: `uvm_get_next_item.txt`.
+
+## Naming note
+- Agent handle often named `m_sequencer` (local instance).
+- Sequence's built-in `m_sequencer` / `p_sequencer` are different — sequence-side handles (next article).
+
+## Beginner mistakes
+1. Never connecting port to export.
+2. Connecting export to port (reversed).
+3. Connecting in build_phase before create finishes / wrong phase.
+4. Mismatched REQ types between driver and sequencer.
+
+## ChipSutra emit notes (methodology=uvm)
+- Agent build: create sequencer + driver (+ monitor); connect `drv.seq_item_port` -> `sqr.seq_item_export`.
+- Prefer `uvm_sequencer #(txn)` or thin `*_sequencer` wrapper; same REQ as driver.
+- Start sequences on this sequencer from test (`seq.start(sqr)` or default_sequence) — see `uvm_sequence.txt`.
+- Multi-IF coordination holder: `uvm_virtual_sequencer.txt`.
+- Concurrent sequence grant order: `uvm_sequence_arbitration.txt`.
+- Pure SV layered analogue: generator mailbox -> driver (no sequencer class).

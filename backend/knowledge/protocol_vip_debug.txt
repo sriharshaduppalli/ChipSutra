@@ -1,0 +1,15 @@
+# Debug / JTAG / SWD emit (ChipSutra)
+# Never invent IR/DR lengths, TAP maps, or vendor debug ROM tables.
+
+## jtag
+- Ports from RTL only: tck, tms, tdi, tdo, optional trst_n.
+- Smoke: after reset, tdo not X; do not invent a TAP walk unless user listed IR/DR lengths.
+- Boundary-scan / IJTAG 1687: user network description required.
+- If user knob jtag_ir_len=N: one IR shift of N bits then idle. N is user — never guess.
+
+## swd
+- SWCLK/SWDIO two-wire. Outline only if those ports exist. No invented SWD sequences.
+
+## dft
+- scan_en / scan_clk / scan_in/out: shift/capture only if those ports exist.
+- MBIST / LBIST / ATPG: use user wrapper ports. Do not invent March algorithms.

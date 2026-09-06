@@ -1,0 +1,72 @@
+# UVM TLM Analysis Port
+# Broadcast transactions to 0..N listeners via write() — monitor/scoreboard path.
+# ChipSutra original wording. Curriculum: ChipVerify UVM TLM Analysis Port.
+# Pair with: uvm_tlm.txt, uvm_monitor.txt, uvm_subscriber.txt, uvm_scoreboard.txt.
+
+## Why analysis (vs put/get)
+Put/get need a matching export/imp and block on handshake.
+`uvm_analysis_port #(T)` lets a producer (usually a **monitor**) emit a stream of transactions
+**without caring** how many consumers exist:
+- 0 connections → `write` is a no-op (safe)
+- 1..N → each connected export/imp gets `write(t)`
+
+`write` is a **void function** — completes in the same delta; do not block inside listener `write`.
+
+## Producer
+```systemverilog
+uvm_analysis_port #(my_txn) ap;   // or mon_analysis_port
+
+function void build_phase(uvm_phase phase);
+  super.build_phase(phase);
+  ap = new("analysis_port", this);
+endfunction
+
+// after observing pins / assembling txn:
+ap.write(pkt);
+```
+
+## Consumers
+### uvm_subscriber #(T)
+Built-in `analysis_export` (`uvm_analysis_imp`); implement:
+
+```systemverilog
+virtual function void write(T t);  // argument name often required as t
+  // sample coverage / log — keep non-blocking
+endfunction
+```
+
+### Scoreboard / custom component
+Declare `uvm_analysis_imp #(T, this_type)` (or multiple imps with `_decl` macros) and implement `write`.
+
+## Connect (env / agent)
+```systemverilog
+function void connect_phase(uvm_phase phase);
+  // fan-out: one ap -> many listeners
+  mon.ap.connect(sub1.analysis_export);
+  mon.ap.connect(sub2.analysis_export);
+  mon.ap.connect(sb.analysis_export);   // or sb.ap_imp
+endfunction
+```
+Connect at the parent that owns both ends. Order of `write` fan-out follows connection list.
+
+## ChipSutra smoke map
+| Link | Pattern |
+|------|---------|
+| Monitor → scoreboard | `mon_analysis_port.connect(sb.ap_imp)` |
+| Monitor → coverage subscriber | `connect(cov.analysis_export)` |
+| Optional extra checker | another `connect` on same `ap` |
+
+Do not use analysis ports for driver↔sequencer (use `seq_item_port`).
+
+## Beginner mistakes
+1. Implementing blocking work / `#delay` inside `write` — use a mailbox/fifo/process instead.
+2. Forgetting `ap = new(...)` in `build_phase`.
+3. Not connecting env scoreboard — monitor writes into the void (legal but useless).
+4. Mutating the shared txn handle in a listener without clone — other listeners see side effects; clone if storing.
+5. Wrong `write` signature / arg name causing compile errors on subscriber.
+
+## ChipSutra emit notes
+- methodology=uvm: every monitor has `uvm_analysis_port #(txn)`; env connects to scoreboard (+ coverage if present).
+- `write` in SB: predict/compare or queue for later — no time consume.
+- Subscriber details: `uvm_subscriber.txt`. Monitor emit: `uvm_monitor.txt`.
+- Multiple dedicated `write_*` imps: `uvm_tlm_decl.txt`.
