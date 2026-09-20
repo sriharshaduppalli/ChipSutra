@@ -208,6 +208,42 @@ export function analyzeTbArchitecture(sv, methodologyHint = "") {
   if (methodology === "sv" && present.if && !hasVif) {
     findings.push({ severity: "ok", title: "No virtual interface", hint: "Combo goldens may bind hierarchically — that is intentional for Verilator." });
   }
+  if (/\bseen\s*\+\+/i.test(body) || /\bbeats\s*\+\+/i.test(body)) {
+    findings.push({
+      severity: "error",
+      title: "Traffic counter, not a golden",
+      hint: "seen++ / beats++ is not a checker. Need an independent expected-value model.",
+    });
+  }
+  if (/function\s+bit\s+check\s*\(\s*\)\s*;\s*return\s+1\s*;/i.test(body)) {
+    findings.push({
+      severity: "error",
+      title: "No-op scoreboard check()",
+      hint: "check() that returns 1 always will pass a broken DUT.",
+    });
+  }
+  if (/constraint\s+\w+\s*\{\s*1\s*;\s*\}/i.test(body)) {
+    findings.push({
+      severity: "error",
+      title: "Illegal / noop constraint `{ 1; }`",
+      hint: "Use a real legal_c on DUT inputs. `{ 1; }` is not a constraint.",
+    });
+  }
+  if (!/\b(clk|clock|aclk|pclk|sclk|hclk)\b/i.test(body)) {
+    findings.push({
+      severity: "warn",
+      title: "No clock ident in TB",
+      hint: "Combo-only TBs may omit a clock; sequential DUTs must toggle clk.",
+    });
+  }
+  if (!/\b(rst_n|rstn|reset_n|aresetn|presetn|hresetn|rst|reset)\b/i.test(body)) {
+    findings.push({
+      severity: "warn",
+      title: "No reset ident in TB",
+      hint: "Sequential goldens should assert then deassert the DUT reset pin.",
+    });
+  }
+
   if (!missing.length && !findings.some((f) => f.severity === "error")) {
     findings.unshift({
       severity: "ok",

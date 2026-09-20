@@ -38,7 +38,7 @@ from generation_rules import (
 from lint_feedback import format_lint_feedback, lint_feedback_status
 from coverage_parse import parse_text_report, summarize_coverage_dat, trend_points
 from coverage_merge import merge_summary_points
-from coverage_loop import rank_holes, build_closure_prompt, suggest_resim_plan, closure_status
+from coverage_loop import rank_holes, build_closure_prompt, suggest_resim_plan, closure_status, render_hole_sequence
 from formal_parse import parse_sby_log, find_cex_vcds
 from cdc import analyze_rtl_texts
 from cdc_netlist import analyze_yosys_json, merge_cdc_results
@@ -83,6 +83,8 @@ from dv_user_config import (
 from tb_ral import ral_prompt_block, normalize_csr_list
 from generation_persist import generation_artifact_meta
 from tb_architecture import analyze_tb_architecture
+from tb_review import review_generated_tb
+from dv_trace import build_trace_matrix
 from dv_verify import verify_testbench, verify_status_for_learning, verilator_bin
 from llm_router import resolve_model, prewarm_ollama, prewarm_status
 from spec_checklist import (
@@ -2254,6 +2256,15 @@ async def generate_stream(
                     )
                 except Exception:
                     logger.exception("TB architecture extract failed")
+                try:
+                    ports = []
+                    if parsed_modules:
+                        ports = list(parsed_modules[0].get("ports") or [])
+                    done_payload["review"] = review_generated_tb(
+                        full, ports=ports, methodology_hint=tb_meth
+                    )
+                except Exception:
+                    logger.exception("TB quality review failed")
             yield f"data: {json.dumps(done_payload)}\n\n"
         except Exception as e:
             logger.exception("Generation error")
@@ -2568,6 +2579,126 @@ async def coverage_closure_status(pid: str, inp: CoverageClosureStatusIn, user=D
     before = await _coverage_doc(pid, inp.before_id)
     after = await _coverage_doc(pid, inp.after_id)
     return closure_status(before, after)
+
+
+class CoverageHoleSequenceIn(BaseModel):
+    hole_name: str
+    kind: Optional[str] = ""
+    pct: Optional[float] = None
+    dut: Optional[str] = None
+    persist: bool = True
+
+
+@api.post("/projects/{pid}/coverage/{cov_id}/hole-sequence")
+async def coverage_hole_sequence(
+    pid: str,
+    cov_id: str,
+    inp: CoverageHoleSequenceIn,
+    user=Depends(get_current_user),
+):
+    """Named directed sequence for one ranked hole. No invented VIP pins."""
+    await require_project(pid, user["id"], "editor")
+    doc = await _coverage_doc(pid, cov_id)
+    ranked = rank_holes(doc, limit=40)
+    hole = next((h for h in ranked if str(h.get("name")) == inp.hole_name), None)
+    if hole is None:
+        hole = {"name": inp.hole_name, "kind": inp.kind or "", "pct": inp.pct}
+    dut = (inp.dut or "").strip()
+    ports: List[str] = []
+    rtl_docs = await db.files.find(
+        {"project_id": pid, "kind": "rtl", "is_deleted": {"$ne": True}},
+        {"_id": 0},
+    ).to_list(8)
+    for fdoc in rtl_docs:
+        text = _get_file_text(fdoc)
+        mods = extract_modules(text) if text else []
+        if mods:
+            if not dut:
+                dut = mods[0].get("name") or "dut"
+            ports = [p.get("name") for p in (mods[0].get("ports") or []) if p.get("name")]
+            break
+    if not dut:
+        gens = await db.generations.find(
+            {"project_id": pid, "module": "testbench", "status": "done"},
+            {"_id": 0, "learning": 1},
+        ).sort("created_at", -1).to_list(1)
+        dut = ((gens[0].get("learning") or {}).get("dut") if gens else None) or "dut"
+    sv = render_hole_sequence(
+        str(hole.get("name") or inp.hole_name),
+        dut=dut,
+        ports=ports,
+        kind=str(hole.get("kind") or inp.kind or ""),
+        pct=hole.get("pct") if hole.get("pct") is not None else inp.pct,
+    )
+    saved = None
+    if inp.persist:
+        hid = re.sub(r"[^A-Za-z0-9_]", "_", str(hole.get("name") or "hole"))[:40]
+        filename = f"{dut}_close_{hid}.sv"
+        saved = await _upsert_project_text_file(
+            project_id=pid,
+            filename=filename,
+            content=sv,
+            kind="tb",
+        )
+    return {
+        "sv": sv,
+        "hole": hole.get("name") or inp.hole_name,
+        "dut": dut,
+        "saved_file": (
+            {"id": saved.get("id"), "name": saved.get("original_filename"), "kind": saved.get("kind")}
+            if saved
+            else None
+        ),
+    }
+
+
+async def _latest_generation_text(pid: str, module: str) -> str:
+    docs = await db.generations.find(
+        {"project_id": pid, "module": module, "status": "done"},
+        {"_id": 0, "output": 1},
+    ).sort("created_at", -1).to_list(1)
+    return (docs[0].get("output") or "") if docs else ""
+
+
+@api.get("/projects/{pid}/traceability")
+async def project_traceability(pid: str, user=Depends(get_current_user)):
+    """Testplan ↔ TB / SVA / covergroup matrix from persisted generations."""
+    await require_project(pid, user["id"], "viewer")
+    testplan = await _latest_generation_text(pid, "testplan")
+    tb = await _latest_generation_text(pid, "testbench")
+    sva = await _latest_generation_text(pid, "assertions")
+    cover = await _latest_generation_text(pid, "covergroups")
+    if not any((testplan, tb, sva, cover)):
+        fdocs = await db.files.find(
+            {
+                "project_id": pid,
+                "is_deleted": {"$ne": True},
+                "kind": {"$in": ["tb", "sva", "cover", "doc"]},
+            },
+            {"_id": 0},
+        ).sort("created_at", -1).to_list(20)
+        for f in fdocs:
+            name = (f.get("original_filename") or "").lower()
+            kind = f.get("kind")
+            text = _get_file_text(f)
+            if not text:
+                continue
+            if not tb and kind == "tb":
+                tb = text
+            elif not sva and kind == "sva":
+                sva = text
+            elif not cover and kind == "cover":
+                cover = text
+            elif not testplan and (kind == "doc" and "testplan" in name):
+                testplan = text
+    matrix = build_trace_matrix(testplan=testplan, tb=tb, sva=sva, covergroups=cover)
+    matrix["sources"] = {
+        "testplan": bool(testplan.strip()),
+        "tb": bool(tb.strip()),
+        "sva": bool(sva.strip()),
+        "covergroups": bool(cover.strip()),
+    }
+    return matrix
 
 # =========================
 # VCD parser
@@ -5464,6 +5595,7 @@ class DebugClassifyIn(BaseModel):
 class TbArchitectureIn(BaseModel):
     sv: str = ""
     tb_methodology: Optional[str] = None
+    ports: List[dict] = Field(default_factory=list)
 
 
 class DvPackIn(BaseModel):
@@ -5492,6 +5624,19 @@ async def tb_architecture(inp: TbArchitectureIn, user=Depends(get_current_user))
     if not (inp.sv or "").strip():
         raise HTTPException(400, "Provide generated testbench SystemVerilog")
     return analyze_tb_architecture(inp.sv, methodology_hint=inp.tb_methodology or "")
+
+
+@api.post("/tb/review")
+async def tb_review(inp: TbArchitectureIn, user=Depends(get_current_user)):
+    """Quality review of generated SV: fake goldens, noop constraints, missing ports."""
+    _ = user
+    if not (inp.sv or "").strip():
+        raise HTTPException(400, "Provide generated testbench SystemVerilog")
+    return review_generated_tb(
+        inp.sv,
+        ports=inp.ports or [],
+        methodology_hint=inp.tb_methodology or "",
+    )
 
 
 @api.post("/generate/pack")

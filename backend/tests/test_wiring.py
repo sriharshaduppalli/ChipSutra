@@ -25,6 +25,10 @@ NEW_ROUTES = [
     "/api/projects/{pid}/coverage/{cov_id}/holes",
     "/api/projects/{pid}/coverage/{cov_id}/closure-plan",
     "/api/projects/{pid}/coverage/closure-status",
+    "/api/projects/{pid}/coverage/{cov_id}/hole-sequence",
+    "/api/projects/{pid}/traceability",
+    "/api/tb/architecture",
+    "/api/tb/review",
     "/api/generations/{gen_id}/evidence",
 ]
 
@@ -34,6 +38,9 @@ ENGINE_MODULES = [
     "ucis_parse",
     "coverage_merge",
     "coverage_loop",
+    "tb_review",
+    "dv_trace",
+    "tb_architecture",
     "rag_vector",
     "rate_limit",
 ]
@@ -105,6 +112,9 @@ def test_server_import_pulls_in_engine_module(mod):
 def test_server_uses_engine_entry_points():
     assert server.merge_summary_points is not None
     assert server.rank_holes is not None and server.closure_status is not None
+    assert server.review_generated_tb is not None
+    assert server.build_trace_matrix is not None
+    assert server.render_hole_sequence is not None
     assert server.analyze_deep is not None and server.merge_deep is not None
     assert server.sta_command is not None and server.liberty_is_plausible is not None
     assert server.ucis_parse.detect_and_parse is not None

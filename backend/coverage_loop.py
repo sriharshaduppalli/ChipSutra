@@ -6,6 +6,7 @@ coverage-closure run can be reproduced exactly.
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Dict, List, Optional
 
 HOLE_THRESHOLD = 90.0
@@ -183,3 +184,48 @@ def closure_status(before: dict, after: dict) -> dict:
         "new_holes": sorted(new),
         "improved": improved,
     }
+
+
+def _safe_id(name: str, fallback: str = "hole") -> str:
+    s = re.sub(r"[^A-Za-z0-9_]", "_", (name or fallback).strip()) or fallback
+    if s[0].isdigit():
+        s = f"h_{s}"
+    return s[:48]
+
+
+def render_hole_sequence(
+    hole_name: str,
+    *,
+    dut: str = "dut",
+    ports: Optional[List[str]] = None,
+    kind: str = "",
+    pct: Optional[float] = None,
+) -> str:
+    """Named directed sequence/task for one coverage hole. No invented VIP."""
+    hid = _safe_id(hole_name)
+    dut_id = _safe_id(dut, "dut")
+    names = [str(p).strip() for p in (ports or []) if str(p).strip()]
+    matched = [n for n in names if n.lower() in hole_name.lower() or hole_name.lower() in n.lower()]
+    drive = "\n".join(f"    // drive {n} toward the uncovered bin" for n in matched[:6]) or (
+        "    // Hole name did not match a DUT port — keep existing IF; do not invent pins."
+    )
+    pct_s = f"{float(pct):.1f}%" if isinstance(pct, (int, float)) else "unknown"
+    kind_s = kind or "cover"
+    return f"""// ChipSutra directed closure — hole `{hole_name}` ({kind_s} @ {pct_s})
+// Named sequence/task for Regression / plusarg +plus{hid}
+// Not a sign-off UCIS dump. Review bins against the user covergroup.
+
+task automatic close_{hid}();
+  $display("[%0t] close_{hid}: targeting hole `{hole_name}`", $time);
+{drive}
+  repeat (16) @(posedge clk);
+endtask
+
+covergroup {dut_id}_{hid}_cg;
+  cp_hole: coverpoint 1'b1 {{
+    bins {hid} = {{1}};
+  }}
+endgroup
+
+// Map: this artifact exists to close `{hole_name}`. Bind in the existing TB env/test.
+"""

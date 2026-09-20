@@ -18,6 +18,8 @@ export default function Coverage() {
   const [planning, setPlanning] = useState(false);
   const [beforeId, setBeforeId] = useState("");
   const [closure, setClosure] = useState(null);
+  const [holeSeq, setHoleSeq] = useState(null);
+  const [emitting, setEmitting] = useState("");
 
   const loadProjects = useCallback(async () => {
     try {
@@ -66,6 +68,7 @@ export default function Coverage() {
     setRunId(id);
     setPlan(null);
     setClosure(null);
+    setHoleSeq(null);
     const doc = runs.find((r) => r.id === id);
     if (doc) setResult({ overall: doc.overall, metrics: doc.metrics || [], holes: doc.holes || [], count: (doc.metrics || []).length });
   };
@@ -128,6 +131,24 @@ export default function Coverage() {
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Could not compare coverage runs");
     }
+  };
+
+  const emitHoleSequence = async (h) => {
+    if (!projectId || !runId || !h?.name) return toast.error("Pick a project, run, and hole first");
+    setEmitting(h.name);
+    try {
+      const { data } = await api.post(`/projects/${projectId}/coverage/${runId}/hole-sequence`, {
+        hole_name: h.name,
+        kind: h.kind || "",
+        pct: h.pct,
+        persist: true,
+      });
+      setHoleSeq(data);
+      toast.success(data.saved_file?.name ? `Saved ${data.saved_file.name}` : "Emitted hole sequence");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not emit hole sequence");
+    }
+    setEmitting("");
   };
 
   const goGenerateHoleTests = () => {
@@ -245,10 +266,24 @@ export default function Coverage() {
                       <span className={prioColor(h.priority)}>{h.pct}% · {h.priority}</span>
                     </div>
                     <div className="font-mono text-[10px] text-slate-500 mt-1">{h.reason}</div>
+                    <button
+                      type="button"
+                      onClick={() => emitHoleSequence(h)}
+                      disabled={emitting === h.name}
+                      className="mt-1 font-mono text-[10px] text-emerald-400 hover:underline"
+                      data-testid={`hole-seq-${i}`}
+                    >
+                      {emitting === h.name ? "emitting…" : "Emit sequence"}
+                    </button>
                   </div>
                 ))}
                 {!holes.length && <div className="font-mono text-[10px] text-slate-500">No holes ranked for this run.</div>}
               </div>
+              {holeSeq?.sv && (
+                <pre className="mt-3 bg-[#0B0E14] border border-[#1E293B] p-3 font-mono text-[10px] text-slate-300 max-h-[180px] overflow-auto whitespace-pre-wrap" data-testid="hole-seq-sv">
+                  {holeSeq.sv}
+                </pre>
+              )}
             </div>
             <div>
               <div className="font-mono text-[10px] uppercase tracking-widest text-emerald-400 mb-2">Suggested re-simulation</div>

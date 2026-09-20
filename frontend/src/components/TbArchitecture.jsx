@@ -42,7 +42,7 @@ function boxStroke(n) {
   return "#334155";
 }
 
-export default function TbArchitecture({ architecture }) {
+export default function TbArchitecture({ architecture, review }) {
   if (!architecture) {
     return (
       <div className="p-8 font-mono text-xs text-slate-500" data-testid="tb-arch-empty">
@@ -75,6 +75,24 @@ export default function TbArchitecture({ architecture }) {
             <span className="text-slate-600"> · parsed from generated SV</span>
           </div>
           <div className={`font-mono text-xs mt-1 ${verdictColor}`}>{architecture.summary}</div>
+          {review && (
+            <div
+              className={`font-mono text-[10px] mt-1 ${
+                review.verdict === "ok"
+                  ? "text-emerald-400"
+                  : review.verdict === "review"
+                    ? "text-amber-400"
+                    : "text-red-400"
+              }`}
+              data-testid="tb-review-score"
+            >
+              Quality {review.score}/100 · {review.verdict}
+              {review.missing_ports?.length
+                ? ` · missing ports: ${review.missing_ports.slice(0, 6).join(", ")}`
+                : ""}
+              {review.fake_golden ? " · fake golden" : ""}
+            </div>
+          )}
         </div>
         {architecture.mermaid && (
           <button
@@ -158,7 +176,12 @@ export default function TbArchitecture({ architecture }) {
       </svg>
 
       <div className="space-y-1" data-testid="tb-arch-findings">
-        {(architecture.findings || []).map((f, i) => (
+        {[
+          ...(architecture.findings || []),
+          ...((review?.findings || []).filter(
+            (f) => !(architecture.findings || []).some((a) => a.title === f.title),
+          )),
+        ].map((f, i) => (
           <div key={i} className="font-mono text-[11px] text-slate-300">
             <span
               className={

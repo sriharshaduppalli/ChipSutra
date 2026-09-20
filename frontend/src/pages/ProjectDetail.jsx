@@ -89,6 +89,7 @@ export default function ProjectDetail() {
   const [kgScore, setKgScore] = useState(null);
   const [ratingBusy, setRatingBusy] = useState(false);
   const [architecture, setArchitecture] = useState(null);
+  const [tbReview, setTbReview] = useState(null);
   const [outputTab, setOutputTab] = useState("code");
   const outputRef = useRef(null);
   const generateRef = useRef(null);
@@ -319,6 +320,7 @@ export default function ProjectDetail() {
     setCurrentGenId(null);
     setLearningInfo(null);
     setArchitecture(null);
+    setTbReview(null);
     setOutputTab("code");
     setStreamStatus("");
     setStreaming(true);
@@ -470,6 +472,7 @@ export default function ProjectDetail() {
                 j.learning?.mutation?.kill_rate != null
                   ? ` · kill ${j.learning.mutation.kill_rate}`
                   : "";
+              if (j.review) setTbReview(j.review);
               if (j.saved_file?.name) {
                 toast.success(`Saved ${j.saved_file.name} to Files`);
                 if (j.saved_file.id) {
@@ -1015,7 +1018,7 @@ export default function ProjectDetail() {
             )}
             <div ref={outputRef} className="flex-1 overflow-auto bg-[#0B0E14]">
               {output && module === "testbench" && outputTab === "arch" ? (
-                <TbArchitecture architecture={architecture} />
+                <TbArchitecture architecture={architecture} review={tbReview} />
               ) : output ? (
                 <Editor
                   height="100%"

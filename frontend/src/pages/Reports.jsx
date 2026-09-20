@@ -14,6 +14,7 @@ export default function Reports() {
   const [selected, setSelected] = useState(null);
   const [gens, setGens] = useState([]);
   const [signoff, setSignoff] = useState(null);
+  const [trace, setTrace] = useState(null);
 
   useEffect(() => {
     api.get("/projects").then(r => setProjects(r.data));
@@ -23,10 +24,12 @@ export default function Reports() {
     if (!selected) {
       setGens([]);
       setSignoff(null);
+      setTrace(null);
       return;
     }
     api.get(`/projects/${selected}/generations`).then(r => setGens(r.data));
     api.get(`/projects/${selected}/signoff`).then(r => setSignoff(r.data)).catch(() => setSignoff(null));
+    api.get(`/projects/${selected}/traceability`).then(r => setTrace(r.data)).catch(() => setTrace(null));
   }, [selected]);
 
   const download = (g) => {
@@ -107,6 +110,41 @@ export default function Reports() {
                     <li key={r}>· {r}</li>
                   ))}
                 </ul>
+              )}
+            </div>
+          )}
+          {trace && selected && (
+            <div className="mb-6" data-testid="trace-matrix">
+              <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-2">
+                Traceability {trace.coverage_pct ?? 0}% · {trace.counts?.covered || 0}/{trace.counts?.plan || 0} plan items
+              </div>
+              <div className="font-mono text-[10px] text-slate-500 mb-2">
+                Sources: {["testplan", "tb", "sva", "covergroups"].filter((k) => trace.sources?.[k]).join(", ") || "none yet"}
+                {trace.counts?.sva != null ? ` · SVA ${trace.counts.sva}` : ""}
+                {trace.counts?.coverpoints != null ? ` · CG ${trace.counts.coverpoints}` : ""}
+              </div>
+              <div className="space-y-1 max-h-[240px] overflow-y-auto mb-3">
+                {(trace.rows || []).slice(0, 24).map((r) => (
+                  <div key={r.id} className="flex items-start justify-between gap-2 border border-[#1E293B] px-2 py-1" data-testid={`trace-row-${r.id}`}>
+                    <div className="min-w-0">
+                      <div className="font-mono text-[11px] text-slate-200 truncate">{r.id} · {r.title}</div>
+                      <div className="font-mono text-[10px] text-slate-500 truncate">
+                        {(r.hits || []).map((h) => h.id).join(", ") || "no TB / SVA / CG hit"}
+                      </div>
+                    </div>
+                    <span className={`font-mono text-[10px] shrink-0 ${r.covered ? "text-emerald-400" : "text-amber-400"}`}>
+                      {r.covered ? "covered" : "gap"}
+                    </span>
+                  </div>
+                ))}
+                {!(trace.rows || []).length && (
+                  <div className="font-mono text-[10px] text-slate-500">Generate a testplan + TB to populate the matrix.</div>
+                )}
+              </div>
+              {(trace.orphans || []).length > 0 && (
+                <div className="font-mono text-[10px] text-slate-500 mb-4">
+                  Orphan checkers: {trace.orphans.slice(0, 8).map((o) => o.id).join(", ")}
+                </div>
               )}
             </div>
           )}

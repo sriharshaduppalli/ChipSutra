@@ -19,6 +19,7 @@ _MODULE_META = {
     "spec2rtl": ("rtl", "_from_spec.sv"),
     "formal_hints": ("sva", "_formal.sv"),
     "coverage_holes": ("tb", "_hole_tests.sv"),
+    "hole_sequence": ("tb", "_hole_seq.sv"),
     "rtl2spec": ("doc", "_spec.md"),
     "testplan": ("doc", "_testplan.md"),
     "debug": ("doc", "_debug.md"),
