@@ -82,6 +82,7 @@ from dv_user_config import (
 )
 from tb_ral import ral_prompt_block, normalize_csr_list
 from generation_persist import generation_artifact_meta
+from tb_architecture import analyze_tb_architecture
 from dv_verify import verify_testbench, verify_status_for_learning, verilator_bin
 from llm_router import resolve_model, prewarm_ollama, prewarm_status
 from spec_checklist import (
@@ -2246,6 +2247,13 @@ async def generate_stream(
                     "name": saved_file.get("original_filename"),
                     "kind": saved_file.get("kind"),
                 }
+            if inp.module == "testbench" and full:
+                try:
+                    done_payload["architecture"] = analyze_tb_architecture(
+                        full, methodology_hint=tb_meth
+                    )
+                except Exception:
+                    logger.exception("TB architecture extract failed")
             yield f"data: {json.dumps(done_payload)}\n\n"
         except Exception as e:
             logger.exception("Generation error")
@@ -5453,6 +5461,11 @@ class DebugClassifyIn(BaseModel):
     prior_output: Optional[str] = None
 
 
+class TbArchitectureIn(BaseModel):
+    sv: str = ""
+    tb_methodology: Optional[str] = None
+
+
 class DvPackIn(BaseModel):
     project_id: str
     file_ids: List[str] = []
@@ -5470,6 +5483,15 @@ async def debug_classify_log(inp: DebugClassifyIn, user=Depends(get_current_user
     """Ranked fail causes from a sim/lint log. No LLM."""
     _ = user
     return classify_log(inp.tool_log or "", prior_code=inp.prior_output or "")
+
+
+@api.post("/tb/architecture")
+async def tb_architecture(inp: TbArchitectureIn, user=Depends(get_current_user)):
+    """Layered / UVM architecture graph from generated SV. No LLM."""
+    _ = user
+    if not (inp.sv or "").strip():
+        raise HTTPException(400, "Provide generated testbench SystemVerilog")
+    return analyze_tb_architecture(inp.sv, methodology_hint=inp.tb_methodology or "")
 
 
 @api.post("/generate/pack")

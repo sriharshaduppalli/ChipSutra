@@ -16,6 +16,8 @@ import CocotbPanel from "@/components/CocotbPanel";
 import StaPanel from "@/components/StaPanel";
 import LabPipelinePanel from "@/components/LabPipelinePanel";
 import GoldenDutImport from "@/components/GoldenDutImport";
+import TbArchitecture from "@/components/TbArchitecture";
+import { analyzeTbArchitecture } from "@/lib/tbArchitecture";
 
 const MODULES = [
   { id: "testbench", label: "Testbench", desc: "Layered Pure SV (IF/gen/drv/mon/sb/env/test), or UVM / OVM / VMM" },
@@ -86,6 +88,8 @@ export default function ProjectDetail() {
   const [streamStatus, setStreamStatus] = useState("");
   const [kgScore, setKgScore] = useState(null);
   const [ratingBusy, setRatingBusy] = useState(false);
+  const [architecture, setArchitecture] = useState(null);
+  const [outputTab, setOutputTab] = useState("code");
   const outputRef = useRef(null);
   const generateRef = useRef(null);
 
@@ -127,6 +131,23 @@ export default function ProjectDetail() {
   }, [output]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Architecture is always derived from the generated SV in the output pane.
+  useEffect(() => {
+    if (module !== "testbench" || !output?.trim()) {
+      setArchitecture(null);
+      return;
+    }
+    setArchitecture(analyzeTbArchitecture(output, tbMethodology));
+  }, [output, module, tbMethodology]);
+
+  const wasStreaming = useRef(false);
+  useEffect(() => {
+    if (wasStreaming.current && !streaming && module === "testbench" && output?.trim()) {
+      setOutputTab("arch");
+    }
+    wasStreaming.current = streaming;
+  }, [streaming, module, output]);
 
   // Drop stale selections after project reload (deleted / re-uploaded files get new ids).
   useEffect(() => {
@@ -297,6 +318,8 @@ export default function ProjectDetail() {
     setOutput("");
     setCurrentGenId(null);
     setLearningInfo(null);
+    setArchitecture(null);
+    setOutputTab("code");
     setStreamStatus("");
     setStreaming(true);
     const m = models[modelIdx] || DEFAULT_MODELS[0];
@@ -628,7 +651,7 @@ export default function ProjectDetail() {
             <div className="font-mono text-xs uppercase tracking-widest text-slate-400 mb-3">History ({project.generations?.length || 0})</div>
             <div className="space-y-1 max-h-[300px] overflow-y-auto">
               {project.generations?.map((g) => (
-                <button key={g.id} onClick={() => { setModule(g.module); setOutput(g.output || ""); }} className="w-full text-left p-2 hover:bg-[#1A212D] font-mono text-[11px]" data-testid={`gen-${g.id}`}>
+                <button key={g.id} onClick={() => { setModule(g.module); setOutput(g.output || ""); setOutputTab(g.module === "testbench" ? "arch" : "code"); }} className="w-full text-left p-2 hover:bg-[#1A212D] font-mono text-[11px]" data-testid={`gen-${g.id}`}>
                   <div className="text-emerald-400">{g.module}</div>
                   <div className="text-slate-500 truncate">{new Date(g.created_at).toLocaleString()} · {g.model}</div>
                 </button>
@@ -891,6 +914,26 @@ export default function ProjectDetail() {
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 bg-emerald-500 rounded-full"></div>
                 <div className="font-mono text-xs uppercase tracking-widest text-slate-300">Output · {module}</div>
+                {module === "testbench" && output && (
+                  <div className="flex border border-[#1E293B] ml-2">
+                    <button
+                      type="button"
+                      onClick={() => setOutputTab("code")}
+                      className={`px-2 py-0.5 font-mono text-[10px] ${outputTab === "code" ? "bg-emerald-500/10 text-emerald-400" : "text-slate-500"}`}
+                      data-testid="output-tab-code"
+                    >
+                      Code
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOutputTab("arch")}
+                      className={`px-2 py-0.5 font-mono text-[10px] ${outputTab === "arch" ? "bg-emerald-500/10 text-emerald-400" : "text-slate-500"}`}
+                      data-testid="output-tab-arch"
+                    >
+                      Architecture
+                    </button>
+                  </div>
+                )}
                 {streaming && (
                   <span className="font-mono text-[10px] text-emerald-400 animate-pulse" data-testid="stream-status">
                     {streamStatus || "streaming..."}
@@ -971,7 +1014,9 @@ export default function ProjectDetail() {
               </div>
             )}
             <div ref={outputRef} className="flex-1 overflow-auto bg-[#0B0E14]">
-              {output ? (
+              {output && module === "testbench" && outputTab === "arch" ? (
+                <TbArchitecture architecture={architecture} />
+              ) : output ? (
                 <Editor
                   height="100%"
                   theme="vs-dark"
