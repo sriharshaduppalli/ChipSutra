@@ -16,7 +16,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Fetch upstream LLM repo
         run: |
@@ -34,7 +34,7 @@ jobs:
           chmod +x models/chipsutra-vlsi/ollama-bootstrap.sh
 
       - name: Create PR if changed
-        uses: peter-evans/create-pull-request@v6
+        uses: peter-evans/create-pull-request@v8
         with:
           commit-message: "Sync models/chipsutra-vlsi from ChipSutra-VLSI-LLM."
           title: "Sync ChipSutra-VLSI modelfiles (${{ inputs.upstream_ref }})"
